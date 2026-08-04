@@ -204,15 +204,15 @@ def test_build_and_installer_package_and_register_browser_native_host():
     ).read_text(encoding="utf-8")
 
     assert "run_browser_host.py" in browser_spec
-    assert 'name="ManuscriptBrowserHost"' in browser_spec
+    assert 'name="ManuscriptV2BrowserHost"' in browser_spec
     assert "console=True" in browser_spec
     assert '"BrowserHost.spec"' in build
     assert '"browser-host"' in build
     assert '"browser-extension"' in build
-    assert "NativeMessagingHosts\\com.manuscript.polish" in installer
+    assert "NativeMessagingHosts\\com.manuscript.v2.polish" in installer
     assert 'Root: HKCU; Subkey: "Software\\Google\\Chrome' in installer
     assert 'Root: HKCU; Subkey: "Software\\Microsoft\\Edge' in installer
-    assert "ManuscriptBrowserHost.exe" in installer
+    assert "ManuscriptV2BrowserHost.exe" in installer
     assert "allowed_origins" in installer
     assert "HKEY_CURRENT_USER" in installer_tool
     assert "Google\\Chrome\\NativeMessagingHosts" in installer_tool

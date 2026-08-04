@@ -7,8 +7,7 @@ from pathlib import Path
 from .data_protection import validate_local_directory
 
 
-# Kept for encrypted-profile and upgrade compatibility after the Manuscript rebrand.
-APP_NAME = "Echo-Link"
+APP_NAME = "ManuscriptWindowsV2"
 
 
 def project_root() -> Path:
@@ -27,7 +26,9 @@ def resource_path(*parts: str) -> Path:
 
 
 def data_root() -> Path:
-    override = os.environ.get("ECHOLINK_DATA_DIR")
+    override = os.environ.get("MANUSCRIPT_V2_DATA_DIR") or os.environ.get(
+        "ECHOLINK_DATA_DIR"
+    )
     if override:
         root = Path(override).expanduser()
     else:
@@ -41,7 +42,9 @@ def data_root() -> Path:
 
 
 def model_root() -> Path:
-    override = os.environ.get("ECHOLINK_MODEL_DIR")
+    override = os.environ.get("MANUSCRIPT_V2_MODEL_DIR") or os.environ.get(
+        "ECHOLINK_MODEL_DIR"
+    )
     if override:
         return validate_local_directory(
             Path(override).expanduser(),

@@ -15,12 +15,12 @@ VSVersionInfo(
         '040904B0',
         [
           StringStruct('CompanyName', 'Manuscript'),
-          StringStruct('FileDescription', 'Manuscript - Flawless writing powered locally'),
+          StringStruct('FileDescription', 'Manuscript Windows Version 2 - Flawless writing powered locally'),
           StringStruct('FileVersion', '0.1.0'),
-          StringStruct('InternalName', 'Manuscript'),
+          StringStruct('InternalName', 'ManuscriptV2'),
           StringStruct('LegalCopyright', 'Copyright (c) 2026'),
-          StringStruct('OriginalFilename', 'Manuscript.exe'),
-          StringStruct('ProductName', 'Manuscript'),
+          StringStruct('OriginalFilename', 'ManuscriptV2.exe'),
+          StringStruct('ProductName', 'Manuscript Windows Version 2'),
           StringStruct('ProductVersion', '0.1.0')
         ]
       )

@@ -15,7 +15,7 @@ from typing import Any, Mapping, Sequence
 from .local_paths import is_network_path
 
 
-PRODUCT_ID = "echo-link"
+PRODUCT_ID = "manuscript-windows-v2"
 EXPORT_SCHEMA_VERSION = 1
 MAX_EXPORT_ITEMS = 100_000
 MAX_EXPORT_DEPTH = 32

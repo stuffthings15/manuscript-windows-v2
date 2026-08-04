@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Manuscript Local Writing Assistant",
+  "name": "Manuscript Windows Version 2",
   "version": "0.1.0",
   "description": "Review local Manuscript corrections in browser text fields.",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAoj0C1n/NRlfexzcrdVIwienoDyGFpPAA2IpkHR7ZU2WHGqPGIjOjtAjWcYO3h3qjNIizupTPS3ASYCPzznhTetTQN711Xd0/hH+bfFA7lDR8MKqm/JzqPcsjIpJYQLTtu/a8ylSdw0suSWj0HuNXu1OfJfuPasSVmmSGkkWq1w3JJ95/ENFtmD/0+FGo+5klqJTosK6923ci++Cet7/PjStnie9j/9PJzxtqAytb7zMFkNRMLY6KSZgf75NkM8h+KVvQ6fHrOnhPTIvv2nA8t1TmN9Cj0bkQOlcRfyL4LsevKRBV1qbRrQWV8czP8zJuXtdOzWugpZLtfVr+WPR9swIDAQAB",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAo3il6p0qHaZlf6baZfz9AJgnvfeE0NvkEjupvBxZjpw2UhgvBlS7Qot+YIlz0QNSjlduUEBWEcSTP/TqZQ3sjSNsjfGmdJvRunHdYkC0jFnsG46ndtGj6elbzQ1DP7niQjITyJ1mRt3f8Ic9ceiuZRFLfN7gq0awcyNIB0jthSvn2d1RkZ60UoFczq/3AEEwO6hykDKw8i0WXkZxEYkEIX0IyCFpdcnOK/WNrZ+qgmImgfhTP98smM4wlQCjVkJbuGwPrl9QTHnJ6kJzLeZqjYdlWWc87Q2o46rN6EQkKtNQxL+Ta4r1SZbK5zJLHQct7yfFDJgwfeajoD8PJ0IjZQIDAQAB",
   "permissions": ["nativeMessaging"],
   "background": {
     "service_worker": "background.js"

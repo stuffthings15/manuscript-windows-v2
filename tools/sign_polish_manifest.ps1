@@ -14,7 +14,7 @@ if (-not $ManifestPath) {
 }
 if (-not $PrivateKeyPath) {
     $local = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
-    $PrivateKeyPath = Join-Path $local "Echo-Link\release-keys\polish-manifest-private.dpapi"
+    $PrivateKeyPath = Join-Path $local "ManuscriptWindowsV2\release-keys\polish-manifest-private.dpapi"
 }
 if (-not $SignaturePath) {
     $manifestName = [IO.Path]::GetFileNameWithoutExtension($ManifestPath)

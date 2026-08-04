@@ -1,4 +1,4 @@
-const NATIVE_HOST = "com.manuscript.polish";
+const NATIVE_HOST = "com.manuscript.v2.polish";
 
 chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
   if (!request || request.type !== "analyze") {

@@ -4,9 +4,9 @@ from echo_link_app import windows_identity
 
 
 def test_windows_identity_matches_installer_contract() -> None:
-    assert windows_identity.APP_USER_MODEL_ID == "EchoLink.Desktop"
+    assert windows_identity.APP_USER_MODEL_ID == "Manuscript.WindowsV2"
     assert windows_identity.APP_MUTEX_NAME == (
-        "EchoLink.App.71099095-BCB5-4E9C-A623-D0C474335542"
+        "Manuscript.WindowsV2.App.65BD5BC9-6E5E-4E2D-9BB1-B49EA46CB73E"
     )
 
 

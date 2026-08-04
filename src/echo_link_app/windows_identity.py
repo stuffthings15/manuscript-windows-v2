@@ -9,7 +9,7 @@ from typing import Any
 from ctypes import wintypes
 
 
-APP_MUTEX_NAME = "EchoLink.App.71099095-BCB5-4E9C-A623-D0C474335542"
+APP_MUTEX_NAME = "Manuscript.WindowsV2.App.65BD5BC9-6E5E-4E2D-9BB1-B49EA46CB73E"
 
 
 def configure_windows_app_identity() -> None:

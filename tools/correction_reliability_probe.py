@@ -40,7 +40,7 @@ from echo_link_core.polish_types import (  # noqa: E402
     PolishTask,
 )
 
-LIVE_DATA_ROOT = Path.home() / "AppData" / "Local" / "Echo-Link"
+LIVE_DATA_ROOT = Path.home() / "AppData" / "Local" / "ManuscriptWindowsV2"
 
 
 class _MemoryStore:

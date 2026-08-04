@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
-CANONICAL_MARKER = "manuscript-windows-canonical-v1"
+CANONICAL_MARKER = "manuscript-windows-v2-canonical-v1"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
@@ -149,13 +149,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     subprocess.run(browser_pyinstaller, cwd=ROOT, check=True)
     subprocess.run(pyinstaller, cwd=ROOT, check=True)
-    executable = ROOT / "dist" / "Manuscript" / "Manuscript.exe"
+    executable = ROOT / "dist" / "ManuscriptV2" / "ManuscriptV2.exe"
     if not executable.is_file():
         raise SystemExit(f"Build did not create {executable}")
     _copy_browser_integration()
     if signing and signtool:
         _sign_files(
-            _signable_files(ROOT / "dist" / "Manuscript"),
+            _signable_files(ROOT / "dist" / "ManuscriptV2"),
             signing,
             signtool,
         )
@@ -165,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
         if iscc is None:
             raise SystemExit("Manuscript built, but Inno Setup 6 was not found.")
         installer_stem = (
-            "ManuscriptTestingSetup" if args.testing_unlocked else "ManuscriptSetup"
+            "ManuscriptV2TestingSetup" if args.testing_unlocked else "ManuscriptV2Setup"
         )
         subprocess.run(
             [
@@ -194,19 +194,19 @@ def _assert_canonical_project_root(root: Path) -> None:
         marker_value = ""
     if (
         marker_value != CANONICAL_MARKER
-        or root.name.casefold() != "windows"
+        or root.name.casefold() != "windows version 2"
         or root.parent.name.casefold() != "manuscript"
         or not (root / "src" / "echo_link_core" / "polish.py").is_file()
     ):
         raise SystemExit(
-            "Build refused. Use the canonical Manuscript/Windows project root."
+            "Build refused. Use the canonical Manuscript/Windows Version 2 project root."
         )
 
 
 def _copy_browser_integration() -> None:
-    app_root = ROOT / "dist" / "Manuscript"
-    host_source = ROOT / "dist" / "ManuscriptBrowserHost"
-    host_executable = host_source / "ManuscriptBrowserHost.exe"
+    app_root = ROOT / "dist" / "ManuscriptV2"
+    host_source = ROOT / "dist" / "ManuscriptV2BrowserHost"
+    host_executable = host_source / "ManuscriptV2BrowserHost.exe"
     if not host_executable.is_file():
         raise SystemExit(f"Build did not create {host_executable}")
     host_target = app_root / "browser-host"

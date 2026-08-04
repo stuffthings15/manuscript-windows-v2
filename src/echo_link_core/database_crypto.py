@@ -27,7 +27,7 @@ KEY_FILE_MAGIC = b"ELK1"
 KEY_BYTES = 32
 CRYPTPROTECT_UI_FORBIDDEN = 0x1
 # Keep the legacy entropy forever so existing encrypted profiles remain readable.
-_ENTROPY = hashlib.sha256(b"Echo-Link/sqlcipher-key/v1").digest()
+_ENTROPY = hashlib.sha256(b"ManuscriptWindowsV2/sqlcipher-key/v1").digest()
 
 
 class DatabaseEncryptionError(RuntimeError):

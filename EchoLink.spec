@@ -83,7 +83,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="Manuscript",
+    name="ManuscriptV2",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -99,5 +99,5 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=False,
-    name="Manuscript",
+    name="ManuscriptV2",
 )

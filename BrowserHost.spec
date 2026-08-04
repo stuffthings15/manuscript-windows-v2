@@ -53,7 +53,7 @@ exe = EXE(
     analysis.scripts,
     [],
     exclude_binaries=True,
-    name="ManuscriptBrowserHost",
+    name="ManuscriptV2BrowserHost",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -69,5 +69,5 @@ collection = COLLECT(
     analysis.datas,
     strip=False,
     upx=False,
-    name="ManuscriptBrowserHost",
+    name="ManuscriptV2BrowserHost",
 )

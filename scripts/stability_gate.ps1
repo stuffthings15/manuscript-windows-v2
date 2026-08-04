@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $Marker = Join-Path $Root ".manuscript-canonical-root"
-$ExpectedMarker = "manuscript-windows-canonical-v1"
+$ExpectedMarker = "manuscript-windows-v2-canonical-v1"
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $Python)) {
     $RepositoryRoot = Split-Path -Parent (Split-Path -Parent $Root)
@@ -15,7 +15,7 @@ if (
     -not (Test-Path -LiteralPath $Marker) -or
     (Get-Content -Raw -LiteralPath $Marker).Trim() -ne $ExpectedMarker
 ) {
-    throw "Run this gate from the canonical Manuscript/Windows project root."
+    throw "Run this gate from the canonical Manuscript/Windows Version 2 project root."
 }
 if (-not (Test-Path -LiteralPath $Python)) {
     throw "Missing project Python environment."
@@ -28,7 +28,7 @@ New-Item -ItemType Directory -Force -Path $DataRoot | Out-Null
 
 $ManagedEnvironment = @(
     "PYTHONPATH",
-    "ECHOLINK_DATA_DIR",
+    "MANUSCRIPT_V2_DATA_DIR",
     "ECHOLINK_DISABLE_HOTKEY",
     "ECHOLINK_DISABLE_SOUNDS",
     "ECHOLINK_DISABLE_MEDIA_CONTROL",
@@ -46,7 +46,7 @@ foreach ($Name in $ManagedEnvironment) {
 }
 
 $env:PYTHONPATH = Join-Path $Root "src"
-$env:ECHOLINK_DATA_DIR = $DataRoot
+$env:MANUSCRIPT_V2_DATA_DIR = $DataRoot
 $env:ECHOLINK_DISABLE_HOTKEY = "1"
 $env:ECHOLINK_DISABLE_SOUNDS = "1"
 $env:ECHOLINK_DISABLE_MEDIA_CONTROL = "1"

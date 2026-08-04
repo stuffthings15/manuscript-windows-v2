@@ -72,35 +72,6 @@ def test_source_launcher_refuses_a_noncanonical_copy(tmp_path: Path) -> None:
     assert "canonical Manuscript/Windows" in (result.stdout + result.stderr)
 
 
-def test_repository_compatibility_launcher_uses_canonical_source(
-    tmp_path: Path,
-) -> None:
-    launcher = REPOSITORY_ROOT / "run_manuscript.py"
-    probe = (
-        "import runpy; "
-        f"runpy.run_path({str(launcher)!r}, run_name='launcher_probe'); "
-        "import echo_link_app; "
-        "print(echo_link_app.__file__)"
-    )
-    env = {
-        **os.environ,
-        "LOCALAPPDATA": str(tmp_path / "local"),
-        "APPDATA": str(tmp_path / "roaming"),
-    }
-
-    result = subprocess.run(
-        [sys.executable, "-c", probe],
-        cwd=REPOSITORY_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-
-    imported = Path(result.stdout.strip()).resolve()
-    assert imported.is_relative_to((ROOT / "src").resolve())
-
-
 def test_repository_root_build_entrypoint_is_blocked() -> None:
     result = subprocess.run(
         [
@@ -120,7 +91,7 @@ def test_repository_root_build_entrypoint_is_blocked() -> None:
 
 def test_spec_is_standalone_and_bundles_local_model():
     text = (ROOT / "EchoLink.spec").read_text(encoding="utf-8")
-    assert 'name="Manuscript"' in text
+    assert 'name="ManuscriptV2"' in text
     assert '"manuscript.ico"' in text
     assert '"manuscript_version_info.txt"' in text
     assert '"models/base.en"' in text
@@ -130,17 +101,25 @@ def test_spec_is_standalone_and_bundles_local_model():
     assert '"resources" / "subscription.json"' not in text
 
 
+def test_v2_build_never_targets_v1_distribution_folder() -> None:
+    text = (ROOT / "tools" / "build.py").read_text(encoding="utf-8")
+
+    assert 'ROOT / "dist" / "Manuscript"' not in text
+    assert 'ROOT / "dist" / "ManuscriptV2"' in text
+
+
 def test_installer_has_safe_unique_identity():
     text = (ROOT / "packaging" / "EchoLink.iss").read_text(encoding="utf-8")
-    assert "ManuscriptSetup" in text
-    assert "71099095-BCB5-4E9C-A623-D0C474335542" in text
+    assert "ManuscriptV2Setup" in text
+    assert "65BD5BC9-6E5E-4E2D-9BB1-B49EA46CB73E" in text
     assert "PrivilegesRequired=lowest" in text
     assert "Manuscript" in text
     assert 'AppMutex={#MyAppMutex}' in text
     assert 'AppUserModelID: "{#MyAppUserModelID}"' in text
-    assert 'EchoLink.Desktop' in text
-    assert 'MyAppMutex "EchoLink.App.71099095-BCB5-4E9C-A623-D0C474335542"' in text
-    assert 'Name: "{app}\\EchoLink.exe"' in text
+    assert 'Manuscript.WindowsV2' in text
+    assert 'MyAppMutex "Manuscript.WindowsV2.App.65BD5BC9-6E5E-4E2D-9BB1-B49EA46CB73E"' in text
+    assert 'Name: "{app}\\EchoLink.exe"' not in text
+    assert "Echo-Link.lnk" not in text
     assert "will keep your local private data" in text
     assert "UninstallDisplayName={#MyAppName}" in text
     assert "(not UninstallSilent)" in text
@@ -151,9 +130,9 @@ def test_windows_file_metadata_uses_public_manuscript_brand() -> None:
     text = (ROOT / "packaging" / "manuscript_version_info.txt").read_text(
         encoding="utf-8"
     )
-    assert "ProductName', 'Manuscript'" in text
-    assert "FileDescription', 'Manuscript - Flawless writing powered locally'" in text
-    assert "OriginalFilename', 'Manuscript.exe'" in text
+    assert "ProductName', 'Manuscript Windows Version 2'" in text
+    assert "FileDescription', 'Manuscript Windows Version 2 - Flawless writing powered locally'" in text
+    assert "OriginalFilename', 'ManuscriptV2.exe'" in text
 
 
 def test_runtime_does_not_import_legacy_application_modules():

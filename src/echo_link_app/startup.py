@@ -7,14 +7,14 @@ from pathlib import Path
 
 
 REGISTRY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
-REGISTRY_NAME = "Manuscript"
-LEGACY_REGISTRY_NAMES = ("EchoLink",)
+REGISTRY_NAME = "ManuscriptWindowsV2"
+LEGACY_REGISTRY_NAMES: tuple[str, ...] = ()
 
 
 def startup_command() -> str:
     if getattr(sys, "frozen", False):
         return f'"{Path(sys.executable).resolve()}" --startup'
-    runner = Path(__file__).resolve().parents[2] / "run_echo_link.py"
+    runner = Path(__file__).resolve().parents[2] / "run_manuscript.py"
     return f'"{Path(sys.executable).resolve()}" "{runner}" --startup'
 
 

@@ -91,11 +91,19 @@ def test_required_checks_cover_full_lifecycle_and_privacy() -> None:
 
 def test_uninstall_entry_matches_stable_app_id_and_current_display_name() -> None:
     assert probe._is_echo_link_uninstall_entry(
-        "{71099095-BCB5-4E9C-A623-D0C474335542}_is1",
-        "Manuscript version 0.1.0",
+        "{65BD5BC9-6E5E-4E2D-9BB1-B49EA46CB73E}_is1",
+        "Manuscript Windows Version 2 version 0.1.0",
     )
-    assert probe._is_echo_link_uninstall_entry("unrelated", "Manuscript")
+    assert probe._is_echo_link_uninstall_entry(
+        "unrelated", "Manuscript Windows Version 2"
+    )
     assert not probe._is_echo_link_uninstall_entry("unrelated", "Other app")
+
+
+def test_installed_paths_use_v2_executable(tmp_path: Path) -> None:
+    executable, _model, _cue = probe._installed_paths(tmp_path)
+
+    assert executable == tmp_path / "ManuscriptV2.exe"
 
 
 def test_uninstaller_uses_verified_registry_path_inside_install_folder(tmp_path: Path) -> None:

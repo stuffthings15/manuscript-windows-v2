@@ -36,8 +36,11 @@ class _FakeWinReg:
         del key.values[name]
 
 
-def test_startup_rebrand_moves_legacy_registration(monkeypatch) -> None:
-    values = {"EchoLink": '"C:\\Old\\EchoLink.exe"'}
+def test_startup_registers_v2_without_removing_v1(monkeypatch) -> None:
+    values = {
+        "EchoLink": '"C:\\Old\\EchoLink.exe"',
+        "Manuscript": '"C:\\Old\\Manuscript.exe"',
+    }
     fake = _FakeWinReg(values)
     monkeypatch.setattr(startup.os, "name", "nt")
     monkeypatch.setattr(startup, "startup_command", lambda: '"C:\\New\\Manuscript.exe"')
@@ -45,18 +48,26 @@ def test_startup_rebrand_moves_legacy_registration(monkeypatch) -> None:
 
     startup.configure_startup(True)
 
-    assert values == {"Manuscript": '"C:\\New\\Manuscript.exe"'}
+    assert values == {
+        "EchoLink": '"C:\\Old\\EchoLink.exe"',
+        "Manuscript": '"C:\\Old\\Manuscript.exe"',
+        "ManuscriptWindowsV2": '"C:\\New\\Manuscript.exe"',
+    }
 
 
-def test_disabling_startup_removes_current_and_legacy_names(monkeypatch) -> None:
-    values = {"EchoLink": "old", "Manuscript": "new"}
+def test_disabling_startup_removes_only_v2_name(monkeypatch) -> None:
+    values = {
+        "EchoLink": "old",
+        "Manuscript": "current",
+        "ManuscriptWindowsV2": "v2",
+    }
     fake = _FakeWinReg(values)
     monkeypatch.setattr(startup.os, "name", "nt")
     monkeypatch.setitem(sys.modules, "winreg", fake)
 
     startup.configure_startup(False)
 
-    assert values == {}
+    assert values == {"EchoLink": "old", "Manuscript": "current"}
 
 
 def test_frozen_startup_command_opens_quietly_in_tray(monkeypatch) -> None:
@@ -64,22 +75,22 @@ def test_frozen_startup_command_opens_quietly_in_tray(monkeypatch) -> None:
     monkeypatch.setattr(
         startup.sys,
         "executable",
-        r"C:\Program Files\Manuscript\Manuscript.exe",
+        r"C:\Program Files\Manuscript Windows Version 2\ManuscriptV2.exe",
     )
 
     assert startup.startup_command() == (
-        '"C:\\Program Files\\Manuscript\\Manuscript.exe" --startup'
+        '"C:\\Program Files\\Manuscript Windows Version 2\\ManuscriptV2.exe" --startup'
     )
 
 
-def test_source_startup_command_opens_quietly_in_tray(monkeypatch) -> None:
+def test_source_startup_command_uses_canonical_v2_launcher(monkeypatch) -> None:
     monkeypatch.delattr(startup.sys, "frozen", raising=False)
     monkeypatch.setattr(startup.sys, "executable", r"C:\Python\python.exe")
 
     command = startup.startup_command()
 
     assert command.startswith('"C:\\Python\\python.exe" "')
-    assert command.endswith('run_echo_link.py" --startup')
+    assert command.endswith('run_manuscript.py" --startup')
 
 
 def test_startup_argument_is_supported() -> None:

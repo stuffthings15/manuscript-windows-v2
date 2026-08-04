@@ -12,13 +12,13 @@ if not getattr(sys, "frozen", False):
     except OSError:
         marker_value = ""
     if (
-        marker_value != "manuscript-windows-canonical-v1"
-        or PROJECT_ROOT.name.casefold() != "windows"
+        marker_value != "manuscript-windows-v2-canonical-v1"
+        or PROJECT_ROOT.name.casefold() != "windows version 2"
         or PROJECT_ROOT.parent.name.casefold() != "manuscript"
         or not (SOURCE_ROOT / "echo_link_core" / "polish.py").is_file()
     ):
         raise SystemExit(
-            "Launch refused. Use the canonical Manuscript/Windows project root."
+            "Launch refused. Use the canonical Manuscript/Windows Version 2 project root."
         )
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))

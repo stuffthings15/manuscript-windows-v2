@@ -31,8 +31,8 @@ from echo_link_core.data_protection import (
 
 SCHEMA_VERSION = 1
 PROBE_PREFIX = "echo-link-installer-lifecycle-"
-APP_ID = "71099095-BCB5-4E9C-A623-D0C474335542"
-DISPLAY_NAME = "Manuscript"
+APP_ID = "65BD5BC9-6E5E-4E2D-9BB1-B49EA46CB73E"
+DISPLAY_NAME = "Manuscript Windows Version 2"
 REQUIRED_CHECKS = (
     "no_existing_install",
     "app_not_running",
@@ -265,7 +265,7 @@ def _wait_for_uninstall_entry_absence(install_dir: Path, timeout: float = 15.0) 
 
 
 def _installed_paths(install_dir: Path) -> tuple[Path, Path, Path]:
-    executable = install_dir / "Manuscript.exe"
+    executable = install_dir / "ManuscriptV2.exe"
     model = install_dir / "_internal" / "models" / "base.en" / "model.bin"
     repair_asset = install_dir / "_internal" / "resources" / "manuscript.png"
     return executable, model, repair_asset
@@ -672,7 +672,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--installer",
         type=Path,
-        default=ROOT / "installer-output" / "ManuscriptSetup.exe",
+        default=ROOT / "installer-output" / "ManuscriptV2Setup.exe",
     )
     parser.add_argument(
         "--output",

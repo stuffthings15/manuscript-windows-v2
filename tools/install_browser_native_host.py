@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 
-HOST_NAME = "com.manuscript.polish"
+HOST_NAME = "com.manuscript.v2.polish"
 EXTENSION_ID_PATTERN = re.compile(r"^[a-p]{32}$")
 
 
@@ -19,7 +19,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--app-root",
         type=Path,
-        default=Path(__file__).resolve().parents[1] / "dist" / "Manuscript",
+        default=Path(__file__).resolve().parents[1] / "dist" / "ManuscriptV2",
     )
     result.add_argument("--uninstall", action="store_true")
     return result
@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     app_root = args.app_root.resolve(strict=True)
     extension_root = app_root / "browser-extension"
-    host_path = (app_root / "browser-host" / "ManuscriptBrowserHost.exe").resolve(
+    host_path = (app_root / "browser-host" / "ManuscriptV2BrowserHost.exe").resolve(
         strict=True
     )
     extension_id = (extension_root / "extension-id.txt").read_text(

@@ -19,7 +19,7 @@ $VerifyRoot = [System.IO.Path]::GetFullPath(
 )
 $ManagedEnvironment = @(
     "PYTHONPATH",
-    "ECHOLINK_DATA_DIR",
+    "MANUSCRIPT_V2_DATA_DIR",
     "ECHOLINK_DISABLE_HOTKEY",
     "ECHOLINK_DISABLE_SOUNDS",
     "ECHOLINK_DISABLE_MEDIA_CONTROL",
@@ -39,7 +39,7 @@ if (-not (Test-Path -LiteralPath $Python)) {
 
 New-Item -ItemType Directory -Path (Join-Path $VerifyRoot "data") -Force | Out-Null
 $env:PYTHONPATH = Join-Path $Root "src"
-$env:ECHOLINK_DATA_DIR = Join-Path $VerifyRoot "data"
+$env:MANUSCRIPT_V2_DATA_DIR = Join-Path $VerifyRoot "data"
 $env:QT_QPA_PLATFORM = "offscreen"
 $env:ECHOLINK_DISABLE_HOTKEY = "1"
 $env:ECHOLINK_DISABLE_SOUNDS = "1"

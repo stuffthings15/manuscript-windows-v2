@@ -44,6 +44,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Start quietly in the system tray",
     )
+    parser.add_argument(
+        "--enable-global-hotkeys",
+        action="store_true",
+        help="Enable Version 2 global shortcuts for this run",
+    )
     parser.add_argument("--diagnostics", action="store_true", help="Print local readiness as JSON")
     parser.add_argument(
         "--internal-evaluation",
@@ -262,7 +267,7 @@ def _run_application(args: argparse.Namespace) -> int:
                 return 0
         window = EchoLinkWindow(
             store,
-            enable_hotkey=not args.smoke_test,
+            enable_hotkey=not args.smoke_test and args.enable_global_hotkeys,
             enable_tray=not args.smoke_test,
             internal_evaluation=args.internal_evaluation,
         )
