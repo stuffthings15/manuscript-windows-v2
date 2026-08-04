@@ -103,8 +103,8 @@ def test_main_window_compact_layout_has_readable_text(app, tmp_path):
     window.show()
     app.processEvents()
     _assert_no_sibling_overlap(window)
-    assert window.windowTitle() == "Manuscript"
-    assert any(label.text() == "Manuscript" for label in window.findChildren(QLabel))
+    assert window.windowTitle() == "Manuscript Windows Version 2"
+    assert any(label.text() == "Manuscript V2" for label in window.findChildren(QLabel))
     assert any(
         label.text() == "Flawless writing powered locally"
         for label in window.findChildren(QLabel)
@@ -181,7 +181,7 @@ def test_internal_evaluation_requires_explicit_launcher_flag(app, tmp_path):
     assert "Capstone" not in sections
     assert sections.count("Internal evaluation") == 1
     assert internal.tabs.tabText(internal.tabs.currentIndex()) == "Internal evaluation"
-    assert internal.windowTitle() == "Manuscript - Internal Evaluation"
+    assert internal.windowTitle() == "Manuscript Windows Version 2 - Internal Evaluation"
     assert internal.evaluation_prompt.placeholderText() == "Start a run to load case 1."
     internal.close()
 

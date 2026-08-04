@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from threading import Event, Lock
+from threading import Event, Lock, Thread
 import time
 from types import SimpleNamespace
 
@@ -41,6 +41,95 @@ def app():
 
 def _selection(text: str = "This are selected text.") -> SelectionRecord:
     return SelectionRecord(text, WindowSnapshot(77, 88, "Editor"))
+
+
+def test_window_can_disable_background_model_setup(app, tmp_path, monkeypatch) -> None:
+    started: list[str] = []
+
+    class _RecordedThread:
+        def __init__(self, *, target, name="", **_kwargs):
+            self.target = target
+            self.name = name
+
+        def start(self):
+            started.append(self.name)
+
+    monkeypatch.setenv("ECHOLINK_DISABLE_MODEL_SETUP", "1")
+    monkeypatch.setenv("ECHOLINK_DISABLE_PALETTE_AI", "1")
+    monkeypatch.setattr(window_module.threading, "Thread", _RecordedThread)
+
+    window = EchoLinkWindow(
+        EchoLinkStore(tmp_path / "echo-link.db"),
+        enable_hotkey=False,
+        enable_tray=False,
+    )
+    window.selected_text_record = _selection("teh draft")
+    window._run_palette_sentence_rewrite(
+        1,
+        "sentence-1",
+        "teh draft",
+        "Proofread",
+    )
+    window.shutdown()
+
+    assert started == []
+
+
+def test_runtime_status_watcher_stops_immediately_after_shutdown(app, tmp_path) -> None:
+    window = EchoLinkWindow(
+        EchoLinkStore(tmp_path / "echo-link.db"),
+        enable_hotkey=False,
+        enable_tray=False,
+    )
+    calls: list[str] = []
+    window.writing_assistant = SimpleNamespace(
+        runtime_status=lambda *_args, **_kwargs: calls.append("status")
+    )
+    done = Event()
+    with window._palette_ai_lock:
+        window._palette_ai_shutdown = True
+    worker = Thread(
+        target=window._watch_palette_runtime,
+        args=(1, 1, {"model": "AI", "backend": "GPU"}, 20, done),
+    )
+
+    worker.start()
+    worker.join(timeout=0.75)
+    stopped = not worker.is_alive()
+    done.set()
+    worker.join(timeout=2.0)
+    window.shutdown()
+
+    assert stopped
+    assert calls == []
+
+
+def test_runtime_status_watcher_contains_unexpected_provider_error(app, tmp_path) -> None:
+    window = EchoLinkWindow(
+        EchoLinkStore(tmp_path / "echo-link.db"),
+        enable_hotkey=False,
+        enable_tray=False,
+    )
+
+    def fail_status(*_args, **_kwargs):
+        raise AttributeError("malformed local status")
+
+    window.writing_assistant = SimpleNamespace(runtime_status=fail_status)
+    done = Event()
+    worker = Thread(
+        target=window._watch_palette_runtime,
+        args=(1, 1, {"model": "AI", "backend": "GPU"}, 20, done),
+    )
+
+    worker.start()
+    time.sleep(0.7)
+    contained = worker.is_alive()
+    done.set()
+    worker.join(timeout=2.0)
+    window.shutdown()
+
+    assert contained
+    assert not worker.is_alive()
 
 
 class _SuggestionEngine:
@@ -1250,6 +1339,7 @@ def test_palette_requests_local_ai_for_each_review_chunk(app):
 def test_window_hud_keeps_writing_model_warm_with_small_bounded_request(
     app, tmp_path, monkeypatch
 ):
+    monkeypatch.delenv("ECHOLINK_DISABLE_PALETTE_AI", raising=False)
     window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
     window.selected_text_record = _selection("teh draft")
     captured = {}
@@ -1276,6 +1366,7 @@ def test_window_hud_keeps_writing_model_warm_with_small_bounded_request(
 
 
 def test_window_hud_ai_queue_respects_hardware_width_and_order(app, tmp_path, monkeypatch):
+    monkeypatch.delenv("ECHOLINK_DISABLE_PALETTE_AI", raising=False)
     window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
     window.selected_text_record = _selection("teh draft")
     entered = Event()

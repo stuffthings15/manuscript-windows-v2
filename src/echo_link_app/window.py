@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 
 from echo_link_app.settings_dialog import SettingsDialog
 from echo_link_app.accessibility import set_accessible, update_status_label
-from echo_link_app.branding import APP_NAME, APP_TAGLINE, ICON_ICO, ICON_PNG
+from echo_link_app.branding import APP_NAME, APP_SHORT_NAME, APP_TAGLINE, ICON_ICO, ICON_PNG
 from echo_link_app.documents_panel import DocumentEditorPanel
 from echo_link_app.drafts_panel import DraftsPanel
 from echo_link_app.echo_bar import EchoBar
@@ -241,16 +241,17 @@ class EchoLinkWindow(QMainWindow):
         # Keep the mature UI boundary stable while routing its work through PolishEngine.
         self.writing_assistant = self.polish_writing_adapter
         self._installed_writing_models = {self.engine.settings.ollama_model}
-        threading.Thread(
-            target=self._refresh_installed_writing_models,
-            daemon=True,
-            name="echo-link-tone-model-discovery",
-        ).start()
-        threading.Thread(
-            target=self._warm_adaptive_polish,
-            daemon=True,
-            name="manuscript-adaptive-polish-setup",
-        ).start()
+        if os.environ.get("ECHOLINK_DISABLE_MODEL_SETUP") != "1":
+            threading.Thread(
+                target=self._refresh_installed_writing_models,
+                daemon=True,
+                name="echo-link-tone-model-discovery",
+            ).start()
+            threading.Thread(
+                target=self._warm_adaptive_polish,
+                daemon=True,
+                name="manuscript-adaptive-polish-setup",
+            ).start()
         self.document_workspace = DocumentWorkspace(store)
         self.local_source_index = LocalSourceIndex()
         self.source_chat = ApprovedSourceChat()
@@ -456,7 +457,7 @@ class EchoLinkWindow(QMainWindow):
         header_layout.addWidget(icon)
         heading = QVBoxLayout()
         heading.setSpacing(1)
-        title = QLabel(APP_NAME)
+        title = QLabel(APP_SHORT_NAME)
         title.setObjectName("appTitle")
         subtitle = QLabel(APP_TAGLINE)
         subtitle.setObjectName("appSubtitle")
@@ -1932,6 +1933,10 @@ class EchoLinkWindow(QMainWindow):
         source: str,
         command: str,
     ) -> None:
+        # Automated UI tests must never leak a real local-model request into a
+        # later test. Production builds do not set this process-local switch.
+        if os.environ.get("ECHOLINK_DISABLE_PALETTE_AI") == "1":
+            return
         if self.selected_text_record is None:
             self.rewrite_palette.show_error("Capture selected text again.")
             return
@@ -2181,6 +2186,12 @@ class EchoLinkWindow(QMainWindow):
         source_characters: int,
         done: threading.Event,
     ) -> None:
+        def shutting_down() -> bool:
+            with self._palette_ai_lock:
+                return self._palette_ai_shutdown
+
+        if shutting_down():
+            return
         model = runtime_state.get("model") or "AI"
         backend_hint = runtime_state.get("backend") or "GPU"
         estimate = self._estimated_palette_eta(model, source_characters, backend_hint)
@@ -2193,6 +2204,8 @@ class EchoLinkWindow(QMainWindow):
         if done.wait(0.5):
             return
         while not done.is_set():
+            if shutting_down():
+                return
             model = runtime_state.get("model") or model
             backend_hint = runtime_state.get("backend") or backend_hint
             label = f"Loading AI on {backend_hint}"
@@ -2211,7 +2224,7 @@ class EchoLinkWindow(QMainWindow):
                     label = f"AI ready on {backend}"
                 else:
                     label = f"Loading AI on {backend_hint}"
-            except (RuntimeError, ValueError):
+            except Exception:
                 label = f"Checking {backend_hint} runtime"
             estimate = self._estimated_palette_eta(
                 model,

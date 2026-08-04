@@ -13,6 +13,8 @@ if str(SRC) not in sys.path:
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ECHOLINK_DISABLE_HOTKEY", "1")
+os.environ.setdefault("ECHOLINK_DISABLE_MODEL_SETUP", "1")
+os.environ.setdefault("ECHOLINK_DISABLE_PALETTE_AI", "1")
 TEST_TEMP = Path(os.environ.get("ECHOLINK_TEST_TEMP", ROOT / ".test-data" / "tmp"))
 TEST_TEMP.mkdir(parents=True, exist_ok=True)
 os.environ["TEMP"] = str(TEST_TEMP)

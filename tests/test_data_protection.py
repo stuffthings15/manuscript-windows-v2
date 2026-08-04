@@ -33,7 +33,7 @@ def test_structured_export_has_manifest_redacts_secrets_and_denies_audio(tmp_pat
     assert "PRIVATE_TOKEN_12345" not in rendered
     assert "PRIVATE_API_KEY_12345" not in rendered
     assert payload["api_key"] == "[REDACTED]"
-    assert payload["export_manifest"]["product_id"] == "echo-link"
+    assert payload["export_manifest"]["product_id"] == "manuscript-windows-v2"
     assert payload["export_manifest"]["redaction_applied"] is True
     assert payload["export_manifest"]["contains_raw_audio"] is False
     assert receipt.manifest.contains_persisted_secrets is False

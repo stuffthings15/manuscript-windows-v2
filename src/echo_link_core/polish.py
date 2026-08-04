@@ -507,7 +507,15 @@ class PolishValidator:
             ):
                 failures.append("prohibition changed")
             else:
-                advisories.append("modal meaning changed")
+                source_modals = _modal_meaning_counter(normalized_source)
+                candidate_modals = _modal_meaning_counter(normalized_candidate)
+                modal_replaced = bool(source_modals - candidate_modals) and bool(
+                    candidate_modals - source_modals
+                )
+                if modal_replaced:
+                    failures.append("modal meaning changed")
+                else:
+                    advisories.append("modal meaning changed")
         source_obligation = _obligation_counter(normalized_source)
         candidate_obligation = _obligation_counter(normalized_candidate)
         if source_obligation != candidate_obligation:
@@ -517,7 +525,11 @@ class PolishValidator:
             # Inventing a duty the writer never wrote is meaning. Dropping a
             # modal that a list repeats is the repair Android names
             # listImperativePreservesObligation, and is correct.
-            if candidate_obligation - source_obligation:
+            permission_added = bool(
+                _modal_meaning_counter(normalized_candidate)
+                - _modal_meaning_counter(normalized_source)
+            )
+            if candidate_obligation - source_obligation or permission_added:
                 failures.append(label)
             else:
                 advisories.append(label)

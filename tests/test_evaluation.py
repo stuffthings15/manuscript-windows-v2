@@ -37,7 +37,7 @@ def test_evaluation_run_records_trials_metrics_and_private_exports(tmp_path):
     json_path, csv_path = export_evaluation_run(store, run_id, tmp_path / "exports")
     report = json.loads(json_path.read_text(encoding="utf-8"))
     assert report["privacy"].endswith("No audio.")
-    assert report["export_manifest"]["product_id"] == "echo-link"
+    assert report["export_manifest"]["product_id"] == "manuscript-windows-v2"
     assert report["export_manifest"]["redaction_applied"] is True
     assert report["export_manifest"]["contains_raw_audio"] is False
     assert "PRIVATE_EVALUATION_TOKEN" not in json_path.read_text(encoding="utf-8")

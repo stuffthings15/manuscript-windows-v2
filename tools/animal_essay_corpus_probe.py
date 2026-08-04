@@ -1,11 +1,11 @@
 """Drive the real Writing HUD through the 20 animal-pet error essays.
 
-The probe reads each .docx essay from the shared corpus, opens it in real
+The probe reads each .docx essay from the locked local V2 corpus, opens it in real
 Windows Notepad, clicks the Manuscript badge, and accepts every review
 section in order exactly as a user would. It records the corrected text and
 per-section timings so the result can be checked for remaining errors.
 
-Run from ``Manuscript/Windows`` with the app already running::
+Run from ``Manuscript/Windows Version 2`` with the app already running::
 
     .venv/Scripts/python.exe tools/animal_essay_corpus_probe.py
 """
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -40,6 +41,7 @@ from writing_hud_apply_probe import (  # noqa: E402
     _dismiss_existing_hud,
     _document_text,
     _editable_control,
+    _reports_ai_ready,
 )
 
 
@@ -63,8 +65,11 @@ def hud_snapshot() -> list[dict[str, object]]:
             continue
     return controls
 
-CORPUS = (
-    ROOT.parent / "20_Animal_Pet_Essays_800_Percent_More_Errors"
+CORPUS = ROOT / "test-corpus" / "animal-pet-20"
+EXPECTED_ESSAY_COUNT = 20
+EXPECTED_PARAGRAPH_COUNT = 10
+CORPUS_ARCHIVE_SHA256 = (
+    "C80A6FBA0978596A464E1E9FF3C17D17D6A928FA56445A97C8E045A0EB9FF771"
 )
 
 _WORD_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -112,33 +117,129 @@ def load_essays(corpus: Path) -> list[dict[str, object]]:
     return essays
 
 
-def _skip_button(hud):
-    for control in _descendants(hud):
+def validate_corpus(corpus: Path) -> list[str]:
+    """Return release-blocking problems with the locked local corpus."""
+    failures: list[str] = []
+    archive = corpus / "source.zip"
+    if not archive.is_file():
+        failures.append("locked source.zip is missing")
+    else:
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest().upper()
+        if digest != CORPUS_ARCHIVE_SHA256:
+            failures.append("locked source.zip hash changed")
+
+    paths = sorted(corpus.glob("*.docx"))
+    if len(paths) != EXPECTED_ESSAY_COUNT:
+        failures.append(
+            f"expected {EXPECTED_ESSAY_COUNT} essays, found {len(paths)}"
+        )
+    for path in paths:
         try:
-            name = str(control.Name).strip().casefold()
-            if control.ControlTypeName == "ButtonControl" and (
-                name == "skip"
-                or name.startswith("dismiss current sentence")
-                or name.startswith("dismiss suggested text")
-            ):
-                return control
-        except Exception:  # noqa: BLE001 - UI Automation is best effort
+            count = len(docx_paragraphs(path))
+        except (KeyError, ET.ParseError, zipfile.BadZipFile):
+            failures.append(f"{path.name} is not a readable Word document")
             continue
-    return None
+        if count != EXPECTED_PARAGRAPH_COUNT:
+            failures.append(
+                f"{path.name} has {count} paragraphs; "
+                f"expected {EXPECTED_PARAGRAPH_COUNT}"
+            )
+    return failures
+
+
+def _paragraphs(text: object) -> list[str]:
+    return [line.strip() for line in str(text or "").splitlines() if line.strip()]
+
+
+def validate_report(report: dict[str, object]) -> list[str]:
+    """Return proof failures that make an essay result unsafe to count."""
+    failures: list[str] = []
+    paragraph_count = int(report.get("paragraph_count") or 0)
+    sections = list(report.get("sections") or [])
+    expected_counters = [
+        f"{index} of {paragraph_count}"
+        for index in range(1, paragraph_count + 1)
+    ]
+    actual_counters = [str(section.get("counter") or "") for section in sections]
+    if actual_counters != expected_counters:
+        failures.append(
+            f"section counters were not exactly 1 of {paragraph_count} "
+            f"through {paragraph_count} of {paragraph_count}"
+        )
+    if any(
+        not section.get("accepted")
+        or section.get("skipped")
+        or not section.get("ai_review_ready")
+        for section in sections
+    ):
+        failures.append(
+            "every section must be AI-reviewed and accepted; "
+            "skip or rules-only results are forbidden"
+        )
+
+    original_paragraphs = _paragraphs(report.get("original_text"))
+    final_paragraphs = _paragraphs(report.get("final_text"))
+    text_is_complete = (
+        paragraph_count > 0
+        and len(original_paragraphs) == paragraph_count
+        and len(final_paragraphs) == paragraph_count
+        and len(str(report.get("final_text") or ""))
+        >= 0.65 * len(str(report.get("original_text") or ""))
+        and all(
+            len(after) >= 0.45 * len(before)
+            for before, after in zip(original_paragraphs, final_paragraphs)
+        )
+    )
+    if not text_is_complete:
+        failures.append("final text was truncated or lost paragraph boundaries")
+    if report.get("error"):
+        failures.append(f"probe error: {report['error']}")
+    if not report.get("completed"):
+        failures.append("essay review did not complete")
+    if not report.get("changed"):
+        failures.append("essay text was not corrected")
+    return failures
+
+
+def build_summary(
+    reports: list[dict[str, object]],
+    *,
+    generated_at: str | None = None,
+) -> dict[str, object]:
+    """Build a release summary that can pass only with all 20 essays."""
+    for report in reports:
+        report["validation_failures"] = validate_report(report)
+    unique_essays = len({str(report.get("page_id") or "") for report in reports})
+    return {
+        "schema_version": 2,
+        "probe": "animal_essay_corpus",
+        "generated_at": generated_at
+        or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "required_essays": EXPECTED_ESSAY_COUNT,
+        "reported_essays": len(reports),
+        "unique_essays": unique_essays,
+        "completed_essays": sum(
+            1 for report in reports if not report["validation_failures"]
+        ),
+        "passed": len(reports) == EXPECTED_ESSAY_COUNT
+        and unique_essays == EXPECTED_ESSAY_COUNT
+        and all(not report["validation_failures"] for report in reports),
+        "essays": reports,
+    }
 
 
 def run_essay(essay, *, first_wait: float, section_wait: float) -> dict[str, object]:
     """Work through one essay exactly as a person would.
 
-    Accept each section whose replacement becomes available. When the HUD
-    reports it found no safe change, skip that section and carry on instead
-    of waiting forever - that is the only move a real user has there, and
-    without it a single unfixable heading blocked the whole document.
+    Accept each section only after the HUD proves its AI correction is ready.
+    A skipped, rules-only, missing, or out-of-order section fails the probe.
     """
     _dismiss_existing_hud()
     result: dict[str, object] = {
         "page_id": essay["page_id"],
         "characters": len(str(essay["text"])),
+        "original_text": str(essay["text"]),
+        "paragraph_count": int(essay["paragraph_count"]),
         "sections": [],
         "completed": False,
     }
@@ -172,7 +273,7 @@ def run_essay(essay, *, first_wait: float, section_wait: float) -> dict[str, obj
             wait_started = time.monotonic()
             deadline = wait_started + wait_limit
             accept = None
-            skip = None
+            ai_ready = False
             counter = ""
             hud = _hud_window(3.0)
             while time.monotonic() < deadline:
@@ -183,39 +284,49 @@ def run_essay(essay, *, first_wait: float, section_wait: float) -> dict[str, obj
                 try:
                     counter = _counter_text(hud) or counter
                     accept = _accept_button(hud)
-                    skip = _skip_button(hud)
                 except Exception:  # noqa: BLE001 - the HUD may be repainting
                     hud = None
                     continue
-                if accept is not None and accept.IsEnabled:
+                ai_ready = bool(
+                    accept is not None
+                    and accept.IsEnabled
+                    and _reports_ai_ready(hud, accept)
+                )
+                if ai_ready and counter:
                     break
-                accept = None
                 time.sleep(0.25)
             waited = round(time.monotonic() - wait_started, 3)
             if hud is None:
                 break
-            # A section the HUD keeps showing after its wait is one it cannot
-            # safely change; a user skips it rather than staring at it.
-            if accept is None:
-                if skip is None or not _click(skip):
-                    result["error"] = (
-                        f"section {counter or '?'} offered neither a "
-                        f"replacement nor a skip within {wait_limit}s"
-                    )
-                    return result
-                result["sections"].append(
-                    {"counter": counter, "wait_seconds": waited, "accepted": False,
-                     "skipped": True}
+            if accept is None or not ai_ready:
+                result["error"] = (
+                    f"section {counter or '?'} did not produce an AI-reviewed "
+                    f"correction within {wait_limit}s"
                 )
-            else:
-                if not _click(accept):
-                    result["error"] = f"accept click failed at {counter or '?'}"
-                    return result
-                time.sleep(0.9)
-                result["sections"].append(
-                    {"counter": counter, "wait_seconds": waited, "accepted": True,
-                     "skipped": False, "doc_chars": len(_document_text(handle))}
+                return result
+            expected_counter = (
+                f"{len(result['sections']) + 1} of {essay['paragraph_count']}"
+            )
+            if counter != expected_counter:
+                result["error"] = (
+                    f"out-of-order section: expected {expected_counter}, got "
+                    f"{counter or '?'}"
                 )
+                return result
+            if not _click(accept):
+                result["error"] = f"accept click failed at {counter or '?'}"
+                return result
+            time.sleep(0.9)
+            result["sections"].append(
+                {
+                    "counter": counter,
+                    "wait_seconds": waited,
+                    "accepted": True,
+                    "skipped": False,
+                    "ai_review_ready": True,
+                    "doc_chars": len(_document_text(handle)),
+                }
+            )
             # Guard against a counter that never advances.
             if counter:
                 seen_counters[counter] = seen_counters.get(counter, 0) + 1
@@ -236,7 +347,14 @@ def run_essay(essay, *, first_wait: float, section_wait: float) -> dict[str, obj
         result["skipped_sections"] = sum(
             1 for section in result["sections"] if section.get("skipped")
         )
-        result["completed"] = bool(result["sections"])
+        result["completed"] = (
+            len(result["sections"]) == int(essay["paragraph_count"])
+        )
+        if not result["completed"]:
+            result["error"] = (
+                f"review ended after {len(result['sections'])} of "
+                f"{essay['paragraph_count']} sections"
+            )
         return result
     finally:
         result["total_seconds"] = round(time.monotonic() - started, 3)
@@ -272,6 +390,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     essays = load_essays(args.corpus)
+    corpus_failures = validate_corpus(args.corpus)
+    if corpus_failures:
+        parser.error("; ".join(corpus_failures))
     if not essays:
         parser.error(f"no .docx essays found under {args.corpus}")
     if args.essays:
@@ -294,12 +415,11 @@ def main(argv: list[str] | None = None) -> int:
         if report.get("error"):
             report["hud_controls"] = hud_snapshot()
         report["source"] = essay["source"]
-        report["original_text"] = str(essay["text"])
-        report["paragraph_count"] = essay["paragraph_count"]
         final_text = str(report.get("final_text") or "")
         report["changed"] = final_text.strip() != str(essay["text"]).strip()
+        report["validation_failures"] = validate_report(report)
         reports.append(report)
-        status = "PASS" if report.get("completed") and report["changed"] else "FAIL"
+        status = "PASS" if not report["validation_failures"] else "FAIL"
         print(
             f"{status} {report['page_id']}: "
             f"sections={len(report['sections'])} "
@@ -312,29 +432,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "probe": "animal_essay_corpus",
-                    "generated_at": datetime.now(timezone.utc).isoformat(
-                        timespec="seconds"
-                    ),
-                    "completed_essays": len(reports),
-                    "total_essays": len(essays),
-                    "passed": all(
-                        r.get("completed") and r.get("changed") for r in reports
-                    ),
-                    "essays": reports,
-                },
-                indent=2,
-                ensure_ascii=False,
-            )
+            json.dumps(build_summary(reports), indent=2, ensure_ascii=False)
             + "\n",
             encoding="utf-8",
         )
 
     print(args.output)
-    return 0 if all(r.get("completed") and r.get("changed") for r in reports) else 5
+    return 0 if build_summary(reports)["passed"] else 5
 
 
 if __name__ == "__main__":

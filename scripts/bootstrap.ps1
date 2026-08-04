@@ -15,12 +15,18 @@ if (-not (Test-Path $Python)) {
     }
     else {
         try {
-            py -3.12 -m venv (Join-Path $Root ".venv")
+            & py -3.12 -m venv (Join-Path $Root ".venv")
         }
         catch {
-            python -m venv (Join-Path $Root ".venv")
+            # The fallback below also handles launch failures.
+        }
+        if (-not (Test-Path $Python)) {
+            & python -m venv (Join-Path $Root ".venv")
         }
     }
+}
+if (-not (Test-Path $Python)) {
+    throw "Could not create the project Python environment."
 }
 if (-not $SkipInstall) {
     & $Python -m pip install -r (Join-Path $Root "requirements.txt")

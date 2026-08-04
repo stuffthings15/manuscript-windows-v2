@@ -43,6 +43,7 @@ class _FakeWinReg:
 
 
 def test_v2_defaults_to_its_own_private_data_folder(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("MANUSCRIPT_V2_DATA_DIR", raising=False)
     monkeypatch.delenv("ECHOLINK_DATA_DIR", raising=False)
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     monkeypatch.delenv("APPDATA", raising=False)
