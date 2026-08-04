@@ -1,0 +1,234 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-07-19T04:55:53.275291+00:00",
+  "corpus_name": "Echo-Link Capstone Gold Corpus",
+  "automated_baseline": {
+    "case_count": 20,
+    "exact_match_count": 11,
+    "exact_match_rate": 0.55,
+    "protected_content_pass_count": 14,
+    "protected_content_pass_rate": 0.7,
+    "median_cleanup_latency_ms": 0.0363,
+    "p95_cleanup_latency_ms": 0.0471,
+    "repeat_count_per_case": 25
+  },
+  "human_baseline": {
+    "correction_free_acceptance_rate": null,
+    "median_time_to_accepted_text_seconds": null,
+    "status": "not_measured_requires_live_user_session"
+  },
+  "cases": [
+    {
+      "id": "prose-01",
+      "category": "basic_prose",
+      "output": "Hello there.",
+      "expected": "Hello there.",
+      "exact_match": true,
+      "protected_content_pass": true,
+      "missing_protected_terms": [],
+      "median_cleanup_latency_ms": 0.0242
+    },
+    {
+      "id": "prose-02",
+      "category": "repetition",
+      "output": "This is a test.",
+      "expected": "This is a test.",
+      "exact_match": true,
+      "protected_content_pass": true,
+      "missing_protected_terms": [],
+      "median_cleanup_latency_ms": 0.0274
+    },
+    {
+      "id": "prose-03",
+      "category": "filler_and_vocabulary",
+      "output": "Echo-Link, please start.",
+      "expected": "Echo-Link, please start.",
+      "exact_match": true,
+      "protected_content_pass": true,
+      "missing_protected_terms": [],
+      "median_cleanup_latency_ms": 0.0333
+    },
+    {
+      "id": "question-01",
+      "category": "question",
+      "output": "Can you open settings?",
+      "expected": "Can you open settings?",
+      "exact_match": true,
+      "protected_content_pass": true,
+      "missing_protected_terms": [],
+      "median_cleanup_latency_ms": 0.0287
+    },
+    {
+      "id": "punctuation-01",
+      "category": "spoken_punctuation",
+      "output": "Please save this!",
+      "expected": "Please save this!",
+      "exact_match": true,
+      "protected_content_pass": true,
+      "missing_protected_terms": [],
+      "median_cleanup_latency_ms": 0.0288
+    },
+    {
+      "id": "paragraph-01",
+      "category": "paragraphs",
+      "output": "First paragraph\n\nSecond paragraph.",
+      "expected": "First paragraph\n\nSecond paragraph.",
+      "exact_match": true,
+      "protected_content_pass": true,
+      "missing_protected_terms": [],
+      "median_cleanup_latency_ms": 0.0363
+    },
+    {
+      "id": "correction-01",
+      "category": "self_correction",
+      "output": "Send it monday.",
+      "expected": "Send it monday.",
+      "exact_match": true,
+      "protected_content_pass": true,
+      "missing_protected_terms": [],
+      "median_cleanup_latency_ms": 0.0303
+    },
+    {
+      "id": "correction-02",
+      "category": "scratch_that",
+      "output": "The first idea is green.",
+      "expected": "The first idea is green.",
+      "exact_match": true,
+      "protected_content_pass": true,
+      "missing_protected_terms": [],
+      "median_cleanup_latency_ms": 0.0474
+    },
+    {
+      "id": "protected-01",
+      "category": "email",
+      "output": "Send this to jane. Doe@example. Com.",
+      "expected": "Send this to jane.doe@example.com.",
+      "exact_match": false,
+      "protected_content_pass": false,
+      "missing_protected_terms": [
+        "jane.doe@example.com"
+      ],
+      "median_cleanup_latency_ms": 0.0322
+    },
+    {
+      "id": "protected-02",
+      "category": "url",
+      "output": "Open https://echo-link. Local/docs.",
+      "expected": "Open https://echo-link.local/docs.",
+      "exact_match": false,
+      "protected_content_pass": false,
+      "missing_protected_terms": [
+        "https://echo-link.local/docs"
+      ],
+      "median_cleanup_latency_ms": 0.0307
+    },
+    {
+      "id": "protected-03",
+      "category": "windows_path",
+      "output": "Open C:\\Work\\EchoLink\\notes. Txt.",
+      "expected": "Open C:\\Work\\EchoLink\\notes.txt.",
+      "exact_match": false,
+      "protected_content_pass": false,
+      "missing_protected_terms": [
+        "C:\\Work\\EchoLink\\notes.txt"
+      ],
+      "median_cleanup_latency_ms": 0.0302
+    },
+    {
+      "id": "protected-04",
+      "category": "numbers_and_time",
+      "output": "Schedule 2: 30 pm on 7/18/2026.",
+      "expected": "Schedule 2:30 pm on 7/18/2026.",
+      "exact_match": false,
+      "protected_content_pass": false,
+      "missing_protected_terms": [
+        "2:30"
+      ],
+      "median_cleanup_latency_ms": 0.0324
+    },
+    {
+      "id": "vocabulary-01",
+      "category": "names_and_products",
+      "output": "Meet with curtis about OpenAI and Echo-Link.",
+      "expected": "Meet with curtis about OpenAI and Echo-Link.",
+      "exact_match": true,
+      "protected_content_pass": true,
+      "missing_protected_terms": [],
+      "median_cleanup_latency_ms": 0.0413
+    },
+    {
+      "id": "developer-01",
+      "category": "developer_vocabulary",
+      "output": "Use PySide6 with Python 3. 12.",
+      "expected": "Use PySide6 with Python 3.12.",
+      "exact_match": false,
+      "protected_content_pass": false,
+      "missing_protected_terms": [
+        "3.12"
+      ],
+      "median_cleanup_latency_ms": 0.0406
+    },
+    {
+      "id": "developer-02",
+      "category": "filename",
+      "output": "Save as echo_link_plan. Md.",
+      "expected": "Save as echo_link_plan.md.",
+      "exact_match": false,
+      "protected_content_pass": false,
+      "missing_protected_terms": [
+        "echo_link_plan.md"
+      ],
+      "median_cleanup_latency_ms": 0.0372
+    },
+    {
+      "id": "workflow-01",
+      "category": "gpt_workflow",
+      "output": "Connect the GPT workflow to Echo-Link.",
+      "expected": "Connect the GPT workflow to Echo-Link.",
+      "exact_match": true,
+      "protected_content_pass": true,
+      "missing_protected_terms": [],
+      "median_cleanup_latency_ms": 0.0422
+    },
+    {
+      "id": "list-01",
+      "category": "automatic_list",
+      "output": "Buy milk\nBuy bread\nBuy coffee.",
+      "expected": "- Buy milk\n- Buy bread\n- Buy coffee.",
+      "exact_match": false,
+      "protected_content_pass": true,
+      "missing_protected_terms": [],
+      "median_cleanup_latency_ms": 0.0419
+    },
+    {
+      "id": "correction-03",
+      "category": "natural_backtracking",
+      "output": "Set the count to two actually make that three.",
+      "expected": "Set the count to three.",
+      "exact_match": false,
+      "protected_content_pass": true,
+      "missing_protected_terms": [],
+      "median_cleanup_latency_ms": 0.0421
+    },
+    {
+      "id": "punctuation-02",
+      "category": "automatic_sentence_boundary",
+      "output": "The build passed now create the installer.",
+      "expected": "The build passed. Now create the installer.",
+      "exact_match": false,
+      "protected_content_pass": true,
+      "missing_protected_terms": [],
+      "median_cleanup_latency_ms": 0.0372
+    },
+    {
+      "id": "developer-03",
+      "category": "command_and_token",
+      "output": "Run pytest -q and keep API_KEY unchanged.",
+      "expected": "Run pytest -q and keep API_KEY unchanged.",
+      "exact_match": true,
+      "protected_content_pass": true,
+      "missing_protected_terms": [],
+      "median_cleanup_latency_ms": 0.0406
+    }
+  ]
+}

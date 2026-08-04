@@ -1,0 +1,17 @@
+numpy==2.4.6
+sounddevice==0.5.5
+sqlcipher3==0.6.2
+uiautomation==2.0.29
+faster-whisper==1.2.1
+onnxruntime==1.27.0
+pyperclip==1.11.0
+PySide6==6.11.1
+symspellpy==6.10.0
+tokenizers==0.23.1
+Pillow==12.3.0
+pyinstaller==6.20.0
+pytest==9.1.1
+winrt-runtime==3.2.1
+winrt-Windows.Foundation==3.2.1
+winrt-Windows.Foundation.Collections==3.2.1
+winrt-Windows.Media.Control==3.2.1

@@ -1,0 +1,14 @@
+[
+  {"text": "The reports is not ready.", "needs_llm": true},
+  {"text": "She are ready.", "needs_llm": true},
+  {"text": "He did went home.", "needs_llm": true},
+  {"text": "Although the report was ready.", "needs_llm": true},
+  {"text": "It failed, we tried again.", "needs_llm": true},
+  {"text": "The report is ready.", "needs_llm": false},
+  {"text": "The reports are ready.", "needs_llm": false},
+  {"text": "She is ready.", "needs_llm": false},
+  {"text": "He went home.", "needs_llm": false},
+  {"text": "We tried again after it failed.", "needs_llm": false},
+  {"text": "This concise sentence is correct.", "needs_llm": false},
+  {"text": "The team completed the report yesterday.", "needs_llm": false}
+]

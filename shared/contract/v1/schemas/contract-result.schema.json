@@ -1,0 +1,267 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:echo-link:contract:v1:result",
+  "title": "Echo-Link local core result 1.0.0",
+  "type": "object",
+  "required": ["contract_version", "request_id", "operation", "status", "privacy"],
+  "properties": {
+    "contract_version": {"const": "1.0.0"},
+    "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "operation": {"type": "string", "minLength": 1, "maxLength": 64},
+    "status": {"enum": ["ok", "error"]},
+    "privacy": {"$ref": "privacy-flags.schema.json"},
+    "output": {"type": "object"},
+    "error": {"$ref": "error.schema.json"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "ok"}}},
+      "then": {"required": ["output"], "not": {"required": ["error"]}}
+    },
+    {
+      "if": {"properties": {"status": {"const": "error"}}},
+      "then": {"required": ["error"], "not": {"required": ["output"]}}
+    },
+    {
+      "if": {
+        "properties": {"status": {"const": "ok"}, "operation": {"const": "capabilities"}},
+        "required": ["status", "operation"]
+      },
+      "then": {"properties": {"output": {"$ref": "#/$defs/capabilityOutput"}}}
+    },
+    {
+      "if": {
+        "properties": {"status": {"const": "ok"}, "operation": {"const": "dictation_cleanup"}},
+        "required": ["status", "operation"]
+      },
+      "then": {"properties": {"output": {"$ref": "#/$defs/textOutput"}}}
+    },
+    {
+      "if": {
+        "properties": {"status": {"const": "ok"}, "operation": {"const": "developer_format"}},
+        "required": ["status", "operation"]
+      },
+      "then": {"properties": {"output": {"$ref": "#/$defs/textOutput"}}}
+    },
+    {
+      "if": {
+        "properties": {"status": {"const": "ok"}, "operation": {"const": "protected_tokens"}},
+        "required": ["status", "operation"]
+      },
+      "then": {"properties": {"output": {"$ref": "#/$defs/protectedOutput"}}}
+    },
+    {
+      "if": {
+        "properties": {"status": {"const": "ok"}, "operation": {"const": "writing_command"}},
+        "required": ["status", "operation"]
+      },
+      "then": {"properties": {"output": {"$ref": "#/$defs/writingOutput"}}}
+    }
+  ],
+  "$defs": {
+    "token": {
+      "type": "object",
+      "required": ["token", "value"],
+      "properties": {
+        "token": {"type": "string", "pattern": "^ECHOLINKTOKEN[0-9]+X$"},
+        "value": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "textOutput": {
+      "type": "object",
+      "required": ["text", "source", "changed"],
+      "properties": {
+        "text": {"type": "string"},
+        "source": {"enum": ["deterministic", "developer"]},
+        "changed": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "protectedOutput": {
+      "type": "object",
+      "required": ["protected_text", "tokens"],
+      "properties": {
+        "protected_text": {"type": "string"},
+        "tokens": {"type": "array", "items": {"$ref": "#/$defs/token"}}
+      },
+      "additionalProperties": false
+    },
+    "writingOutput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "phase",
+            "command",
+            "profile",
+            "instruction",
+            "language",
+            "model",
+            "requires_local_model",
+            "protected_text",
+            "tokens"
+          ],
+          "properties": {
+            "phase": {"const": "prepared"},
+            "command": {"type": "string"},
+            "profile": {"type": "string"},
+            "instruction": {"type": "string"},
+            "language": {"type": "string"},
+            "model": {"type": "string"},
+            "requires_local_model": {"const": true},
+            "protected_text": {"type": "string"},
+            "tokens": {"type": "array", "items": {"$ref": "#/$defs/token"}}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "phase",
+            "text",
+            "source",
+            "model",
+            "command",
+            "profile",
+            "protected_tokens_preserved"
+          ],
+          "properties": {
+            "phase": {"const": "completed"},
+            "text": {"type": "string"},
+            "source": {"const": "local_model"},
+            "model": {"type": "string", "minLength": 1},
+            "command": {"type": "string"},
+            "profile": {"type": "string"},
+            "protected_tokens_preserved": {"type": "boolean"}
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "operationCapability": {
+      "type": "object",
+      "required": ["deterministic", "requires_local_model"],
+      "properties": {
+        "deterministic": {"const": true},
+        "requires_local_model": {"const": false}
+      },
+      "additionalProperties": false
+    },
+    "writingCapability": {
+      "type": "object",
+      "required": [
+        "deterministic_preparation",
+        "completed_output_deterministic",
+        "requires_local_model"
+      ],
+      "properties": {
+        "deterministic_preparation": {"const": true},
+        "completed_output_deterministic": {"const": false},
+        "requires_local_model": {"const": true}
+      },
+      "additionalProperties": false
+    },
+    "capabilityOutput": {
+      "type": "object",
+      "required": [
+        "selected_contract_version",
+        "client_platform",
+        "operations",
+        "writing_commands",
+        "writing_profiles",
+        "error_stages"
+      ],
+      "properties": {
+        "selected_contract_version": {"const": "1.0.0"},
+        "client_platform": {"enum": ["windows", "swift", "android"]},
+        "operations": {
+          "type": "object",
+          "required": [
+            "dictation_cleanup",
+            "developer_format",
+            "protected_tokens",
+            "writing_command"
+          ],
+          "properties": {
+            "dictation_cleanup": {"$ref": "#/$defs/operationCapability"},
+            "developer_format": {"$ref": "#/$defs/operationCapability"},
+            "protected_tokens": {"$ref": "#/$defs/operationCapability"},
+            "writing_command": {"$ref": "#/$defs/writingCapability"}
+          },
+          "additionalProperties": false
+        },
+        "writing_commands": {
+          "type": "array",
+          "minItems": 27,
+          "maxItems": 27,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "Proofread",
+              "Improve",
+              "Rephrase",
+              "Rewrite",
+              "Shorten",
+              "Expand",
+              "Summarize",
+              "Formal",
+              "Friendly",
+              "Professional",
+              "Academic",
+              "Conversational",
+              "Concise",
+              "Detailed",
+              "Persuasive",
+              "Confident",
+              "Casual",
+              "Technical",
+              "Simplified",
+              "High-school level",
+              "College level",
+              "Diplomatic",
+              "Empathetic",
+              "Cooperative",
+              "Assertive",
+              "Caveman",
+              "Translate"
+            ]
+          }
+        },
+        "writing_profiles": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["General", "Email", "Meeting", "Marketing", "Technical", "Code-safe"]
+          }
+        },
+        "error_stages": {
+          "type": "array",
+          "minItems": 12,
+          "maxItems": 12,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "request_validation",
+              "capability_negotiation",
+              "microphone_capture",
+              "speech_transcription",
+              "input_protection",
+              "dictation_cleanup",
+              "developer_formatting",
+              "writing_model",
+              "output_validation",
+              "text_insertion",
+              "local_storage",
+              "canceled"
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

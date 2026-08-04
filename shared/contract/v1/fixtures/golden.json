@@ -1,0 +1,269 @@
+{
+  "fixture_schema_version": 1,
+  "contract_version": "1.0.0",
+  "generated_from": "echo_link_core.shared_contract.run_contract_request",
+  "default_privacy": {
+    "local_only": true,
+    "external_network_allowed": false,
+    "loopback_model_allowed": false,
+    "retain_audio": false,
+    "text_retention": "none",
+    "telemetry_allowed": false
+  },
+  "exact_output_scope": [
+    "capabilities",
+    "dictation_cleanup",
+    "developer_format",
+    "protected_tokens",
+    "writing_command_preparation",
+    "errors"
+  ],
+  "limitations": [
+    "Completed local-model writing text is schema-validated but excluded from exact golden output.",
+    "No fixture proves native client, microphone, insertion, packaging, or device behavior."
+  ],
+  "cases": [
+    {
+      "id": "cleanup-punctuation",
+      "operation": "dictation_cleanup",
+      "input": {
+        "text": "um echo link echo link comma ready new line how are you question mark",
+        "vocabulary": {"echo link": "Echo-Link"},
+        "append_trailing_space": false
+      },
+      "expected_status": "ok",
+      "expected_output": {
+        "text": "Echo-Link, ready\nHow are you?",
+        "source": "deterministic",
+        "changed": true
+      }
+    },
+    {
+      "id": "cleanup-protected",
+      "operation": "dictation_cleanup",
+      "input": {
+        "text": "open C:\\Work\\notes.txt at 2:30 then visit https://echo-link.local/docs",
+        "vocabulary": {},
+        "append_trailing_space": true
+      },
+      "expected_status": "ok",
+      "expected_output": {
+        "text": "Open C:\\Work\\notes.txt at 2:30 then visit https://echo-link.local/docs. ",
+        "source": "deterministic",
+        "changed": true
+      }
+    },
+    {
+      "id": "developer-function",
+      "operation": "developer_format",
+      "input": {
+        "text": "def camel case get user open paren snake case user id close paren colon new line indent return snake case user id",
+        "vocabulary": {},
+        "append_trailing_space": false
+      },
+      "expected_status": "ok",
+      "expected_output": {
+        "text": "def getUser(user_id):\n    return user_id",
+        "source": "developer",
+        "changed": true
+      }
+    },
+    {
+      "id": "developer-cli",
+      "operation": "developer_format",
+      "input": {
+        "text": "git status dash dash short pipe tee filename result dot log",
+        "vocabulary": {},
+        "append_trailing_space": false
+      },
+      "expected_status": "ok",
+      "expected_output": {
+        "text": "git status --short | tee result.log",
+        "source": "developer",
+        "changed": true
+      }
+    },
+    {
+      "id": "developer-tag",
+      "operation": "developer_format",
+      "input": {
+        "text": "tag file source slash echo link underscore core slash engine dot py",
+        "vocabulary": {"echo link": "echo_link"},
+        "append_trailing_space": false
+      },
+      "expected_status": "ok",
+      "expected_output": {
+        "text": "@source/echo_link_core/engine.py",
+        "source": "developer",
+        "changed": true
+      }
+    },
+    {
+      "id": "protected-standard",
+      "operation": "protected_tokens",
+      "input": {
+        "text": "Email jane@example.com at 2:30 from C:\\Work\\notes.txt about Echo-Link.",
+        "protected_terms": ["Echo-Link"]
+      },
+      "expected_status": "ok",
+      "expected_output": {
+        "protected_text": "Email ECHOLINKTOKEN1X at ECHOLINKTOKEN3X from ECHOLINKTOKEN0X about ECHOLINKTOKEN2X.",
+        "tokens": [
+          {"token": "ECHOLINKTOKEN0X", "value": "C:\\Work\\notes.txt"},
+          {"token": "ECHOLINKTOKEN1X", "value": "jane@example.com"},
+          {"token": "ECHOLINKTOKEN2X", "value": "Echo-Link"},
+          {"token": "ECHOLINKTOKEN3X", "value": "2:30"}
+        ]
+      }
+    },
+    {
+      "id": "writing-code-safe",
+      "operation": "writing_command",
+      "privacy_overrides": {"loopback_model_allowed": true},
+      "input": {
+        "text": "Update `client.send()` before api_client retries 3 times.",
+        "command": "Rewrite",
+        "profile": "Code-safe",
+        "instruction": "Make it concise.",
+        "language": "",
+        "model": "qwen2.5:3b",
+        "protected_terms": []
+      },
+      "expected_status": "ok",
+      "expected_output": {
+        "phase": "prepared",
+        "command": "Rewrite",
+        "profile": "Code-safe",
+        "instruction": "Make it concise.",
+        "language": "",
+        "model": "qwen2.5:3b",
+        "requires_local_model": true,
+        "protected_text": "Update ECHOLINKTOKEN0X before ECHOLINKTOKEN1X retries ECHOLINKTOKEN2X times.",
+        "tokens": [
+          {"token": "ECHOLINKTOKEN0X", "value": "`client.send()`"},
+          {"token": "ECHOLINKTOKEN1X", "value": "api_client"},
+          {"token": "ECHOLINKTOKEN2X", "value": "3"}
+        ]
+      }
+    },
+    {
+      "id": "capabilities-windows",
+      "operation": "capabilities",
+      "input": {
+        "client_platform": "windows",
+        "client_version": "0.1.0",
+        "supported_contract_versions": ["1.0.0"],
+        "requested_operations": [
+          "dictation_cleanup",
+          "developer_format",
+          "protected_tokens",
+          "writing_command"
+        ]
+      },
+      "expected_status": "ok",
+      "expected_output": {
+        "selected_contract_version": "1.0.0",
+        "client_platform": "windows",
+        "operations": {
+          "dictation_cleanup": {"deterministic": true, "requires_local_model": false},
+          "developer_format": {"deterministic": true, "requires_local_model": false},
+          "protected_tokens": {"deterministic": true, "requires_local_model": false},
+          "writing_command": {
+            "deterministic_preparation": true,
+            "completed_output_deterministic": false,
+            "requires_local_model": true
+          }
+        },
+        "writing_commands": [
+          "Proofread",
+          "Improve",
+          "Rephrase",
+          "Rewrite",
+          "Shorten",
+          "Expand",
+          "Summarize",
+          "Formal",
+          "Friendly",
+          "Professional",
+          "Academic",
+          "Conversational",
+          "Concise",
+          "Detailed",
+          "Persuasive",
+          "Confident",
+          "Casual",
+          "Technical",
+          "Simplified",
+          "High-school level",
+          "College level",
+          "Diplomatic",
+          "Empathetic",
+          "Cooperative",
+          "Assertive",
+          "Caveman",
+          "Translate"
+        ],
+        "writing_profiles": [
+          "General",
+          "Email",
+          "Meeting",
+          "Marketing",
+          "Technical",
+          "Code-safe"
+        ],
+        "error_stages": [
+          "request_validation",
+          "capability_negotiation",
+          "microphone_capture",
+          "speech_transcription",
+          "input_protection",
+          "dictation_cleanup",
+          "developer_formatting",
+          "writing_model",
+          "output_validation",
+          "text_insertion",
+          "local_storage",
+          "canceled"
+        ]
+      }
+    },
+    {
+      "id": "error-privacy",
+      "operation": "developer_format",
+      "privacy_overrides": {"external_network_allowed": true},
+      "input": {
+        "text": "camel case user name",
+        "vocabulary": {},
+        "append_trailing_space": false
+      },
+      "expected_status": "error",
+      "expected_error": {
+        "code": "PRIVACY_DOWNGRADE_REJECTED",
+        "stage": "request_validation",
+        "message": "The request weakens required privacy controls.",
+        "retryable": false
+      }
+    },
+    {
+      "id": "error-writing-command",
+      "operation": "writing_command",
+      "privacy_overrides": {"loopback_model_allowed": true},
+      "input": {
+        "text": "Hello",
+        "command": "Invent",
+        "profile": "General",
+        "instruction": "",
+        "language": "",
+        "model": "local",
+        "protected_terms": []
+      },
+      "expected_status": "error",
+      "expected_error": {
+        "code": "UNKNOWN_WRITING_COMMAND",
+        "stage": "request_validation",
+        "message": "Writing command is not supported.",
+        "retryable": false
+      }
+    }
+  ]
+}

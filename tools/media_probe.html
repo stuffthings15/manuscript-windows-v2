@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Manuscript media pause probe</title>
+<audio id="probe" autoplay loop src="file:///C:/Windows/Media/Ring05.wav"></audio>
+<p>Manuscript local media pause/resume probe.</p>
+<script>
+  const audio = document.querySelector("#probe");
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: "Manuscript pause probe",
+    artist: "Local test"
+  });
+  navigator.mediaSession.setActionHandler("play", () => audio.play());
+  navigator.mediaSession.setActionHandler("pause", () => audio.pause());
+  audio.play();
+</script>

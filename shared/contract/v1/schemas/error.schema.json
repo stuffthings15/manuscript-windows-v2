@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:echo-link:contract:v1:error",
+  "title": "Echo-Link cross-platform error",
+  "type": "object",
+  "required": ["code", "stage", "message", "retryable"],
+  "properties": {
+    "code": {"type": "string", "minLength": 1, "maxLength": 64},
+    "stage": {
+      "enum": [
+        "request_validation",
+        "capability_negotiation",
+        "microphone_capture",
+        "speech_transcription",
+        "input_protection",
+        "dictation_cleanup",
+        "developer_formatting",
+        "writing_model",
+        "output_validation",
+        "text_insertion",
+        "local_storage",
+        "canceled"
+      ]
+    },
+    "message": {"type": "string", "minLength": 1, "maxLength": 500},
+    "retryable": {"type": "boolean"}
+  },
+  "additionalProperties": false
+}

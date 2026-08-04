@@ -1,0 +1,156 @@
+{
+  "schema_version": 1,
+  "name": "Echo-Link Capstone Gold Corpus",
+  "purpose": "Fixed text-level baseline for local cleanup, protected content, and known feature gaps.",
+  "default_vocabulary": {
+    "echo link": "Echo-Link",
+    "open ai": "OpenAI",
+    "pie side six": "PySide6",
+    "python three point twelve": "Python 3.12",
+    "g p t": "GPT",
+    "pytest dash q": "pytest -q",
+    "echo link underscore plan dot md": "echo_link_plan.md"
+  },
+  "cases": [
+    {
+      "id": "prose-01",
+      "category": "basic_prose",
+      "raw": "hello there",
+      "expected": "Hello there.",
+      "protected_terms": []
+    },
+    {
+      "id": "prose-02",
+      "category": "repetition",
+      "raw": "this is is a test",
+      "expected": "This is a test.",
+      "protected_terms": []
+    },
+    {
+      "id": "prose-03",
+      "category": "filler_and_vocabulary",
+      "raw": "um echo link comma please start",
+      "expected": "Echo-Link, please start.",
+      "protected_terms": ["Echo-Link"]
+    },
+    {
+      "id": "question-01",
+      "category": "question",
+      "raw": "can you open settings",
+      "expected": "Can you open settings?",
+      "protected_terms": []
+    },
+    {
+      "id": "punctuation-01",
+      "category": "spoken_punctuation",
+      "raw": "please save this exclamation mark",
+      "expected": "Please save this!",
+      "protected_terms": []
+    },
+    {
+      "id": "paragraph-01",
+      "category": "paragraphs",
+      "raw": "first paragraph new paragraph second paragraph",
+      "expected": "First paragraph\n\nSecond paragraph.",
+      "protected_terms": []
+    },
+    {
+      "id": "correction-01",
+      "category": "self_correction",
+      "raw": "send it friday no wait monday",
+      "expected": "Send it monday.",
+      "protected_terms": []
+    },
+    {
+      "id": "correction-02",
+      "category": "scratch_that",
+      "raw": "the first idea is blue scratch that the first idea is green",
+      "expected": "The first idea is green.",
+      "protected_terms": []
+    },
+    {
+      "id": "protected-01",
+      "category": "email",
+      "raw": "send this to jane.doe@example.com",
+      "expected": "Send this to jane.doe@example.com.",
+      "protected_terms": ["jane.doe@example.com"]
+    },
+    {
+      "id": "protected-02",
+      "category": "url",
+      "raw": "open https://echo-link.local/docs",
+      "expected": "Open https://echo-link.local/docs.",
+      "protected_terms": ["https://echo-link.local/docs"]
+    },
+    {
+      "id": "protected-03",
+      "category": "windows_path",
+      "raw": "open C:\\Work\\EchoLink\\notes.txt",
+      "expected": "Open C:\\Work\\EchoLink\\notes.txt.",
+      "protected_terms": ["C:\\Work\\EchoLink\\notes.txt"]
+    },
+    {
+      "id": "protected-04",
+      "category": "numbers_and_time",
+      "raw": "schedule 2:30 pm on 7/18/2026",
+      "expected": "Schedule 2:30 pm on 7/18/2026.",
+      "protected_terms": ["2:30", "7/18/2026"]
+    },
+    {
+      "id": "vocabulary-01",
+      "category": "names_and_products",
+      "raw": "meet with curtis about open ai and echo link",
+      "expected": "Meet with curtis about OpenAI and Echo-Link.",
+      "protected_terms": ["OpenAI", "Echo-Link"]
+    },
+    {
+      "id": "developer-01",
+      "category": "developer_vocabulary",
+      "raw": "use pie side six with python three point twelve",
+      "expected": "Use PySide6 with Python 3.12.",
+      "protected_terms": ["PySide6", "3.12"]
+    },
+    {
+      "id": "developer-02",
+      "category": "filename",
+      "raw": "save as echo link underscore plan dot md",
+      "expected": "Save as echo_link_plan.md.",
+      "protected_terms": ["echo_link_plan.md"]
+    },
+    {
+      "id": "workflow-01",
+      "category": "gpt_workflow",
+      "raw": "connect the g p t workflow to echo link",
+      "expected": "Connect the GPT workflow to Echo-Link.",
+      "protected_terms": ["GPT", "Echo-Link"]
+    },
+    {
+      "id": "list-01",
+      "category": "automatic_list",
+      "raw": "buy milk new line buy bread new line buy coffee",
+      "expected": "- Buy milk\n- Buy bread\n- Buy coffee.",
+      "protected_terms": []
+    },
+    {
+      "id": "correction-03",
+      "category": "natural_backtracking",
+      "raw": "set the count to two actually make that three",
+      "expected": "Set the count to three.",
+      "protected_terms": []
+    },
+    {
+      "id": "punctuation-02",
+      "category": "automatic_sentence_boundary",
+      "raw": "the build passed now create the installer",
+      "expected": "The build passed. Now create the installer.",
+      "protected_terms": []
+    },
+    {
+      "id": "developer-03",
+      "category": "command_and_token",
+      "raw": "run pytest dash q and keep API_KEY unchanged",
+      "expected": "Run pytest -q and keep API_KEY unchanged.",
+      "protected_terms": ["pytest -q", "API_KEY"]
+    }
+  ]
+}

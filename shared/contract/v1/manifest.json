@@ -1,0 +1,28 @@
+{
+  "contract_name": "Echo-Link Local Core Contract",
+  "contract_version": "1.0.0",
+  "schema_dialect": "JSON Schema 2020-12",
+  "wire_format": "UTF-8 JSON",
+  "client_targets": ["windows", "swift", "android"],
+  "operations": [
+    "capabilities",
+    "dictation_cleanup",
+    "developer_format",
+    "protected_tokens",
+    "writing_command"
+  ],
+  "schemas": {
+    "request": "schemas/contract-request.schema.json",
+    "result": "schemas/contract-result.schema.json",
+    "privacy": "schemas/privacy-flags.schema.json",
+    "error": "schemas/error.schema.json"
+  },
+  "golden_fixtures": "fixtures/golden.json",
+  "python_reference": "src/echo_link_core/shared_contract.py",
+  "compatibility": "Exact for 1.x fields and golden deterministic outputs; incompatible field or output changes require a new major directory.",
+  "limitations": [
+    "This contract does not prove that a Windows, Swift, or Android client exists or passes device tests.",
+    "Writing-command preparation is deterministic; completed local-model prose is validated but is not an exact deterministic output.",
+    "Audio capture, speech recognition, insertion, UI, packaging, and device behavior remain platform responsibilities."
+  ]
+}

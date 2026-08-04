@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "echo-link"
+version = "0.1.0"
+description = "Manuscript local-first Windows voice dictation and writing assistant"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "faster-whisper==1.2.1",
+  "numpy==2.4.6",
+  "onnxruntime==1.27.0",
+  "pyperclip==1.11.0",
+  "PySide6==6.11.1",
+  "sounddevice==0.5.5",
+  "sqlcipher3==0.6.2; platform_system == 'Windows'",
+  "symspellpy==6.10.0",
+  "tokenizers==0.23.1",
+  "uiautomation==2.0.29; platform_system == 'Windows'",
+  "winrt-runtime==3.2.1; platform_system == 'Windows'",
+  "winrt-Windows.Foundation==3.2.1; platform_system == 'Windows'",
+  "winrt-Windows.Foundation.Collections==3.2.1; platform_system == 'Windows'",
+  "winrt-Windows.Media.Control==3.2.1; platform_system == 'Windows'",
+]
+
+[project.optional-dependencies]
+build = ["Pillow==12.3.0", "pyinstaller==6.20.0"]
+test = ["pytest==9.1.1"]
+
+[project.scripts]
+manuscript = "echo_link_app.main:main"
+echo-link = "echo_link_app.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

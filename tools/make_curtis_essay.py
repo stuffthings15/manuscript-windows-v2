@@ -1,0 +1,61 @@
+"""Generate curtis_dogs_essay.py from the verbatim acceptance text."""
+from pathlib import Path
+
+PARAGRAPHS = [
+    "Dogs is one of them pets what almost everybody knows about because there everywhere and they always doing stuff even if it dont seem like it. Peoples say dogs is mans best friend but really they is everybodys friend mostly unless they dont know you then they bark at you a lot untill they decide maybe your okay. I think dogs make the greatest pets because they got personalitys that is all different and every single one acts their own way. Some dogs is lazy and sleeps all day while others runs around the whole house like they drank five cups of coffee. That dont mean there bad though because thats just how dogs be acting.",
+    "Having a dog makes your house feel more alive because they are always following you around and wanting to see what you are doing. Sometimes they just sit there staring for no reason at all, which is kind of funny because you don't know if they're thinking or if they are just waiting for food again. Most dogs are always hungry no matter how much you feed them. You could give them breakfast, and then five minutes later they look at you like they never ate nothing ever before in their whole life.",
+    "Another reason dogs is good pets are because they likes spending time with there owners. They dont care if your rich poor tall short old young or anything like that. They mostly just want somebody to throw a ball pet them scratch behind there ears and maybe let them lay on the couch even when there probably not suppose to. That kind of loyalty is hard too find these days because people changes there minds alot but dogs usually stays by your side no matter what happens unless they see a squirrel then they completely forget you existed for a little while.",
+    "Dogs can also help people when there sad or lonely. If somebody had a bad day sometimes the dog comes over without anybody asking and lays next too them. Maybe the dog dont understand exactly what happened but somehow they still knows something is wrong. Thats pretty amazing if you think about it because they cant even talk with words but they still communicate better then some peoples does. There tails wagging, barking, whining and goofy faces says alot more then actual talking sometimes.",
+    "Taking care of a dog teaches responsibility to. You got too remember feeding times watering them taking walks cleaning up after them brushing there fur maybe giving baths and taking them too the vet. Some peoples thinks thats alot of work which it definitely can be but its also worth it because the dog depends on you. If you forget everything the dog aint gonna suddenly make itself dinner. It just waits and looks disappointed until you remember. Thats kind of sad but also shows how much they trust there owners.",
+    "Some dogs learns tricks really quick while other ones acts like they forgot everything you just taught them two seconds ago. You tell them sit and instead they spins around or runs away or lays upside down for some strange reason. Eventually they figures it out maybe after getting enough treats. Treats is basically like money for dogs except instead of buying things they just eats it immediately.",
+    "Dogs comes in all different sizes from tiny little ones that can fit almost inside a backpack too giant dogs that thinks there lap dogs even when they weighs more then a person. Big dogs sometimes dont realize how heavy they are and jumps right onto your lap anyway. Then everybody wonders why there legs hurts afterwards. Little dogs on the other hand sometimes thinks there the biggest toughest animal in the neighborhood even though a cat could probably scare them if it wanted too.",
+    "A dog can make families happier because everybody usually wants too play with it. Kids likes throwing toys adults likes taking walks and grandparents usually likes just sitting with the dog beside them. Even when families argues the dog dont really pick sides it just wants everybody too calm down and maybe share some snacks. Thats one thing dogs seems too be experts at finding food no matter where somebody hid it.",
+    "People says owning a dog costs money and thats true because food toys beds collars treats leashes and vet visits all adds up pretty fast. But alot of peoples believes the happiness they get back is worth much more then what they spends. Money comes and goes but memories with a good dog stays for a really long time even after many years.",
+    "Sometimes dogs does silly things that makes everybody laugh. They chase there own tails bark at nothing gets scared of vacuum cleaners or somehow gets stuck behind furniture they could of just walked around. Nobody really understands why they does some of them things but thats part of why they is entertaining. Life would probably be alot more boring without dogs doing weird dog stuff all over the place.",
+    "If somebody asked me what pet they should get I would probably say a dog because there friendly fun loyal and always interesting too be around. Not every dog is exactly the same but thats what makes them special. Every single one got there own habits there own personality and there own funny little behaviors. Even when they chew your shoes dig holes in the yard or steal your sandwich off the table somehow you usually forgives them anyway because they look at you with them big eyes and you cant stay mad for very long.",
+    "In the end I thinks dogs makes great pets because they brings happiness companionship and excitement into peoples lifes almost every single day. They isnt perfect and neither is peoples but somehow dogs still manages too become part of the family. Thats why I believe almost anybody who has the time patience and willingness too care for one should atleast think about getting a dog because life with a dog is usually louder messier funnier and alot more enjoyable then life without one.",
+]
+
+FORBIDDEN = [
+    "Dogs is one of them pets", "there everywhere", "Peoples say",
+    "they is everybodys", "untill", "your okay", "personalitys",
+    "Some dogs is lazy", "others runs", "That dont mean", "there bad",
+    "dogs be acting", "ate nothing ever", "dogs is good pets are",
+    "they likes spending", "with there owners", "if your rich",
+    "behind there ears", "not suppose to", "hard too find",
+    "people changes there minds", "when there sad", "next too them",
+    "the dog dont understand", "they still knows",
+    "better then some peoples does", "says alot more then",
+    "teaches responsibility to.", "You got too", "there fur",
+    "them too the vet", "peoples thinks thats", "aint gonna",
+    "trust there owners", "Some dogs learns", "ones acts", "they spins",
+    "they figures", "Treats is basically", "just eats it", "Dogs comes in",
+    "backpack too giant", "thinks there lap dogs", "weighs more then",
+    "jumps right onto", "there legs hurts", "thinks there the biggest",
+    "wants too play", "Kids likes", "adults likes",
+    "grandparents usually likes", "families argues", "dog dont really",
+    "everybody too calm", "seems too be", "People says owning",
+    "visits all adds", "alot of peoples believes", "then what they spends",
+    "dogs does silly", "that makes everybody laugh", "chase there own",
+    "could of just", "why they does", "they is entertaining",
+    "be alot more boring", "there friendly", "too be around",
+    "got there own", "usually forgives", "with them big eyes",
+    "cant stay mad", "I thinks", "dogs makes great pets", "they brings",
+    "peoples lifes", "They isnt", "neither is peoples",
+    "manages too become", "willingness too care", "atleast",
+    "enjoyable then life",
+]
+
+target = Path(__file__).with_name("curtis_dogs_essay.py")
+lines = ['"""Curtis\'s full two-page acceptance essay, verbatim (2026-08-01)."""', "", "CURTIS_DOGS_PARAGRAPHS = ("]
+for para in PARAGRAPHS:
+    lines.append("    " + repr(para) + ",")
+lines.append(")")
+lines.append("")
+lines.append("CURTIS_DOGS_FORBIDDEN = (")
+for item in FORBIDDEN:
+    lines.append("    " + repr(item) + ",")
+lines.append(")")
+lines.append("")
+target.write_text("\n".join(lines), encoding="utf-8", newline="")
+print("written", target, len(PARAGRAPHS), "paragraphs,", len(FORBIDDEN), "checks")

@@ -1,0 +1,213 @@
+{
+  "schema_version": 1,
+  "name": "Echo-Link local writing quality v1",
+  "limitations": [
+    "These checks measure fixed-case acceptance, not general language quality.",
+    "Style and translation checks use case-specific markers and require human review for release claims.",
+    "The corpus contains synthetic text only and does not call a model or network service."
+  ],
+  "cases": [
+    {
+      "id": "grammar-01",
+      "category": "grammar_punctuation",
+      "command": "Proofread",
+      "profile": "General",
+      "source": "we was ready but teh file wasnt saved",
+      "reference": "We were ready, but the file wasn't saved.",
+      "checks": {"exact_reference": true, "require_change": true}
+    },
+    {
+      "id": "grammar-02",
+      "category": "grammar_punctuation",
+      "command": "Proofread",
+      "profile": "General",
+      "source": "the results is clear however we need more test",
+      "reference": "The results are clear; however, we need more tests.",
+      "checks": {"exact_reference": true, "require_change": true}
+    },
+    {
+      "id": "grammar-03",
+      "category": "grammar_punctuation",
+      "command": "Proofread",
+      "profile": "Email",
+      "source": "can you send the report to jane by friday",
+      "reference": "Can you send the report to Jane by Friday?",
+      "checks": {"exact_reference": true, "require_change": true}
+    },
+    {
+      "id": "style-01",
+      "category": "style_tone",
+      "command": "Formal",
+      "profile": "Email",
+      "source": "hey Sam, can you get me the numbers ASAP?",
+      "reference": "Hello Sam, could you please send me the numbers as soon as possible?",
+      "checks": {
+        "required_terms": ["Hello Sam", "please"],
+        "forbidden_terms": ["hey", "ASAP"],
+        "protected_terms": ["Sam"],
+        "require_change": true
+      }
+    },
+    {
+      "id": "style-02",
+      "category": "style_tone",
+      "command": "Friendly",
+      "profile": "General",
+      "source": "Your request has been received. A response will follow.",
+      "reference": "Thanks for reaching out. We received your request and will respond soon.",
+      "checks": {"required_terms": ["Thanks", "request", "respond"], "require_change": true, "max_words": 14}
+    },
+    {
+      "id": "style-03",
+      "category": "style_tone",
+      "command": "Rewrite",
+      "profile": "Technical",
+      "source": "The app broke when it tried the thing again.",
+      "reference": "The application failed during the retry operation.",
+      "checks": {
+        "required_terms": ["application", "retry"],
+        "forbidden_terms": ["thing", "broke"],
+        "require_change": true,
+        "max_words": 10
+      }
+    },
+    {
+      "id": "rewrite-01",
+      "category": "rewrite_meaning",
+      "command": "Rewrite",
+      "profile": "Technical",
+      "source": "Version 2.4 must remain offline and must not upload customer files.",
+      "reference": "Version 2.4 must stay offline and must not upload customer files.",
+      "checks": {
+        "required_terms": ["offline", "not", "customer files"],
+        "protected_terms": ["Version 2.4"],
+        "preserve_numbers": true,
+        "reject_new_numbers": true,
+        "require_change": true
+      }
+    },
+    {
+      "id": "rewrite-02",
+      "category": "rewrite_meaning",
+      "command": "Rewrite",
+      "profile": "Meeting",
+      "source": "Maria owns the migration due on 2026-08-15; Lee reviews it.",
+      "reference": "Maria will own the migration due on 2026-08-15, and Lee will review it.",
+      "checks": {
+        "required_terms": ["Maria", "migration", "Lee", "review"],
+        "protected_terms": ["2026-08-15"],
+        "preserve_numbers": true,
+        "reject_new_numbers": true,
+        "require_change": true
+      }
+    },
+    {
+      "id": "rewrite-03",
+      "category": "rewrite_meaning",
+      "command": "Rewrite",
+      "profile": "Technical",
+      "source": "Do not restart Server-7 until backup 42 completes.",
+      "reference": "Do not restart Server-7 before backup 42 is complete.",
+      "checks": {
+        "required_terms": ["not", "restart", "backup", "complete"],
+        "protected_terms": ["Server-7", "42"],
+        "preserve_numbers": true,
+        "reject_new_numbers": true,
+        "require_change": true
+      }
+    },
+    {
+      "id": "summary-01",
+      "category": "summarization",
+      "command": "Summarize",
+      "profile": "Meeting",
+      "source": "The team approved the offline launch. Priya owns packaging. The installer is due on 2026-09-12. Security review remains open.",
+      "reference": "Offline launch approved; Priya owns packaging due 2026-09-12; security review remains open.",
+      "checks": {
+        "required_terms": ["offline", "Priya", "packaging", "security review", "open"],
+        "protected_terms": ["2026-09-12"],
+        "preserve_numbers": true,
+        "reject_new_numbers": true,
+        "require_change": true,
+        "max_words": 14
+      }
+    },
+    {
+      "id": "summary-02",
+      "category": "summarization",
+      "command": "Summarize",
+      "profile": "Technical",
+      "source": "Build 81 passed 275 automated tests. One symbolic-link test was skipped because the Windows account lacked permission. No test failed.",
+      "reference": "Build 81 passed 275 tests with one permission-based symlink skip and no failures.",
+      "checks": {
+        "required_terms": ["passed", "tests", "skip", "no failures"],
+        "protected_terms": ["81", "275"],
+        "preserve_numbers": true,
+        "reject_new_numbers": true,
+        "require_change": true,
+        "max_words": 15
+      }
+    },
+    {
+      "id": "summary-03",
+      "category": "summarization",
+      "command": "Summarize",
+      "profile": "Email",
+      "source": "Jordan requested the report by Friday. Mei will verify the totals. The client meeting stays scheduled for Monday.",
+      "reference": "Jordan needs the report Friday; Mei verifies totals; the client meeting remains Monday.",
+      "checks": {
+        "required_terms": ["Jordan", "report", "Friday", "Mei", "totals", "meeting", "Monday"],
+        "require_change": true,
+        "max_words": 14
+      }
+    },
+    {
+      "id": "translation-01",
+      "category": "translation_validation",
+      "command": "Translate",
+      "profile": "Email",
+      "target_language": "French",
+      "source": "Please send report Q3 to Ana by 2026-09-01.",
+      "reference": "Veuillez envoyer le rapport Q3 à Ana avant le 2026-09-01.",
+      "checks": {
+        "target_language_terms": ["Veuillez", "rapport", "avant"],
+        "protected_terms": ["Q3", "Ana", "2026-09-01"],
+        "preserve_numbers": true,
+        "reject_new_numbers": true,
+        "require_change": true
+      }
+    },
+    {
+      "id": "translation-02",
+      "category": "translation_validation",
+      "command": "Translate",
+      "profile": "General",
+      "target_language": "Spanish",
+      "source": "The offline backup costs $25 and starts on Monday.",
+      "reference": "La copia de seguridad sin conexión cuesta $25 y comienza el lunes.",
+      "checks": {
+        "target_language_terms": ["copia de seguridad", "sin conexión", "cuesta", "lunes"],
+        "protected_terms": ["$25"],
+        "preserve_numbers": true,
+        "reject_new_numbers": true,
+        "require_change": true
+      }
+    },
+    {
+      "id": "translation-03",
+      "category": "translation_validation",
+      "command": "Translate",
+      "profile": "Technical",
+      "target_language": "German",
+      "source": "Do not delete build-17 before 14:30.",
+      "reference": "Löschen Sie build-17 nicht vor 14:30.",
+      "checks": {
+        "target_language_terms": ["Löschen", "nicht", "vor"],
+        "protected_terms": ["build-17", "14:30"],
+        "preserve_numbers": true,
+        "reject_new_numbers": true,
+        "require_change": true
+      }
+    }
+  ]
+}

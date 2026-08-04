@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Manuscript Local Writing Assistant",
+  "version": "0.1.0",
+  "description": "Review local Manuscript corrections in browser text fields.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAoj0C1n/NRlfexzcrdVIwienoDyGFpPAA2IpkHR7ZU2WHGqPGIjOjtAjWcYO3h3qjNIizupTPS3ASYCPzznhTetTQN711Xd0/hH+bfFA7lDR8MKqm/JzqPcsjIpJYQLTtu/a8ylSdw0suSWj0HuNXu1OfJfuPasSVmmSGkkWq1w3JJ95/ENFtmD/0+FGo+5klqJTosK6923ci++Cet7/PjStnie9j/9PJzxtqAytb7zMFkNRMLY6KSZgf75NkM8h+KVvQ6fHrOnhPTIvv2nA8t1TmN9Cj0bkQOlcRfyL4LsevKRBV1qbRrQWV8czP8zJuXtdOzWugpZLtfVr+WPR9swIDAQAB",
+  "permissions": ["nativeMessaging"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["field-security.js", "content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["manuscript.svg"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

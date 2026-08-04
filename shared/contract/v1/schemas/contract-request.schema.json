@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:echo-link:contract:v1:request",
+  "title": "Echo-Link local core request 1.0.0",
+  "type": "object",
+  "required": ["contract_version", "request_id", "operation", "privacy", "input"],
+  "properties": {
+    "contract_version": {"const": "1.0.0"},
+    "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "operation": {
+      "enum": [
+        "capabilities",
+        "dictation_cleanup",
+        "developer_format",
+        "protected_tokens",
+        "writing_command"
+      ]
+    },
+    "privacy": {"$ref": "privacy-flags.schema.json"},
+    "input": {"type": "object"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"operation": {"const": "capabilities"}}},
+      "then": {"properties": {"input": {"$ref": "#/$defs/capabilityInput"}}}
+    },
+    {
+      "if": {"properties": {"operation": {"const": "dictation_cleanup"}}},
+      "then": {"properties": {"input": {"$ref": "#/$defs/dictationInput"}}}
+    },
+    {
+      "if": {"properties": {"operation": {"const": "developer_format"}}},
+      "then": {"properties": {"input": {"$ref": "#/$defs/developerInput"}}}
+    },
+    {
+      "if": {"properties": {"operation": {"const": "protected_tokens"}}},
+      "then": {"properties": {"input": {"$ref": "#/$defs/protectedInput"}}}
+    },
+    {
+      "if": {"properties": {"operation": {"const": "writing_command"}}},
+      "then": {"properties": {"input": {"$ref": "#/$defs/writingInput"}}}
+    }
+  ],
+  "$defs": {
+    "textMap": {
+      "type": "object",
+      "maxProperties": 1000,
+      "propertyNames": {"minLength": 1, "maxLength": 200},
+      "additionalProperties": {"type": "string", "minLength": 1, "maxLength": 500}
+    },
+    "textList": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 500}
+    },
+    "capabilityInput": {
+      "type": "object",
+      "required": [
+        "client_platform",
+        "client_version",
+        "supported_contract_versions",
+        "requested_operations"
+      ],
+      "properties": {
+        "client_platform": {"enum": ["windows", "swift", "android"]},
+        "client_version": {"type": "string", "minLength": 1, "maxLength": 64},
+        "supported_contract_versions": {"$ref": "#/$defs/textList"},
+        "requested_operations": {
+          "type": "array",
+          "maxItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "capabilities",
+              "dictation_cleanup",
+              "developer_format",
+              "protected_tokens",
+              "writing_command"
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "dictationInput": {
+      "type": "object",
+      "required": ["text", "vocabulary", "append_trailing_space"],
+      "properties": {
+        "text": {"type": "string", "minLength": 1, "maxLength": 200000},
+        "vocabulary": {"$ref": "#/$defs/textMap"},
+        "append_trailing_space": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "developerInput": {
+      "type": "object",
+      "required": ["text", "vocabulary", "append_trailing_space"],
+      "properties": {
+        "text": {"type": "string", "minLength": 1, "maxLength": 200000},
+        "vocabulary": {"$ref": "#/$defs/textMap"},
+        "append_trailing_space": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "protectedInput": {
+      "type": "object",
+      "required": ["text", "protected_terms"],
+      "properties": {
+        "text": {"type": "string", "minLength": 1, "maxLength": 200000},
+        "protected_terms": {"$ref": "#/$defs/textList"}
+      },
+      "additionalProperties": false
+    },
+    "writingInput": {
+      "type": "object",
+      "required": [
+        "text",
+        "command",
+        "profile",
+        "instruction",
+        "language",
+        "model",
+        "protected_terms"
+      ],
+      "properties": {
+        "text": {"type": "string", "minLength": 1, "maxLength": 200000},
+        "command": {
+          "enum": [
+            "Proofread",
+            "Improve",
+            "Rephrase",
+            "Rewrite",
+            "Shorten",
+            "Expand",
+            "Summarize",
+            "Formal",
+            "Friendly",
+            "Professional",
+            "Academic",
+            "Conversational",
+            "Concise",
+            "Detailed",
+            "Persuasive",
+            "Confident",
+            "Casual",
+            "Technical",
+            "Simplified",
+            "High-school level",
+            "College level",
+            "Diplomatic",
+            "Empathetic",
+            "Cooperative",
+            "Assertive",
+            "Caveman",
+            "Translate"
+          ]
+        },
+        "profile": {
+          "enum": ["General", "Email", "Meeting", "Marketing", "Technical", "Code-safe"]
+        },
+        "instruction": {"type": "string", "maxLength": 2000},
+        "language": {"type": "string", "maxLength": 80},
+        "model": {"type": "string", "minLength": 1, "maxLength": 128},
+        "protected_terms": {"$ref": "#/$defs/textList"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

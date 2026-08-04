@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Manuscript scroll mark">
+  <rect width="1024" height="1024" rx="220" fill="#17120D"/>
+  <rect x="54" y="54" width="916" height="916" rx="188" fill="none" stroke="#D6A85F" stroke-width="58"/>
+  <path d="M314 194h396c58 0 104 46 104 104 0 42-26 81-66 97v337c0 52-42 94-94 94H314c-52 0-94-42-94-94V288c0-52 42-94 94-94Z" fill="#F2D6A2" stroke="#8B5B2B" stroke-width="34" stroke-linejoin="round"/>
+  <path d="M314 194h396c-50 16-74 55-74 106H270c0-58 14-91 44-106Z" fill="#E2B86F"/>
+  <path d="M654 826H314c50-16 74-55 74-106h366c0 58-34 91-100 106Z" fill="#E2B86F"/>
+  <path d="M338 404h286M338 506h248M338 608h188" fill="none" stroke="#3B291C" stroke-width="42" stroke-linecap="round"/>
+  <path d="m590 710 180-257 58-19-4 61-180 257-92 47Z" fill="#D6A85F" stroke="#3B291C" stroke-width="26" stroke-linejoin="round"/>
+  <path d="m748 484 49 34" fill="none" stroke="#F7E7C6" stroke-width="24" stroke-linecap="round"/>
+</svg>

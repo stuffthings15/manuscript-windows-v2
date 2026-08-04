@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "key_id": "manuscript-polish-2026-01",
+  "updated": "2026-07-23",
+  "llama_cpp_release": "b10103",
+  "llama_cpp_commit": "c588c4f47683e73ad2d69f50480bec6cc85fd0f7",
+  "packs": [
+    {
+      "id": "llama-b10103-win-cpu-x64",
+      "display_name": "llama.cpp b10103 CPU",
+      "backend": "cpu",
+      "version": "b10103",
+      "architecture": "x64",
+      "entry_point": "llama-server.exe",
+      "license": "MIT",
+      "source_url": "https://github.com/ggml-org/llama.cpp/releases/tag/b10103",
+      "available": true,
+      "components": [
+        {
+          "filename": "llama-b10103-bin-win-cpu-x64.zip",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10103/llama-b10103-bin-win-cpu-x64.zip",
+          "size_bytes": 18212342,
+          "sha256": "cb06b6a0505ddf451a873e49dc3cf4aca08e286e4f2bbbd80d3d9a74667cc0cc"
+        }
+      ]
+    },
+    {
+      "id": "llama-b10103-win-cuda-13.3-x64",
+      "display_name": "llama.cpp b10103 CUDA 13.3",
+      "backend": "cuda",
+      "version": "b10103",
+      "architecture": "x64",
+      "entry_point": "llama-server.exe",
+      "license": "MIT",
+      "source_url": "https://github.com/ggml-org/llama.cpp/releases/tag/b10103",
+      "available": true,
+      "components": [
+        {
+          "filename": "llama-b10103-bin-win-cuda-13.3-x64.zip",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10103/llama-b10103-bin-win-cuda-13.3-x64.zip",
+          "size_bytes": 146346930,
+          "sha256": "f18e2bf2dc8f6d8b99b225ea51f042c623edbf245bf0f3a9f3a8fb1110d3276a"
+        },
+        {
+          "filename": "cudart-llama-bin-win-cuda-13.3-x64.zip",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10103/cudart-llama-bin-win-cuda-13.3-x64.zip",
+          "size_bytes": 390970417,
+          "sha256": "1462a050eb4c684921ba51dcc4cc488a036674c3e73e9945ee705b854808d03e"
+        }
+      ]
+    },
+    {
+      "id": "llama-b10103-win-cuda-12.4-x64",
+      "display_name": "llama.cpp b10103 CUDA 12.4",
+      "backend": "cuda",
+      "version": "b10103",
+      "architecture": "x64",
+      "entry_point": "llama-server.exe",
+      "license": "MIT",
+      "source_url": "https://github.com/ggml-org/llama.cpp/releases/tag/b10103",
+      "available": true,
+      "components": [
+        {
+          "filename": "llama-b10103-bin-win-cuda-12.4-x64.zip",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10103/llama-b10103-bin-win-cuda-12.4-x64.zip",
+          "size_bytes": 250243155,
+          "sha256": "b8fec4fc6114faee6f3d6910c87333c86d578218db926fd8122f978b4da3c753"
+        },
+        {
+          "filename": "cudart-llama-bin-win-cuda-12.4-x64.zip",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10103/cudart-llama-bin-win-cuda-12.4-x64.zip",
+          "size_bytes": 391443627,
+          "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6"
+        }
+      ]
+    },
+    {
+      "id": "llama-b10103-win-vulkan-x64",
+      "display_name": "llama.cpp b10103 Vulkan",
+      "backend": "vulkan",
+      "version": "b10103",
+      "architecture": "x64",
+      "entry_point": "llama-server.exe",
+      "license": "MIT",
+      "source_url": "https://github.com/ggml-org/llama.cpp/releases/tag/b10103",
+      "available": true,
+      "components": [
+        {
+          "filename": "llama-b10103-bin-win-vulkan-x64.zip",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10103/llama-b10103-bin-win-vulkan-x64.zip",
+          "size_bytes": 33479917,
+          "sha256": "3e3aa22631fa7d6cded90219e6e0d4d929b035280f5a9f209e535662e60eb33f"
+        }
+      ]
+    },
+    {
+      "id": "llama-b10103-win-hip-x64",
+      "display_name": "llama.cpp b10103 HIP",
+      "backend": "hip",
+      "version": "b10103",
+      "architecture": "x64",
+      "entry_point": "llama-server.exe",
+      "license": "MIT",
+      "source_url": "https://github.com/ggml-org/llama.cpp/releases/tag/b10103",
+      "available": true,
+      "components": [
+        {
+          "filename": "llama-b10103-bin-win-hip-radeon-x64.zip",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10103/llama-b10103-bin-win-hip-radeon-x64.zip",
+          "size_bytes": 320903313,
+          "sha256": "c22a3f291beb3a1b51a9098a231a4f19e862f89f834708b7b05d5f0091189651"
+        }
+      ]
+    },
+    {
+      "id": "llama-b10103-win-sycl-x64",
+      "display_name": "llama.cpp b10103 SYCL",
+      "backend": "sycl",
+      "version": "b10103",
+      "architecture": "x64",
+      "entry_point": "llama-server.exe",
+      "license": "MIT",
+      "source_url": "https://github.com/ggml-org/llama.cpp/releases/tag/b10103",
+      "available": true,
+      "components": [
+        {
+          "filename": "llama-b10103-bin-win-sycl-x64.zip",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10103/llama-b10103-bin-win-sycl-x64.zip",
+          "size_bytes": 119692026,
+          "sha256": "cd1261ab2a0ed83e724d1aae7200a5ba3bd36159c85ec552f5668502382ab487"
+        }
+      ]
+    }
+  ]
+}

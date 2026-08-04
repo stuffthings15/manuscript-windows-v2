@@ -1,0 +1,17 @@
+# PayPal sandbox values only. Copy to .dev.vars; never commit the real file.
+DEPLOYMENT_MODE=development
+PAYPAL_CLIENT_ID=replace_with_sandbox_client_id
+PAYPAL_CLIENT_SECRET=replace_with_sandbox_client_secret
+PAYPAL_PLAN_ID=replace_with_five_dollar_monthly_plan_id
+PAYPAL_WEBHOOK_ID=replace_with_sandbox_webhook_id
+LICENSE_DERIVATION_SECRET=replace_with_at_least_32_random_bytes
+MAX_LICENSED_DEVICES=2
+MAX_LICENSE_VALIDATIONS_PER_MINUTE=30
+MAX_ACCOUNT_AUTH_ATTEMPTS_PER_MINUTE=10
+DEVELOPMENT_LICENSE_HASH=sha256_of_private_development_key
+DEVELOPMENT_DEVICE_HASH=sha256_of_private_device_secret
+PUBLIC_SITE_URL=http://localhost:3000
+
+IDENTITY_PROVIDER_URL=https://replace-with-project.supabase.co
+IDENTITY_PROVIDER_PUBLIC_KEY=replace_with_publishable_anon_key
+IDENTITY_PROVIDER_ADMIN_KEY=replace_with_server_only_service_role_key

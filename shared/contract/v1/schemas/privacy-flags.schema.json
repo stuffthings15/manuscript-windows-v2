@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:echo-link:contract:v1:privacy-flags",
+  "title": "Echo-Link local-only privacy flags",
+  "type": "object",
+  "required": [
+    "local_only",
+    "external_network_allowed",
+    "loopback_model_allowed",
+    "retain_audio",
+    "text_retention",
+    "telemetry_allowed"
+  ],
+  "properties": {
+    "local_only": {"const": true},
+    "external_network_allowed": {"const": false},
+    "loopback_model_allowed": {"type": "boolean"},
+    "retain_audio": {"const": false},
+    "text_retention": {"enum": ["none", "explicit_opt_in"]},
+    "telemetry_allowed": {"const": false}
+  },
+  "additionalProperties": false
+}

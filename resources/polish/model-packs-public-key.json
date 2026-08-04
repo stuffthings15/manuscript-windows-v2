@@ -1,0 +1,6 @@
+{
+    "key_id":  "manuscript-polish-2026-01",
+    "algorithm":  "RSA-3072-PKCS1-SHA256",
+    "modulus_base64":  "x/9xOVgDRiSpXQeednYyKh7nxFuEcFX9XLBIAsAYtYsXHvgf8r76DilK9C7FaSb+IJL2zVNkqYO5prUZBxTRNZ0PbbFrT4AYxIX7VeK0jOe2FhBuPW6MsWBYLjhDeBHpMuwicM017N91nV217OymUEME0Bkw06OxaEZpq3Y4kfw8/+xAfyEg7flPrSc/ubJOsGbgR9D8DsKAd8vsXUtZBAu0pctJZMAUnpTYx5EGprv49oIQBwG1uyS+oUWLvacWqazcyzFd52g6ayJpGTIqvPxL5dct4boY4KoWDW2oKxCLd7iAvYbQASGzOCJhgGVsY8zI/503D4f83MbwZLg/CEWRkbkFF4SsKDYTH7/9XIH50nrTu53irJF312qsLZnnY/GBiRVvphq3h3ic1LBnMBrQB4wf99GjYdIDDDpMFUlusnxDXM8bEP9zRd1oO78yVh4wMO+9jmd/arKaJpmpQ6awrlx5MLpqaJVpIRT+APGAl0+JecLLt9EgGufmDwGJ",
+    "exponent":  65537
+}

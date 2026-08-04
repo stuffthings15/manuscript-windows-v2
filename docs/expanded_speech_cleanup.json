@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "name": "Expanded Local Speech Cleanup",
+  "purpose": "Regression cases beyond the locked capstone corpus. This file does not replace baseline evidence.",
+  "cases": [
+    {"id": "fillers-extended", "raw": "uh like, I think this works, you know", "expected": "I think this works."},
+    {"id": "like-is-meaningful", "raw": "I like green apples", "expected": "I like green apples."},
+    {"id": "pause-marker", "raw": "open the file [pause] now save it", "expected": "Open the file. Now save it."},
+    {"id": "punctuated-backtracking", "raw": "meet me at two... actually, make that three", "expected": "Meet me at three."},
+    {"id": "numbered-list", "raw": "one apples two bananas three oranges", "expected": "- Apples\n- Bananas\n- Oranges"},
+    {"id": "ordinal-list", "raw": "first draft second review third publish", "expected": "- Draft\n- Review\n- Publish"},
+    {"id": "bullet-list", "raw": "bullet point milk bullet point bread bullet point coffee", "expected": "- Milk\n- Bread\n- Coffee"},
+    {"id": "explicit-period", "raw": "the build passed period create the installer", "expected": "The build passed. Create the installer."},
+    {"id": "explicit-new-sentence", "raw": "the build passed new sentence create the installer", "expected": "The build passed. Create the installer."},
+    {"id": "run-on-direct-question", "raw": "the report is ready can you review it", "expected": "The report is ready. Can you review it?"},
+    {"id": "run-on-wh-question", "raw": "the deployment failed why did the service stop", "expected": "The deployment failed. Why did the service stop?"},
+    {"id": "run-on-next-action", "raw": "save the draft next send it to review", "expected": "Save the draft. Next send it to review."},
+    {"id": "run-on-after-that-action", "raw": "close the file after that run the tests", "expected": "Close the file. After that run the tests."},
+    {"id": "run-on-protected-content", "raw": "the report at https://echo-link.local/docs is ready can you email jane.doe@example.com", "expected": "The report at https://echo-link.local/docs is ready. Can you email jane.doe@example.com?"}
+  ]
+}
