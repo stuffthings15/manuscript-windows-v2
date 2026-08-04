@@ -246,7 +246,7 @@ def test_manual_balanced_hud_sections_receive_full_short_paragraph_context():
     assert plan.context_window == 4096
 
 
-def test_manual_correction_reuses_installed_quality_pack_after_latency_failure():
+def test_manual_correction_rejects_installed_pack_after_latency_failure():
     installed_gemma = pack(
         "gemma4-12b-q4-k-m-v1",
         size_gb=7.6,
@@ -275,9 +275,10 @@ def test_manual_correction_reuses_installed_quality_pack_after_latency_failure()
         manual=True,
     )
 
-    assert plan.use_llm
-    assert plan.pack_id == installed_gemma.pack_id
-    assert plan.backend is RuntimeBackend.CUDA
+    assert not plan.use_llm
+    assert plan.pack_id == ""
+    assert plan.backend is RuntimeBackend.RULES
+    assert "warm latency" in plan.reason.casefold()
 
 
 def test_driver_failure_downgrades_to_cpu_pack():

@@ -6,10 +6,11 @@ from pathlib import Path
 from echo_link_core.correction import (
     CorrectionPipeline,
     CorrectionResult,
+    OllamaRefiner,
     _meaning_guard,
     deterministic_cleanup,
 )
-from echo_link_core.models import DictationMode, DictationSettings
+from echo_link_core.models import DictationMode, DictationSettings, OLLAMA_KEEP_ALIVE
 
 
 class StubRefiner:
@@ -21,6 +22,45 @@ class StubRefiner:
 
     def available_models(self, _timeout=1.5):
         return {"qwen2.5:3b"}
+
+
+def test_correction_pipeline_preloads_the_selected_ai_model():
+    calls = []
+
+    class PreloadRefiner:
+        def preload(self, *, model, timeout):
+            calls.append((model, timeout))
+
+    settings = DictationSettings(ollama_model="gemma4:e4b-it-qat")
+    pipeline = CorrectionPipeline(lambda: {}, settings, PreloadRefiner())
+
+    pipeline.preload(timeout=45.0)
+
+    assert calls == [("gemma4:e4b-it-qat", 45.0)]
+
+
+def test_ollama_refiner_preload_uses_an_empty_prompt_and_five_minute_keep_alive(monkeypatch):
+    captured = {}
+    refiner = OllamaRefiner()
+
+    def fake_post(path, payload, *, timeout):
+        captured.update(path=path, payload=payload, timeout=timeout)
+        return {"done": True}
+
+    monkeypatch.setattr(refiner._transport, "post_json", fake_post)
+
+    refiner.preload(model="gemma4:e4b-it-qat", timeout=45.0)
+
+    assert captured == {
+        "path": "/api/generate",
+        "payload": {
+            "model": "gemma4:e4b-it-qat",
+            "prompt": "",
+            "stream": False,
+            "keep_alive": OLLAMA_KEEP_ALIVE,
+        },
+        "timeout": 45.0,
+    }
 
 
 def test_settings_enforce_five_minute_local_model_idle_unload():

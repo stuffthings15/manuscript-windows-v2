@@ -317,6 +317,18 @@ class OllamaRefiner:
             if item.get("name") or item.get("model")
         }
 
+    def preload(self, *, model: str, timeout: float) -> None:
+        self._transport.post_json(
+            "/api/generate",
+            {
+                "model": model,
+                "prompt": "",
+                "stream": False,
+                "keep_alive": OLLAMA_KEEP_ALIVE,
+            },
+            timeout=max(2.0, float(timeout)),
+        )
+
     def refine(
         self,
         text: str,
@@ -393,6 +405,12 @@ class CorrectionPipeline:
 
     def update_settings(self, settings: DictationSettings) -> None:
         self._settings = settings
+
+    def preload(self, *, timeout: float) -> None:
+        self._refiner.preload(
+            model=self._settings.ollama_model,
+            timeout=float(timeout),
+        )
 
     def deterministic(
         self,

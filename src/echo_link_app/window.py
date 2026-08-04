@@ -5,6 +5,7 @@ import collections
 import ctypes
 import hashlib
 import os
+import sys
 import threading
 import logging
 import math
@@ -111,6 +112,19 @@ from echo_link_core.windows_selection import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _restore_native_window(handle: int) -> None:
+    """Restore and foreground a tray-owned window on Windows."""
+    if sys.platform != "win32" or int(handle) <= 0:
+        return
+    try:
+        user32 = ctypes.windll.user32
+        user32.ShowWindow(int(handle), 9)  # SW_RESTORE
+        user32.BringWindowToTop(int(handle))
+        user32.SetForegroundWindow(int(handle))
+    except Exception:
+        logger.exception("Could not restore Manuscript from the system tray")
 
 
 def _polish_result_ready_for_review(result: object) -> bool:
@@ -401,10 +415,14 @@ class EchoLinkWindow(QMainWindow):
             self._show_from_tray()
 
     def _show_from_tray(self) -> None:
-        self.show()
+        state = self.windowState()
+        if state & Qt.WindowState.WindowMinimized:
+            self.setWindowState(state & ~Qt.WindowState.WindowMinimized)
         self.showNormal()
+        self.show()
         self.raise_()
         self.activateWindow()
+        _restore_native_window(int(self.winId()))
 
     def _dictate_from_tray(self) -> None:
         self._show_from_tray()
@@ -1498,7 +1516,6 @@ class EchoLinkWindow(QMainWindow):
                 len(incoming_record.text),
             )
             return
-        detected = self._expand_detected_to_text_box(detected)
         record = detected.record
         logger.info(
             "Writing HUD capture prepared scope=%s chars=%d",
@@ -2399,6 +2416,20 @@ class EchoLinkWindow(QMainWindow):
             logger.warning("Writing HUD immediate apply could not recheck the source text")
             self.rewrite_palette.show_error(message)
             return False
+
+        if isinstance(inserted, SelectionRecord):
+            self.selected_text_record = inserted
+            self.writing_source.setPlainText(text)
+            self._automatic_hud_suppress_until = time.monotonic() + 1.5
+            logger.info(
+                "Writing HUD accepted stable Word range characters=%d",
+                len(text),
+            )
+            update_status_label(
+                self.writing_state,
+                "Correction applied. Next section ready.",
+            )
+            return True
 
         if record_covers_entire_document(current):
             # Re-read the document so the next section's record carries the
@@ -3701,6 +3732,7 @@ class EchoLinkWindow(QMainWindow):
             WindowsSelectionReader(
                 max_characters=500_000,
                 include_caret_sentence=True,
+                include_word_page=True,
             ),
             self.bridge.automatic_selection_detected.emit,
             cleared_callback=self.bridge.automatic_selection_cleared.emit,

@@ -6,7 +6,7 @@ import logging
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from ctypes import wintypes
 from typing import Callable
 
@@ -228,7 +228,18 @@ def record_covers_entire_document(record: SelectionRecord) -> bool:
     )
 
 def record_uses_word_document_adapter(record: SelectionRecord) -> bool:
-    return record_covers_entire_document(record) and _is_word_document(record.window)
+    stable_range = (
+        record.scope == "selection"
+        and bool(record.document_digest)
+        and record.selection_start is not None
+        and record.selection_end is not None
+        and record.selection_start >= 0
+        and record.selection_end == record.selection_start + len(record.text)
+    )
+    return (
+        _is_word_document(record.window)
+        and (record_covers_entire_document(record) or stable_range)
+    )
 
 
 def _word_visible_text_and_spans(text: str) -> tuple[str, tuple[tuple[int, int], ...]]:
@@ -289,7 +300,23 @@ def _replace_word_document_range(
         visible_text, spans = _word_visible_text_and_spans(content.Text)
         captured_text = _canonical_word_text(expected_document_text).rstrip("\n")
         record_text = _canonical_word_text(record.text).rstrip("\n")
-        if visible_text != captured_text or record_text != captured_text:
+        if record_covers_entire_document(record):
+            range_start = 0
+            range_end = len(visible_text)
+            current_range_text = visible_text
+        else:
+            range_start = int(record.selection_start or 0)
+            range_end = int(record.selection_end or 0)
+            if (
+                hashlib.sha256(visible_text.encode("utf-8")).hexdigest()
+                != record.document_digest
+                or range_start < 0
+                or range_end > len(visible_text)
+            ):
+                logger.warning("Word COM range replacement refused changed document text")
+                return False
+            current_range_text = visible_text[range_start:range_end]
+        if current_range_text != captured_text or record_text != captured_text:
             logger.warning("Word COM range replacement refused changed document text")
             return False
         if (
@@ -299,13 +326,15 @@ def _replace_word_document_range(
             or not isinstance(end, int)
             or start < 0
             or end <= start
-            or end > len(visible_text)
-            or visible_text[start:end] != expected_text
+            or end > len(captured_text)
+            or captured_text[start:end] != expected_text
         ):
             logger.warning("Word COM range replacement refused a stale review range")
             return False
-        raw_start = spans[start][0]
-        raw_end = spans[end - 1][1]
+        absolute_start = range_start + start
+        absolute_end = range_start + end
+        raw_start = spans[absolute_start][0]
+        raw_end = spans[absolute_end - 1][1]
         raw_range = str(content.Text or "")[raw_start:raw_end]
         if any(
             character in raw_range
@@ -323,6 +352,23 @@ def _replace_word_document_range(
             content_start + raw_start,
             content_start + raw_end,
         ).Text = replacement
+        if not record_covers_entire_document(record):
+            updated_text = (
+                captured_text[:start]
+                + _canonical_word_text(new_text)
+                + captured_text[end:]
+            )
+            updated_document_text, _updated_spans = _word_visible_text_and_spans(
+                document.Content.Text
+            )
+            return replace(
+                record,
+                text=updated_text,
+                document_digest=hashlib.sha256(
+                    updated_document_text.encode("utf-8")
+                ).hexdigest(),
+                selection_end=range_start + len(updated_text),
+            )
         return True
     except Exception:
         logger.warning("Word COM range replacement failed", exc_info=True)
@@ -683,7 +729,7 @@ class WindowsTextInserter:
         end: int,
         expected_text: str,
         new_text: str,
-    ) -> InsertionRecord | None:
+    ) -> InsertionRecord | SelectionRecord | None:
         if not new_text.strip():
             raise ValueError("Replacement text is empty.")
         result = _replace_word_document_range(
@@ -694,6 +740,8 @@ class WindowsTextInserter:
             expected_text=expected_text,
             new_text=new_text,
         )
+        if isinstance(result, SelectionRecord):
+            return result
         if result is not True:
             return None
         inserted = InsertionRecord(

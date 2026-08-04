@@ -1872,57 +1872,6 @@ class PolishEngine:
                 value for value in installed if value.pack_id == fallback.pack_id
             )
             return self._accept_plan(fallback, snapshot, fallback_pack)
-
-        quality_candidates = tuple(
-            (value, records.get(value.pack_id))
-            for value in (pack, *installed)
-            if records.get(value.pack_id) is not None
-            and records[value.pack_id].correctness_passed
-            and records[value.pack_id].protected_passed
-        )
-        if quality_candidates:
-            quality_pack, quality_record = min(
-                quality_candidates,
-                key=lambda value: (
-                    value[1].elapsed_seconds,
-                    value[0].size_bytes,
-                ),
-            )
-            try:
-                quality_backend = RuntimeBackend(quality_record.backend)
-            except ValueError:
-                quality_backend = plan.backend
-            return replace(
-                plan,
-                use_llm=True,
-                pack_id=quality_pack.pack_id,
-                model=quality_pack.model,
-                backend=quality_backend,
-                requires_probe=False,
-                reason=(
-                    "No faster installed model passed correctness. Using the "
-                    "fastest quality-passing local AI instead."
-                ),
-                downgrade_reason=(
-                    "A faster local AI failed correctness checks. Restored the "
-                    "slower quality-passing local AI."
-                ),
-            )
-        if not fallback.use_llm:
-            # Never end a probe by switching the local AI off. A slow or oddly
-            # phrased model still corrects more than the rules layer alone, and
-            # the validator is what actually protects the reader's meaning.
-            # Reaching here used to leave a whole session rules-only, cached,
-            # reporting "full AI correction did not run".
-            return replace(
-                plan,
-                requires_probe=False,
-                downgrade_reason=(
-                    f"{pack.display_name} probe was inconclusive: "
-                    f"{record.reason or 'correctness or latency gate failed'}. "
-                    "Local AI still in use."
-                ),
-            )
         return replace(
             fallback,
             downgrade_reason=(

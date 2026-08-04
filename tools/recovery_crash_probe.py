@@ -45,6 +45,7 @@ class CrashStore(EchoLinkStore):
     def __init__(self, path: str | Path) -> None:
         self.exit_after_final_checkpoint = False
         self.exit_before_cleanup = False
+        self.exit_after_cleanup = False
         super().__init__(path)
 
     def checkpoint_recovery(self, *args, **kwargs) -> int:
@@ -59,6 +60,8 @@ class CrashStore(EchoLinkStore):
         if self.exit_before_cleanup:
             os._exit(CRASH_EXIT)
         super().delete_recovery_session(*args, **kwargs)
+        if self.exit_after_cleanup:
+            os._exit(CRASH_EXIT)
 
 
 class ChildRecorder:
@@ -98,7 +101,7 @@ class ChildCorrection:
         return CorrectionResult(FINAL_TEXT + " ", "deterministic")
 
     def correct(self, _raw_text: str, _mode: DictationMode) -> CorrectionResult:
-        if self.stage in {"accuracy_refinement", "post_insert_refinement"}:
+        if self.stage == "accuracy_refinement":
             os._exit(CRASH_EXIT)
         return CorrectionResult(FINAL_TEXT + " ", "deterministic")
 
@@ -182,6 +185,10 @@ def _crashing_child(database: Path, stage: str, marker: Path) -> int:
     store.save_settings(settings)
     store.exit_after_final_checkpoint = stage == "after_deterministic_checkpoint"
     store.exit_before_cleanup = stage == "cleanup_uncertain"
+    # This historical stage name now means a crash immediately after a refined
+    # result was inserted and its recovery checkpoint was cleared. Refinement
+    # runs before insertion so unreviewed deterministic text is never inserted.
+    store.exit_after_cleanup = stage == "post_insert_refinement"
     engine = DictationEngine(
         store,
         recorder=ChildRecorder(),

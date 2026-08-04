@@ -194,33 +194,16 @@ class HardwarePolicyManager:
 
         records = benchmark_records or {}
         failed_reasons: list[str] = []
-        quality_fallbacks: list[tuple[PolishModelPack, BenchmarkRecord]] = []
         selected: PolishModelPack | None = None
         selected_probe = False
         for pack in candidates:
             record = records.get(pack.pack_id)
             if record is not None and not record.accepted:
                 failed_reasons.append(f"{pack.display_name}: {record.reason or 'local probe failed'}")
-                if (
-                    manual
-                    and pack.installed
-                    and record.correctness_passed
-                    and record.protected_passed
-                ):
-                    quality_fallbacks.append((pack, record))
                 continue
             selected = pack
             selected_probe = record is None
             break
-        if selected is None and quality_fallbacks:
-            selected, _record = min(
-                quality_fallbacks,
-                key=lambda value: (
-                    value[1].elapsed_seconds,
-                    value[0].size_bytes,
-                ),
-            )
-            selected_probe = False
         if selected is None:
             reason = failed_reasons[0] if failed_reasons else "Every local model probe failed."
             return self._rules_plan(mode, task, reason)

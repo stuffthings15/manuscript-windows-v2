@@ -705,8 +705,55 @@ class AdaptiveInferenceRuntime:
     def acceptance_probe(self, plan) -> AcceptanceProbeResult:
         if self._active is not None and self._active_key is not None:
             if self._active_key[0] == plan.pack_id:
-                return self._active.acceptance_probe(plan)
-        return self.fallback.acceptance_probe(plan)
+                probe = self._active.acceptance_probe(plan)
+            else:
+                probe = self.fallback.acceptance_probe(plan)
+        else:
+            probe = self.fallback.acceptance_probe(plan)
+
+        latency_limit = max(0.0, float(plan.warm_latency_limit_seconds))
+        latency_passed = (
+            latency_limit == 0.0
+            or probe.elapsed_seconds <= latency_limit
+        )
+        gpu_backends = {
+            RuntimeBackend.CUDA,
+            RuntimeBackend.HIP,
+            RuntimeBackend.VULKAN,
+            RuntimeBackend.SYCL,
+        }
+        backend_passed = (
+            not plan.require_full_gpu or probe.backend in gpu_backends
+        )
+        accepted = (
+            probe.accepted
+            and probe.correctness_passed
+            and probe.protected_passed
+            and latency_passed
+            and backend_passed
+        )
+        reasons = [value.strip() for value in (probe.reason,) if value.strip()]
+        if not probe.correctness_passed:
+            reasons.append("Correctness probe failed.")
+        if not probe.protected_passed:
+            reasons.append("Protected facts changed.")
+        if not latency_passed:
+            reasons.append(
+                f"Median warm probe took {probe.elapsed_seconds:.2f}s; limit is "
+                f"{latency_limit:.2f}s."
+            )
+        if not backend_passed:
+            reasons.append("Full GPU residency failed.")
+        if not probe.accepted and not reasons:
+            reasons.append("Runtime probe rejected model.")
+        return AcceptanceProbeResult(
+            accepted=accepted,
+            elapsed_seconds=probe.elapsed_seconds,
+            correctness_passed=probe.correctness_passed,
+            protected_passed=probe.protected_passed,
+            backend=probe.backend,
+            reason="; ".join(dict.fromkeys(reasons)),
+        )
 
     def close(self) -> None:
         if self._active is not None:

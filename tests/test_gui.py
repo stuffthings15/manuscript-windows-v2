@@ -355,7 +355,16 @@ def test_history_exposes_encrypted_speech_log_analysis_and_review(app, tmp_path)
     window.close()
 
 
-def test_system_tray_keeps_hotkey_service_ready_when_window_closes(app, tmp_path):
+def test_system_tray_keeps_hotkey_service_ready_when_window_closes(
+    app, tmp_path, monkeypatch
+):
+    restored_handles = []
+    monkeypatch.setattr(
+        window_module,
+        "_restore_native_window",
+        lambda handle: restored_handles.append(handle),
+        raising=False,
+    )
     app.setQuitOnLastWindowClosed(True)
     window = EchoLinkWindow(
         EchoLinkStore(tmp_path / "echo-link.db"),
@@ -379,10 +388,12 @@ def test_system_tray_keeps_hotkey_service_ready_when_window_closes(app, tmp_path
     window.tray_show_action.trigger()
     app.processEvents()
     assert window.isVisible()
+    assert restored_handles == [int(window.winId())]
     window.hide()
     window._tray_activated(QSystemTrayIcon.ActivationReason.DoubleClick)
     app.processEvents()
     assert window.isVisible()
+    assert restored_handles == [int(window.winId()), int(window.winId())]
     window._quitting = True
     window.close()
     assert window._shutdown_complete is True

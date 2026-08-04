@@ -1859,42 +1859,27 @@ class RewritePalette(QDialog):
         suggestion_id = str(getattr(suggestion, "suggestion_id", ""))
         failure_message = self._ai_failure_messages.get(suggestion_id, "")
         if suggestion_id in self._ai_failed_ids:
-            # A failed section must never trap the user: the safe rules-based
-            # result stays applicable, Skip moves on, and Retry stays live.
-            has_changes = bool(getattr(suggestion, "has_changes", False))
-            self.suggestion_title.setText("Correction needs review")
-            if has_changes:
-                self.after_heading.setText("Safe suggested text (without AI)")
-                self._set_suggested_text(
-                    str(getattr(suggestion, "original", "")),
-                    str(getattr(suggestion, "replacement", "")),
-                )
-                explanation = (
-                    "The local AI result did not pass the safety checks, so "
-                    "this shows the safe rule-based fixes only. Apply them, "
-                    "retry the AI, or skip this section."
-                )
-            else:
-                self.after_heading.setText("No safe change found")
-                self.after_text.setPlainText(
-                    str(getattr(suggestion, "original", ""))
-                )
-                self.after_text.setToolTip(self.after_text.toPlainText())
-                explanation = (
-                    "The local AI result did not pass the safety checks and "
-                    "the rules found nothing to change. Retry the AI or skip "
-                    "this section; later sections keep processing."
-                )
+            # Never label a deterministic placeholder as an AI correction.
+            # The user can retry or dismiss while later sections keep working.
+            self.suggestion_title.setText("AI correction not ready")
+            self.after_heading.setText("AI correction not ready")
+            self.after_text.clear()
+            self.after_text.setToolTip("")
+            explanation = (
+                "This section does not have a finished AI correction yet. "
+                "Retry the AI or dismiss this section. Later sections keep "
+                "processing."
+            )
             self.suggestion_explanation.setText(explanation)
             self.suggestion_explanation.setToolTip(explanation)
-            self.apply_suggestion_button.setEnabled(has_changes)
+            self.apply_suggestion_button.setEnabled(False)
             self.apply_suggestion_button.setToolTip(
                 failure_message or explanation
             )
             self.rewrite_sentence_button.setText("Retry")
             self.rewrite_sentence_button.setEnabled(True)
             self.tone_combo.setEnabled(True)
-            self.dismiss_suggestion_button.setText("Skip")
+            self.dismiss_suggestion_button.setText("Dismiss")
             self.dismiss_suggestion_button.setEnabled(True)
             self._set_status(failure_message or explanation, assertive=True)
             if self._view == "loading":

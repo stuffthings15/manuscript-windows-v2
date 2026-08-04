@@ -17,6 +17,7 @@ from echo_link_core.polish import (
     _restore_source_phrase_casing,
 )
 from echo_link_core.polish_hardware import BenchmarkRecord, PolishBenchmarkCache
+from echo_link_core.polish_runtime import AdaptiveInferenceRuntime
 from echo_link_core.polish_spelling import DeterministicPolishResult
 from echo_link_core.polish_types import (
     AcceptanceProbeResult,
@@ -3127,27 +3128,19 @@ def test_successful_tone_result_reports_rewrite_ready_not_old_correction_state()
     assert "rewrite ready" in result.message.casefold()
 
 
-def test_inconclusive_acceptance_probe_keeps_the_local_ai():
-    """A probe may rank packs. It may not switch the AI off.
-
-    The probe asks the model to answer a fixed prompt with three literal
-    phrases. A model that says the same thing in different words scored as
-    broken, and the whole session fell back to rules-only and cached that
-    verdict - the mechanism behind "full AI correction did not run". The
-    validator, not the probe, is what protects the reader.
-    """
+def test_failed_acceptance_probe_does_not_run_the_rejected_model():
     runtime = FakeRuntime(("The reports are not ready.",), probe=False)
     value, _ = engine(classifier=FakeClassifier(), runtime=runtime)
     result = value.analyze(request("The reports is not ready."))
 
-    assert result.used_llm
-    assert runtime.generate_calls
-    assert result.plan.backend is not RuntimeBackend.RULES
-    # The measurement is still reported, so a genuinely poor pack is visible.
-    assert "probe was inconclusive" in result.plan.downgrade_reason
+    assert not result.used_llm
+    assert runtime.generate_calls == []
+    assert result.plan.backend is RuntimeBackend.RULES
+    assert not result.review_ready
+    assert "failed its local acceptance probe" in result.plan.downgrade_reason
 
 
-def test_slow_quality_passing_only_pack_stays_ai_for_manual_correction():
+def test_slow_only_pack_is_rejected_for_manual_correction():
     pack = model_pack()
     store = MemoryStore()
     cache = PolishBenchmarkCache(store)
@@ -3185,13 +3178,13 @@ def test_slow_quality_passing_only_pack_stays_ai_for_manual_correction():
 
     accepted = value._accept_plan(plan, snapshot, pack)
 
-    assert accepted.use_llm
-    assert accepted.pack_id == pack.pack_id
-    assert accepted.model == pack.model
-    assert "quality-passing" in accepted.downgrade_reason
+    assert not accepted.use_llm
+    assert accepted.pack_id == ""
+    assert accepted.backend is RuntimeBackend.RULES
+    assert "failed its local acceptance probe" in accepted.downgrade_reason
 
 
-def test_manual_engine_without_download_consent_reuses_installed_quality_pack():
+def test_manual_engine_without_download_consent_rejects_failed_installed_pack():
     installed_gemma = replace(
         model_pack(),
         pack_id="gemma4-12b-q4-k-m-v1",
@@ -3256,12 +3249,12 @@ def test_manual_engine_without_download_consent_reuses_installed_quality_pack():
 
     result = value.analyze(request("The reports is not ready."))
 
-    assert result.used_llm
-    assert result.text == "The reports are not ready."
-    assert packs.ensure_ids == [installed_gemma.pack_id]
+    assert not result.used_llm
+    assert not result.review_ready
+    assert packs.ensure_ids == []
 
 
-def test_failed_smaller_probe_restores_slower_quality_passing_pack():
+def test_all_failed_installed_packs_leave_ai_disabled():
     pack_8b = replace(
         model_pack(),
         pack_id="qwen3-8b-q4-k-m-v1",
@@ -3340,11 +3333,77 @@ def test_failed_smaller_probe_restores_slower_quality_passing_pack():
 
     accepted = value._accept_plan(plan, snapshot, pack_4b)
 
+    assert not accepted.use_llm
+    assert accepted.pack_id == ""
+    assert accepted.backend is RuntimeBackend.RULES
+    assert "failed its local acceptance probe" in accepted.downgrade_reason
+
+
+def test_failed_acceptance_gate_falls_back_to_next_installed_pack():
+    preferred_pack = replace(
+        model_pack(),
+        pack_id="gemma4-12b-q4-k-m-v1",
+        display_name="Gemma 4 12B Q4_K_M",
+        model="gemma4:12b",
+        family="Gemma 4",
+        parameters="12B",
+        size_bytes=8 * GIB,
+    )
+    next_pack = replace(
+        model_pack(),
+        pack_id="gemma4-8b-q4-k-m-v1",
+        display_name="Gemma 4 8B Q4_K_M",
+        model="gemma4:8b",
+        family="Gemma 4",
+        parameters="8B",
+        size_bytes=6 * GIB,
+        min_vram_bytes=8 * GIB,
+    )
+
+    class CatalogPacks:
+        def catalog(self, *, refresh_installed=True):
+            return (preferred_pack, next_pack)
+
+    class FalsePositiveProbeRuntime:
+        def acceptance_probe(self, plan):
+            correctness_passed = plan.pack_id == next_pack.pack_id
+            return AcceptanceProbeResult(
+                accepted=True,
+                elapsed_seconds=0.5,
+                correctness_passed=correctness_passed,
+                protected_passed=True,
+                backend=RuntimeBackend.CUDA,
+            )
+
+    runtime = AdaptiveInferenceRuntime(fallback=FalsePositiveProbeRuntime())
+    snapshot = hardware()
+    value = PolishEngine(
+        rules=FakeRules(),
+        classifier=FakeClassifier(),
+        packs=CatalogPacks(),
+        runtime=runtime,
+        hardware_provider=lambda: snapshot,
+        benchmark_cache=PolishBenchmarkCache(MemoryStore()),
+    )
+    initial_plan = ExecutionPlan(
+        policy_version=1,
+        mode=PolishMode.BALANCED,
+        task=PolishTask.PROOFREAD,
+        use_llm=True,
+        pack_id=preferred_pack.pack_id,
+        model=preferred_pack.model,
+        backend=RuntimeBackend.CUDA,
+        context_window=2048,
+        max_output_tokens=128,
+        warm_latency_limit_seconds=5.0,
+        require_full_gpu=True,
+    )
+
+    accepted = value._accept_plan(initial_plan, snapshot, preferred_pack)
+
     assert accepted.use_llm
-    assert accepted.pack_id == pack_8b.pack_id
-    assert accepted.model == pack_8b.model
-    assert not accepted.requires_probe
-    assert "slower quality-passing" in accepted.downgrade_reason
+    assert accepted.pack_id == next_pack.pack_id
+    assert accepted.model == next_pack.model
 
 
 def test_benchmark_cache_never_contains_user_text():

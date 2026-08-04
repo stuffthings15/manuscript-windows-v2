@@ -102,6 +102,43 @@ def test_quick_tap_runs_press_then_release_without_stuck_recording(monkeypatch):
     assert state["value"] == "ready"
 
 
+def test_three_rapid_cycles_dispatch_once_each_and_held_keydown_does_not_duplicate(
+    monkeypatch,
+):
+    callbacks = []
+    finished = threading.Event()
+    listener = hotkeys_module.GlobalPushToTalk(
+        "ctrl+win",
+        lambda: callbacks.append("press"),
+        lambda: (
+            callbacks.append("release"),
+            finished.set() if callbacks.count("release") == 3 else None,
+        ),
+    )
+    monkeypatch.setattr(
+        hotkeys_module.ctypes,
+        "windll",
+        SimpleNamespace(user32=SimpleNamespace(CallNextHookEx=lambda *_args: 0)),
+    )
+
+    def fire(message, key):
+        data = hotkeys_module._KeyboardHookStruct(key, 0, 0, 0, None)
+        listener._hook_callback(0, message, ctypes.addressof(data))
+
+    listener._start_callback_dispatcher()
+    try:
+        for _cycle in range(3):
+            fire(listener.WM_KEYDOWN, hotkeys_module.VK_MAP["ctrl"])
+            fire(listener.WM_KEYDOWN, hotkeys_module.VK_MAP["win"])
+            fire(listener.WM_KEYDOWN, hotkeys_module.VK_MAP["win"])
+            fire(listener.WM_KEYUP, hotkeys_module.VK_MAP["win"])
+        assert finished.wait(1.0)
+    finally:
+        listener._stop_callback_dispatcher()
+
+    assert callbacks == ["press", "release"] * 3
+
+
 @pytest.mark.parametrize(
     ("physical", "normalized"),
     [

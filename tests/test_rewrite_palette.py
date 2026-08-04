@@ -656,9 +656,11 @@ def test_foreground_ai_failure_gets_one_automatic_repair_then_stays_reviewable(a
     assert "quality checks" in palette.status.text().casefold()
     assert palette.rewrite_sentence_button.text() == "Retry"
     assert palette.rewrite_sentence_button.isEnabled()
-    # The failed section stays actionable instead of dead-ending: Skip moves
-    # on, and the safe rule-based diff is applicable when it changes text.
-    assert palette.dismiss_suggestion_button.text() == "Skip"
+    # A rules-only placeholder must never become a finished AI correction.
+    assert not palette.apply_suggestion_button.isEnabled()
+    assert "rule-based" not in palette.after_heading.text().casefold()
+    assert palette.after_text.toPlainText() == ""
+    assert palette.dismiss_suggestion_button.text() == "Dismiss"
     assert palette.dismiss_suggestion_button.isEnabled()
     palette.finish_choice()
 
@@ -691,10 +693,12 @@ def test_failed_ai_section_does_not_show_no_safe_correction_dead_end(app):
 
     visible = palette.after_text.toPlainText().casefold()
     assert "no safe correction" not in visible
-    # The failed section stays actionable: it shows either the safe
-    # rule-based suggestion or the untouched original, never a dead end.
+    # The failed section stays reviewable without exposing rules-only text as
+    # a finished AI correction.
     explanation = palette.suggestion_explanation.text().casefold()
-    assert "retry the ai or skip" in explanation or "apply them" in explanation
+    assert "retry" in explanation
+    assert "rule-based" not in explanation
+    assert not palette.apply_suggestion_button.isEnabled()
     assert palette.dismiss_suggestion_button.isEnabled()
     palette.finish_choice()
 
@@ -2029,7 +2033,7 @@ def test_stable_detected_selection_opens_hud_automatically_without_model(
     window.close()
 
 
-def test_automatic_hud_expands_selection_to_entire_active_text_box(
+def test_automatic_hud_keeps_background_capture_without_rereading_text_box(
     app, tmp_path, monkeypatch
 ):
     window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
@@ -2039,29 +2043,19 @@ def test_automatic_hud_expands_selection_to_entire_active_text_box(
         "selection",
         "b" * 64,
     )
-    document = SelectionRecord(
-        "First broken part. Second broken part. Third broken part.",
-        selected.window,
-        "document",
-        "a" * 64,
-    )
     detected = DetectedSelection(selected, (100, 120, 280, 150))
-
-    class _TextBoxReader:
-        def __init__(self, **_kwargs):
-            pass
-
-        def read_document(self):
-            return DetectedSelection(document, (100, 120, 500, 240))
-
-    monkeypatch.setattr(window_module, "WindowsSelectionReader", _TextBoxReader)
+    monkeypatch.setattr(
+        window_module,
+        "WindowsSelectionReader",
+        lambda **_kwargs: pytest.fail("automatic capture reread on the UI thread"),
+    )
 
     window._handle_automatic_selection(detected)
     app.processEvents()
 
-    assert window.selected_text_record == document
-    assert window.rewrite_palette.source_edit.toPlainText() == document.text
-    assert window.rewrite_palette._document_scope is True
+    assert window.selected_text_record == selected
+    assert window.rewrite_palette.source_edit.toPlainText() == selected.text
+    assert window.rewrite_palette._document_scope is False
     assert window.rewrite_palette._anchor == detected.anchor
     window.rewrite_palette.finish_choice()
     window._quitting = True

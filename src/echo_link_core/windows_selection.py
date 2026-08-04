@@ -35,6 +35,7 @@ class WindowsSelectionReader:
         window_provider: Callable[[], WindowSnapshot] = active_window,
         own_process_id: int | None = None,
         include_caret_sentence: bool = False,
+        include_word_page: bool = False,
     ) -> None:
         if (
             isinstance(max_characters, bool)
@@ -48,6 +49,7 @@ class WindowsSelectionReader:
         self._window_provider = window_provider
         self._own_process_id = os.getpid() if own_process_id is None else int(own_process_id)
         self.include_caret_sentence = bool(include_caret_sentence)
+        self.include_word_page = bool(include_word_page)
         self._automation_module: object | None = None
         self._automation_lock = threading.Lock()
 
@@ -129,6 +131,27 @@ class WindowsSelectionReader:
                             if diagnostic:
                                 logger.info("Word HUD candidate rejected empty-caret-sentence")
                             continue
+                    if self.include_word_page and " - word" in window.title.casefold():
+                        try:
+                            page_unit = getattr(
+                                getattr(automation, "TextUnit", None),
+                                "Page",
+                                None,
+                            )
+                            if page_unit is not None:
+                                page_range = selected_range.Clone()
+                                page_range.ExpandToEnclosingUnit(page_unit)
+                                page_text = page_range.GetText(self.max_characters + 1)
+                                if (
+                                    isinstance(page_text, str)
+                                    and page_text.strip()
+                                    and len(page_text) <= self.max_characters
+                                ):
+                                    selected_range = page_range
+                                    text = page_text
+                        except Exception:
+                            if diagnostic:
+                                logger.exception("Word page expansion failed")
                     if len(text) > self.max_characters:
                         continue
                     anchor = _selection_anchor(selected_range)
@@ -321,6 +344,96 @@ class WindowsSelectionReader:
                             _text_digest(text),
                             runtime_id,
                             anchor if runtime_id else None,
+                        ),
+                        anchor,
+                    )
+                except Exception:
+                    continue
+            return None
+        except Exception:
+            return None
+
+    def read_page(self) -> DetectedSelection | None:
+        """Read the current Microsoft Word page without expanding to the document."""
+        if sys.platform != "win32" and not self._injected_automation:
+            return None
+        try:
+            automation = self._automation()
+            window = self._window_provider()
+            if (
+                window.handle <= 0
+                or window.process_id == self._own_process_id
+                or " - word" not in window.title.casefold()
+            ):
+                return None
+            focused = automation.GetFocusedControl()
+            for control in _candidate_text_controls(
+                focused,
+                automation,
+                window,
+                own_process_id=self._own_process_id,
+            ):
+                try:
+                    if (
+                        bool(control.IsPassword)
+                        or bool(control.IsOffscreen)
+                        or not _is_office_editor_control(control, window)
+                    ):
+                        continue
+                    pattern = _text_pattern(control, automation)
+                    if pattern is None:
+                        continue
+                    ranges = tuple(pattern.GetSelection() or ())
+                    if len(ranges) != 1:
+                        continue
+                    page_range = ranges[0].Clone()
+                    page_unit = getattr(
+                        getattr(automation, "TextUnit", None),
+                        "Page",
+                        None,
+                    )
+                    if page_unit is None:
+                        continue
+                    page_range.ExpandToEnclosingUnit(page_unit)
+                    page_text = page_range.GetText(self.max_characters + 1)
+                    if (
+                        not isinstance(page_text, str)
+                        or not page_text.strip()
+                        or len(page_text) > self.max_characters
+                    ):
+                        continue
+                    anchor = _selection_anchor(page_range)
+                    if anchor is None:
+                        continue
+                    runtime_id = _control_runtime_id(control)
+                    document_digest = ""
+                    selection_start = None
+                    selection_end = None
+                    document_range = getattr(pattern, "DocumentRange", None)
+                    if document_range is not None:
+                        document_text = document_range.GetText(self.max_characters + 1)
+                        if (
+                            isinstance(document_text, str)
+                            and len(document_text) <= self.max_characters
+                        ):
+                            document_digest = _text_digest(document_text)
+                            selection_start, selection_end = _selection_offsets(
+                                document_range,
+                                page_range,
+                                automation,
+                                page_text,
+                                self.max_characters,
+                            )
+                    return DetectedSelection(
+                        SelectionRecord(
+                            page_text,
+                            window,
+                            "selection",
+                            document_digest,
+                            runtime_id,
+                            anchor if runtime_id else None,
+                            selection_start,
+                            selection_end,
                         ),
                         anchor,
                     )

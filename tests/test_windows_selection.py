@@ -51,6 +51,22 @@ class _Range:
         return True
 
 
+class _PageRange(_Range):
+    def __init__(self, text, page_text, rectangles=None):
+        super().__init__(text, rectangles)
+        self.page_text = page_text
+        self.expanded_unit = None
+
+    def Clone(self):
+        clone = _PageRange(self.text, self.page_text, self.rectangles)
+        clone.expanded_unit = self.expanded_unit
+        return clone
+
+    def ExpandToEnclosingUnit(self, unit):
+        self.expanded_unit = unit
+        self.text = self.page_text
+
+
 class _Pattern:
     def __init__(self, ranges, document_range=None):
         self.ranges = ranges
@@ -142,13 +158,21 @@ class _Automation:
         return self.point_control
 
 
-def _reader(control, *, max_characters=100, loader=None, title="Editor"):
+def _reader(
+    control,
+    *,
+    max_characters=100,
+    loader=None,
+    title="Editor",
+    include_word_page=False,
+):
     window = WindowSnapshot(11, 222, title)
     return WindowsSelectionReader(
         max_characters=max_characters,
         automation_loader=loader or (lambda: _Automation(control)),
         window_provider=lambda: window,
         own_process_id=999,
+        include_word_page=include_word_page,
     )
 
 
@@ -543,6 +567,92 @@ def test_reader_returns_entire_document_with_document_scope():
         ),
         (10, 20, 300, 80),
     )
+
+
+def test_monitor_reader_expands_word_page_and_preserves_paragraph_boundaries():
+    page_text = (
+        "First paragraph has one sentence.\r"
+        "Second paragraph has two. This is the last sentence."
+    )
+    selected = _PageRange(
+        "Second paragraph has two.",
+        page_text,
+        [_Rect(10, 20, 300, 100)],
+    )
+    document_text = f"Earlier page.\r{page_text}\rLater page."
+    control = _Control(
+        [selected],
+        document_range=_Range(document_text),
+        control_type="DocumentControl",
+        runtime_id=(7, 8, 9),
+    )
+    automation = _Automation(control)
+    automation.TextUnit = type("TextUnit", (), {"Page": 6})
+
+    detected = _reader(
+        control,
+        loader=lambda: automation,
+        title="Draft - Word",
+        include_word_page=True,
+        max_characters=500,
+    ).read()
+
+    assert detected is not None
+    assert detected.record.text == page_text
+    assert detected.record.scope == "selection"
+    assert detected.record.document_digest == hashlib.sha256(
+        document_text.encode("utf-8")
+    ).hexdigest()
+    assert detected.record.control_runtime_id == (7, 8, 9)
+    assert detected.anchor == (10, 20, 300, 100)
+
+
+def test_reader_returns_current_word_page_as_bounded_selection():
+    page_text = "First current sentence.\rSecond current sentence."
+    selected = _PageRange(
+        "Second current sentence.",
+        page_text,
+        [_Rect(10, 20, 300, 80)],
+    )
+    document = _Range(f"Earlier page.\r{page_text}\rLater page.")
+    control = _Control(
+        [selected],
+        document_range=document,
+        control_type="DocumentControl",
+        runtime_id=(7, 8, 9),
+    )
+    automation = _Automation(control)
+    automation.TextUnit = type("TextUnit", (), {"Page": 6})
+
+    detected = _reader(
+        control,
+        loader=lambda: automation,
+        title="Draft - Word",
+        max_characters=500,
+    ).read_page()
+
+    assert detected is not None
+    assert detected.record.text == page_text
+    assert detected.record.scope == "selection"
+    assert detected.record.control_runtime_id == (7, 8, 9)
+    assert detected.anchor == (10, 20, 300, 80)
+
+
+def test_monitor_reader_does_not_expand_non_word_editor_to_a_page():
+    selected = _PageRange("Selected sentence.", "Whole page.")
+    control = _Control([selected], document_range=_Range("Whole page."))
+    automation = _Automation(control)
+    automation.TextUnit = type("TextUnit", (), {"Page": 6})
+
+    detected = _reader(
+        control,
+        loader=lambda: automation,
+        title="Browser",
+        include_word_page=True,
+    ).read()
+
+    assert detected is not None
+    assert detected.record.text == "Selected sentence."
 
 
 def test_reader_returns_word_document_when_body_child_is_temporarily_hidden():

@@ -15,6 +15,7 @@ from echo_link_core.polish_runtime import (
 )
 from echo_link_core.polish_runtime_packs import RuntimePackError
 from echo_link_core.polish_types import (
+    AcceptanceProbeResult,
     ExecutionPlan,
     GenerationRequest,
     PolishMode,
@@ -154,6 +155,45 @@ def test_adaptive_runtime_keeps_ollama_rollback_on_runtime_failure(tmp_path):
     )
     assert not value.prepare(plan(), consent=True)
     assert "measured CUDA probe failed" in value.last_downgrade_reason
+
+
+def test_adaptive_runtime_rejects_backend_probe_that_failed_correctness():
+    class FalsePositiveRuntime:
+        def acceptance_probe(self, _plan):
+            return AcceptanceProbeResult(
+                accepted=True,
+                elapsed_seconds=0.5,
+                correctness_passed=False,
+                protected_passed=True,
+                backend=RuntimeBackend.CUDA,
+            )
+
+    runtime = AdaptiveInferenceRuntime(fallback=FalsePositiveRuntime())
+
+    result = runtime.acceptance_probe(plan())
+
+    assert not result.accepted
+    assert "correctness" in result.reason.casefold()
+
+
+def test_adaptive_runtime_rejects_backend_probe_over_warm_latency_limit():
+    class FalsePositiveRuntime:
+        def acceptance_probe(self, _plan):
+            return AcceptanceProbeResult(
+                accepted=True,
+                elapsed_seconds=5.01,
+                correctness_passed=True,
+                protected_passed=True,
+                backend=RuntimeBackend.CUDA,
+            )
+
+    runtime = AdaptiveInferenceRuntime(fallback=FalsePositiveRuntime())
+
+    result = runtime.acceptance_probe(plan())
+
+    assert not result.accepted
+    assert "warm" in result.reason.casefold()
+    assert "5.01" in result.reason
 
 
 def test_ollama_acceptance_probe_separates_cold_load_from_warm_latency():
