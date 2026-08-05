@@ -268,6 +268,30 @@ def _word_visible_text_and_spans(text: str) -> tuple[str, tuple[tuple[int, int],
     return value[:trimmed_length], tuple(spans[:trimmed_length])
 
 
+def _word_title_names_document(window_title: str, document_name: str) -> bool:
+    """Whether a Word window title refers to the document COM says is active.
+
+    ``Document.Name`` always carries the extension - "essay.doc" - but the
+    title bar only shows one when Explorer is set to show extensions for known
+    file types, and Windows hides them by default. So a plain substring test
+    compared "essay.doc" against "essay  -  Compatibility Mode - Word" and
+    refused every replacement, on what is the out-of-the-box setting: Replace
+    Text simply did nothing in Word, over and over, with no visible reason.
+
+    Matching the stem as well costs nothing in safety. This is only a cheap
+    pre-filter; the caller still verifies a SHA-256 digest of the whole
+    document and compares the exact captured range before writing anything.
+    """
+    title = window_title.casefold()
+    if not title:
+        return False
+    name = document_name.casefold()
+    if name in title:
+        return True
+    stem, separator, _extension = name.rpartition(".")
+    return bool(separator) and bool(stem) and stem in title
+
+
 def _replace_word_document_range(
     record: SelectionRecord,
     *,
@@ -288,12 +312,14 @@ def _replace_word_document_range(
     try:
         document = word.ActiveDocument
         document_name = str(document.Name or "").strip()
-        if (
-            not document_name
-            or document_name.casefold() not in record.window.title.casefold()
+        if not document_name or not _word_title_names_document(
+            record.window.title, document_name
         ):
             logger.warning(
-                "Word COM range replacement refused a different active document"
+                "Word COM range replacement refused a different active document "
+                "(document=%r title=%r)",
+                document_name,
+                record.window.title,
             )
             return False
         content = document.Content
@@ -393,11 +419,15 @@ def _replace_word_document_text(
     try:
         document = word.ActiveDocument
         document_name = str(document.Name or "").strip()
-        if (
-            not document_name
-            or document_name.casefold() not in record.window.title.casefold()
+        if not document_name or not _word_title_names_document(
+            record.window.title, document_name
         ):
-            logger.warning("Word COM replacement refused a different active document")
+            logger.warning(
+                "Word COM replacement refused a different active document "
+                "(document=%r title=%r)",
+                document_name,
+                record.window.title,
+            )
             return False
         content = document.Content
         source_text = _canonical_word_text(content.Text, remove_final_mark=True)

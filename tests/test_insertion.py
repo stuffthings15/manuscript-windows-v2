@@ -1177,3 +1177,35 @@ def test_insert_into_retries_transient_focus_loss_before_any_text_is_sent(monkey
         ("activate", target),
         ("insert", "Retry safely", target),
     ]
+
+
+def test_word_title_matches_a_document_whose_extension_windows_hides():
+    """Replace Text did nothing in Word, silently, on a default Windows setup.
+
+    ``Document.Name`` always carries the extension; the title bar only shows
+    one when Explorer is set to show extensions for known file types, which is
+    off by default. The substring test therefore compared "essay.doc" against
+    "essay  -  Compatibility Mode - Word" and refused every replacement.
+    """
+    assert insertion._word_title_names_document(
+        "01_Dogs_in_Bakersfield_USA  -  Compatibility Mode - Word",
+        "01_Dogs_in_Bakersfield_USA.doc",
+    )
+    assert insertion._word_title_names_document(
+        "Quarterly Report - Word", "Quarterly Report.docx"
+    )
+    # Still matches when the title does show the extension.
+    assert insertion._word_title_names_document(
+        "Quarterly Report.docx - Word", "Quarterly Report.docx"
+    )
+    # An unsaved document has no extension to strip.
+    assert insertion._word_title_names_document("Document1 - Word", "Document1")
+
+
+def test_word_title_still_refuses_a_different_document():
+    assert not insertion._word_title_names_document(
+        "Budget 2027 - Word", "Quarterly Report.docx"
+    )
+    assert not insertion._word_title_names_document("", "Quarterly Report.docx")
+    # A bare extension must not match every Word window.
+    assert not insertion._word_title_names_document("Budget 2027 - Word", ".docx")
