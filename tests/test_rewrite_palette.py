@@ -276,6 +276,38 @@ def test_palette_reviews_up_to_five_complete_sentences_per_card(app):
     palette.finish_choice()
 
 
+def test_review_spans_bound_one_punctuation_free_passage():
+    source = " ".join(f"word{index}" for index in range(500))
+
+    spans = _review_spans(source)
+
+    assert len(spans) > 1
+    assert all(end > start for start, end, _count in spans)
+    assert all(end - start <= 1_200 for start, end, _count in spans)
+    assert all(len(source[start:end].split()) <= 180 for start, end, _count in spans)
+    assert all(left[1] <= right[0] for left, right in zip(spans, spans[1:]))
+
+
+def test_review_spans_group_short_unpunctuated_lines():
+    source = "\n".join(
+        (
+            "first short item",
+            "second short item",
+            "third short item",
+            "fourth short item",
+            "fifth short item",
+            "sixth short item",
+            "seventh short item",
+            "eighth short item",
+        )
+    )
+
+    spans = _review_spans(source)
+
+    assert [count for _start, _end, count in spans] == [5, 3]
+    assert source[spans[0][0] : spans[0][1]].count("\n") == 4
+
+
 def test_sentence_splitter_does_not_treat_west_as_street_abbreviation():
     source = (
         "Produce went to Community Pantry West. "
@@ -619,6 +651,104 @@ def test_background_prefetch_failure_does_not_hide_current_result(app):
     palette.finish_choice()
 
 
+def test_background_timeout_keeps_current_result_and_prefetches_later_section(app):
+    palette = RewritePalette(ai_proofread=True)
+    requests = []
+    palette.sentence_rewrite_requested.connect(lambda *args: requests.append(args))
+    source = " ".join(
+        f"Part {index} are written badly." for index in range(1, 16)
+    )
+    palette.show_capture(source, document_scope=True)
+    app.processEvents()
+    palette.badge_button.click()
+
+    first_attempt, first_id, first_text, _command = requests[0]
+    first_result = first_text.replace(" are ", " is ")
+    palette.show_sentence_result(
+        first_attempt,
+        first_id,
+        first_result,
+        "AI correction ready.",
+    )
+    app.processEvents()
+    second_attempt, second_id, *_ = requests[1]
+
+    assert palette._active_ai_attempt_id == second_attempt
+    assert palette._active_ai_background
+    palette._expire_ai_request()
+    app.processEvents()
+
+    assert palette.view == "card"
+    assert palette.card_position.text() == "1 of 3"
+    assert palette.after_text.toPlainText() == first_result
+    assert second_id in palette._ai_failed_ids
+    assert len(requests) == 3
+    assert requests[2][1] not in {first_id, second_id}
+    palette.finish_choice()
+
+
+def test_pool_timeout_does_not_immediately_retry_same_section(app):
+    palette = RewritePalette(ai_proofread=True)
+    palette.set_ai_width_provider(lambda: 2)
+    requests = []
+    palette.sentence_rewrite_requested.connect(lambda *args: requests.append(args))
+    source = " ".join(
+        f"Part {index} are written badly." for index in range(1, 21)
+    )
+    palette.show_capture(source, document_scope=True)
+    app.processEvents()
+    palette.badge_button.click()
+    first_attempt, first_id, first_text, _command = requests[0]
+    palette.show_sentence_result(
+        first_attempt,
+        first_id,
+        first_text.replace(" are ", " is "),
+        "AI correction ready.",
+    )
+    app.processEvents()
+    app.processEvents()
+
+    assert len(requests) == 3
+    pool_attempt, pool_id, *_ = requests[2]
+    palette._expire_pool_attempt(pool_attempt)
+    app.processEvents()
+
+    assert pool_id in palette._ai_failed_ids
+    assert len(requests) == 4
+    assert requests[3][1] != pool_id
+    palette.finish_choice()
+
+
+def test_final_failed_retry_is_terminal_in_series_progress(app):
+    palette = RewritePalette(ai_proofread=True)
+    requests = []
+    palette.sentence_rewrite_requested.connect(lambda *args: requests.append(args))
+    palette.show_capture("Part one are wrong.", document_scope=True)
+    app.processEvents()
+    palette.badge_button.click()
+
+    first_attempt, suggestion_id, *_ = requests[0]
+    palette.show_sentence_error(
+        first_attempt,
+        suggestion_id,
+        "AI could not finish this section.",
+    )
+    app.processEvents()
+    retry_attempt, retry_id, *_ = requests[1]
+    palette.show_sentence_error(
+        retry_attempt,
+        retry_id,
+        "AI could not finish this section.",
+    )
+    app.processEvents()
+
+    progress, total, message = palette._series_progress_state()
+    assert (progress, total) == (1, 1)
+    assert "1 needs retry" in message.casefold()
+    assert "preparing" not in message.casefold()
+    palette.finish_choice()
+
+
 def test_foreground_ai_failure_gets_one_automatic_repair_then_stays_reviewable(app):
     palette = RewritePalette(
         suggestion_engine=_SuggestionEngine(),
@@ -783,6 +913,38 @@ def test_ten_section_document_is_prefetched_before_first_decision_and_advances_r
     assert len(requests) == 10
     assert palette.card_position.text() == "2 of 10"
     assert palette.after_text.toPlainText() == completed[requests[1][1]]
+    assert palette.apply_suggestion_button.isEnabled()
+    palette.finish_choice()
+
+
+def test_ordered_document_hides_rules_placeholder_until_ai_finishes(app):
+    palette = RewritePalette(ai_proofread=True)
+    requests = []
+    palette.set_step_replacer(lambda _text, _suggestion: True)
+    palette.sentence_rewrite_requested.connect(lambda *args: requests.append(args))
+
+    palette.show_capture("Part one are wrong. Part two are wrong.", document_scope=True)
+    app.processEvents()
+    palette.badge_button.click()
+    app.processEvents()
+
+    assert requests
+    assert palette.before_text.toPlainText()
+    assert palette.after_text.toPlainText() == ""
+    assert "being prepared" in palette.after_text.placeholderText().casefold()
+    assert not palette.apply_suggestion_button.isEnabled()
+
+    attempt_id, suggestion_id, request_text, _command = requests[0]
+    palette.show_sentence_result(
+        attempt_id,
+        suggestion_id,
+        request_text.replace(" are ", " is "),
+        "AI correction ready.",
+    )
+    app.processEvents()
+
+    assert palette.after_text.toPlainText()
+    assert palette.after_text.placeholderText() == ""
     assert palette.apply_suggestion_button.isEnabled()
     palette.finish_choice()
 
@@ -1063,7 +1225,7 @@ def test_palette_exposes_local_ai_success_on_accept_control(app):
     palette.finish_choice()
 
 
-def test_qwen_load_error_appears_only_in_bottom_status(app):
+def test_runtime_name_is_hidden_and_load_error_appears_only_in_bottom_status(app):
     palette = RewritePalette()
     palette.show_capture("teh draft")
     app.processEvents()
@@ -1074,7 +1236,8 @@ def test_qwen_load_error_appears_only_in_bottom_status(app):
     palette.show_error(message)
     app.processEvents()
 
-    assert palette.status.text() == message
+    assert palette.status.text() == "Local AI could not load. Retry shortly."
+    assert "qwen" not in palette.status.text().casefold()
     assert palette.status.isVisible()
     assert palette.suggestion_explanation.text() == original_explanation
     assert message not in palette.suggestion_explanation.text()
@@ -1113,11 +1276,13 @@ def test_palette_timeout_never_presents_rules_only_text_as_finished_ai(app):
     suggestion_id = palette.suggestions[0].suggestion_id
     palette._expire_ai_request()
 
-    assert palette.view == "badge"
-    assert not palette.after_text.isVisible()
+    assert palette.view == "card"
+    assert palette.after_text.toPlainText() == ""
+    assert not palette.apply_suggestion_button.isEnabled()
+    assert suggestion_id in palette._ai_failed_ids
     assert "took too long" in palette.status.text().casefold()
     palette.show_sentence_result(attempt_id, suggestion_id, "Late AI result.", "AI ready.")
-    assert not palette.after_text.isVisible()
+    assert palette.after_text.toPlainText() == ""
     palette.finish_choice()
 
 
@@ -1176,7 +1341,8 @@ def test_palette_timed_out_ai_can_be_retried_without_accepting_late_result(app):
     suggestion_id = palette.suggestions[0].suggestion_id
 
     palette._expire_ai_request()
-    palette.badge_button.click()
+    assert palette.rewrite_sentence_button.text() == "Retry"
+    palette.rewrite_sentence_button.click()
     assert len(requests) == 2
 
     old_attempt = requests[0][0]
@@ -1524,6 +1690,73 @@ def test_accept_applies_each_section_immediately_before_advancing(app):
     assert "The fourth sentence" in writes[1]
     assert completed == [True]
     assert not palette.isVisible()
+
+
+def test_final_dismiss_after_step_accept_never_requests_whole_document_replace(app):
+    palette = RewritePalette()
+    step_writes = []
+    whole_document_writes = []
+    applied = []
+    palette.set_step_replacer(
+        lambda text, suggestion: step_writes.append((text, suggestion)) or True
+    )
+    palette.replace_requested.connect(whole_document_writes.append)
+    palette.applied.connect(lambda: applied.append(True))
+    palette.show_capture(
+        "teh first sentence. Two. Three. Four. Five. teh sixth sentence.",
+        document_scope=True,
+    )
+    app.processEvents()
+    palette.badge_button.click()
+
+    palette.apply_suggestion_button.click()
+    assert palette.card_position.text() == "2 of 2"
+    palette.dismiss_suggestion_button.click()
+    app.processEvents()
+
+    assert len(step_writes) == 1
+    assert whole_document_writes == []
+    assert applied == [True]
+    assert not palette.isVisible()
+
+
+def test_next_then_replace_preserves_earlier_undecided_section(app):
+    palette = RewritePalette()
+    writes = []
+    palette.set_step_replacer(
+        lambda text, suggestion: writes.append((text, suggestion)) or True
+    )
+    source = " ".join(
+        (
+            "teh first.",
+            "Second.",
+            "Third.",
+            "Fourth.",
+            "Fifth.",
+            "teh sixth.",
+            "Seventh.",
+            "Eighth.",
+            "Ninth.",
+            "Tenth.",
+            "teh eleventh.",
+        )
+    )
+    palette.show_capture(source, document_scope=True)
+    app.processEvents()
+    palette.badge_button.click()
+
+    first_original = palette.suggestions[0].original
+    palette._step_suggestion(1)
+    assert palette.card_position.text() == "2 of 3"
+    palette.apply_suggestion_button.click()
+    app.processEvents()
+
+    assert len(writes) == 1
+    assert len(palette.suggestions) == 2
+    assert any(item.original == first_original for item in palette.suggestions)
+    assert palette.before_text.toPlainText() == first_original
+    assert palette.card_position.text() == "2 of 3"
+    palette.finish_choice()
 
 
 def test_unique_document_text_handles_windows_newlines():
@@ -2187,10 +2420,15 @@ def test_duplicate_focus_poll_does_not_rebuild_badge_during_click(app, tmp_path,
     window.close()
 
 
-def test_automatic_badge_disappears_when_text_entry_loses_focus(app, tmp_path):
+def test_automatic_badge_debounces_same_word_window_focus_flap(
+    app,
+    tmp_path,
+    monkeypatch,
+):
     window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
     window.engine.settings.automatic_writing_hud = True
     record = _selection("Focused draft")
+    monkeypatch.setattr(window_module, "active_window", lambda: record.window)
     window._handle_automatic_selection(DetectedSelection(record, (100, 120, 230, 145)))
     app.processEvents()
 
@@ -2205,6 +2443,69 @@ def test_automatic_badge_disappears_when_text_entry_loses_focus(app, tmp_path):
 
     assert not window.rewrite_palette.isVisible()
     assert window.selected_text_record is None
+    window._quitting = True
+    window.close()
+
+
+def test_selected_text_hotkey_opens_existing_automatic_capture_without_reread(
+    app, tmp_path, monkeypatch
+):
+    window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
+    record = _selection("this are already captured text")
+    window.selected_text_record = record
+    window.rewrite_palette.show_capture(record.text, automatic=True)
+    monkeypatch.setattr(window_module, "active_window", lambda: record.window)
+    monkeypatch.setattr(
+        window_module,
+        "WindowsSelectionReader",
+        lambda **_kwargs: pytest.fail("hotkey reread the existing capture"),
+    )
+
+    window._capture_selected_text_for_palette()
+    app.processEvents()
+
+    assert window.rewrite_palette.view == "loading"
+    assert window.selected_text_record == record
+    window._quitting = True
+    window.close()
+
+
+def test_document_ai_prefetch_uses_one_ordered_worker(app, tmp_path, monkeypatch):
+    window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
+    monkeypatch.setattr(
+        type(window.polish_engine.runtime),
+        "parallel_slots",
+        property(lambda _runtime: 3),
+    )
+
+    assert window._palette_ai_width() == 1
+
+    window._quitting = True
+    window.close()
+
+
+def test_automatic_badge_hides_immediately_after_exact_window_focus_loss(
+    app,
+    tmp_path,
+    monkeypatch,
+):
+    window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
+    window.engine.settings.automatic_writing_hud = True
+    record = _selection("Focused draft")
+    window._handle_automatic_selection(DetectedSelection(record, (100, 120, 230, 145)))
+    app.processEvents()
+    monkeypatch.setattr(
+        window_module,
+        "active_window",
+        lambda: WindowSnapshot(99, 100, "Different editor"),
+    )
+
+    window._handle_automatic_selection_cleared()
+    app.processEvents()
+
+    assert not window.rewrite_palette.isVisible()
+    assert window.selected_text_record is None
+    assert all(not segment.isVisible() for segment in window.target_underline._segments)
     window._quitting = True
     window.close()
 
@@ -2720,3 +3021,69 @@ def test_target_underline_clips_overrun_and_rejects_huge_geometry(app):
     underline.show_rectangles(((0, 0, 2**31, 2**31),))
     underline.clear()
     underline.close()
+
+
+def test_repeated_document_step_failure_stops_asking_for_a_doomed_retry(
+    app,
+    tmp_path,
+    monkeypatch,
+):
+    """Clicking Replace Text forever cannot fix a document that moved.
+
+    Word swapped a document for an AutoRecovered copy while a review was open.
+    Every click was refused, and the message said "Try Replace Text again", so
+    it was clicked a dozen times against a capture that could never match. One
+    retry is still offered, because a single failure is usually a repaint or
+    focus race; after that the HUD asks for a fresh capture.
+    """
+    window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
+    source = (
+        "teh first sentence. Clean second sentence. Clean third sentence.\n"
+        "teh fourth sentence. Clean fifth sentence. Clean sixth sentence."
+    )
+    record = SelectionRecord(
+        source,
+        WindowSnapshot(77, 88, "Document1 - Word", "OpusApp"),
+        "document",
+        hashlib.sha256(source.encode("utf-8")).hexdigest(),
+    )
+    window.selected_text_record = record
+    window.rewrite_palette._ai_proofread = False
+    window.rewrite_palette.show_capture(source, document_scope=True)
+    app.processEvents()
+    window.rewrite_palette.badge_button.click()
+    app.processEvents()
+    monkeypatch.setattr(
+        window.engine.inserter,
+        "replace_document_range",
+        lambda *_args, **_kwargs: None,
+    )
+
+    corrected = source.replace("teh first", "The first", 1)
+    suggestion = window.rewrite_palette._current_review_suggestion()
+
+    # First failure keeps the review so a genuine race can be retried.
+    assert window._replace_palette_step(corrected, suggestion) is False
+    assert window.selected_text_record == record
+    assert window.rewrite_palette.card_position.text() == "1 of 2"
+
+    # Second failure means the source moved; stop advising a doomed retry.
+    assert window._replace_palette_step(corrected, suggestion) is False
+    assert window.selected_text_record is None
+    status = window.rewrite_palette.status.text().casefold()
+    assert "capture it again" in status
+    assert "try replace text again" not in status
+
+    window._quitting = True
+    window.close()
+
+
+def test_apply_retry_budget_resets_for_each_new_capture(app, tmp_path):
+    window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
+    window._failed_apply_streak = 1
+    window._clear_palette_review_state()
+
+    assert window._failed_apply_streak == 0
+
+    window._quitting = True
+    window.close()

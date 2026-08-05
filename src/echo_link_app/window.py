@@ -195,6 +195,11 @@ def _restore_native_window(handle: int) -> None:
 _WARM_RETRY_ATTEMPTS = 4
 _WARM_RETRY_DELAY_SECONDS = 20.0
 
+# How many times Replace Text may fail on one correction before the HUD stops
+# advising a retry and asks for a fresh capture. One failure is usually a
+# repaint or focus race and retrying works; a second means the source moved.
+_APPLY_RETRY_BEFORE_RECAPTURE = 2
+
 
 def _polish_result_ready_for_review(result: object) -> bool:
     """Whether the HUD has a correction worth putting in front of the reader.
@@ -363,6 +368,9 @@ class EchoLinkWindow(QMainWindow):
         # Lets the prewarm retry give up at once when the window closes,
         # instead of sitting out its delay in a daemon thread.
         self._warm_retry_stop = threading.Event()
+        # Consecutive Replace Text failures on the current review, so a source
+        # that has genuinely moved stops being retried forever.
+        self._failed_apply_streak = 0
         if os.environ.get("ECHOLINK_DISABLE_MODEL_SETUP") != "1":
             threading.Thread(
                 target=self._refresh_installed_writing_models,
@@ -2658,14 +2666,42 @@ class EchoLinkWindow(QMainWindow):
             )
             return False
         if inserted is None:
+            # A first failure is usually a race - a repaint, or focus moving
+            # for an instant - and retrying works, so the review is kept.
+            # A second failure on the same correction means the source itself
+            # has moved, and then the captured text can never match again:
+            # "try Replace Text again" asks for the one thing that cannot
+            # work. That advice was followed a dozen times in a row against a
+            # document Word had quietly swapped for an AutoRecovered copy.
+            self._failed_apply_streak += 1
+            if self._failed_apply_streak < _APPLY_RETRY_BEFORE_RECAPTURE:
+                message = (
+                    "This correction was not applied. The document may have "
+                    "been busy. Try Replace Text again."
+                )
+                logger.warning(
+                    "Writing HUD immediate apply could not recheck the source "
+                    "text; retry %d of %d",
+                    self._failed_apply_streak,
+                    _APPLY_RETRY_BEFORE_RECAPTURE,
+                )
+                self.rewrite_palette.show_error(message)
+                return False
             message = (
-                "This correction was not applied because the document changed "
-                "or could not be rechecked. Try Replace Text again, or close "
-                "the review and recapture the document."
+                "The document changed since it was captured, so nothing was "
+                "replaced. Capture it again to review the current text."
             )
-            logger.warning("Writing HUD immediate apply could not recheck the source text")
-            self.rewrite_palette.show_error(message)
+            logger.warning(
+                "Writing HUD immediate apply failed %d times; asking for a "
+                "fresh capture",
+                self._failed_apply_streak,
+            )
+            update_status_label(self.writing_state, message, assertive=True)
+            self._clear_palette_review_state()
+            self.rewrite_palette.require_recapture(message)
+            self._resume_selection_monitor()
             return False
+        self._failed_apply_streak = 0
 
         if isinstance(inserted, SelectionRecord):
             self.selected_text_record = inserted
@@ -2814,6 +2850,8 @@ class EchoLinkWindow(QMainWindow):
     def _clear_palette_review_state(self) -> None:
         self.target_underline.clear()
         self._palette_request_id += 1
+        # A fresh capture starts its own retry budget.
+        self._failed_apply_streak = 0
         self.selected_text_record = None
         self.writing_result_edit.clear()
         self.writing_replace_button.setEnabled(False)
