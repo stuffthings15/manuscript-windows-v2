@@ -200,6 +200,10 @@ _WARM_RETRY_DELAY_SECONDS = 20.0
 # repaint or focus race and retrying works; a second means the source moved.
 _APPLY_RETRY_BEFORE_RECAPTURE = 2
 
+# How long automatic capture stays quiet after asking for a fresh capture, so
+# the selection that just failed is not immediately picked up again.
+_RECAPTURE_SUPPRESS_SECONDS = 3.0
+
 
 def _polish_result_ready_for_review(result: object) -> bool:
     """Whether the HUD has a correction worth putting in front of the reader.
@@ -2699,6 +2703,14 @@ class EchoLinkWindow(QMainWindow):
             update_status_label(self.writing_state, message, assertive=True)
             self._clear_palette_review_state()
             self.rewrite_palette.require_recapture(message)
+            # Word still holds the selection that was being reviewed - often
+            # the whole document. Resuming the monitor immediately re-captured
+            # that same selection as one enormous section, which is why the
+            # next card showed the entire essay and the counter read "0 of 0".
+            # Give the writer time to place a new selection first.
+            self._automatic_hud_suppress_until = (
+                time.monotonic() + _RECAPTURE_SUPPRESS_SECONDS
+            )
             self._resume_selection_monitor()
             return False
         self._failed_apply_streak = 0

@@ -909,8 +909,29 @@ def _load_uiautomation():
     return importlib.import_module("uiautomation")
 
 
+# Characters Word's COM text contains that UI Automation never reports;
+# kept in step with insertion._WORD_UIA_OMITTED_CHARACTERS.
+_COM_ONLY_CHARACTERS = frozenset({chr(0x01), chr(0xA0)})
+
+
 def _text_digest(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    """Digest a document the same way the replacement side reads it back.
+
+    Word gives UI Automation a bare carriage return for each paragraph mark
+    and gives COM a carriage return plus the characters COM alone reports.
+    The replacement path normalises those before comparing, so digesting the
+    raw accessibility text here meant the two never agreed on any document
+    with more than one paragraph: Accept was refused every time with "Word
+    COM range replacement refused changed document text", on a document the
+    writer had not touched.
+    """
+    value = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    value = "".join(
+        character
+        for character in value
+        if character not in _COM_ONLY_CHARACTERS
+    )
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _selection_offsets(

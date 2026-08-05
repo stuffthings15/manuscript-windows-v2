@@ -84,24 +84,35 @@ TONE_COMMANDS = frozenset(
 )
 
 
+_OFFICIAL_GEMMA4_MODELS = frozenset(
+    {
+        "gemma4:e2b-it-qat",
+        "gemma4:e4b-it-qat",
+        "gemma4:12b-it-q4_k_m",
+    }
+)
+
+
+def _require_exact_response_model(payload: object, expected_model: str) -> dict:
+    if not isinstance(payload, dict):
+        raise RuntimeError("Local AI returned invalid text.")
+    reported = str(payload.get("model") or "").strip()
+    if not reported or reported != str(expected_model or "").strip():
+        raise RuntimeError("Local AI returned the wrong model identity.")
+    return payload
+
+
 def select_local_tone_model(
     command: str,
     configured_model: str,
     installed_models: tuple[str, ...] | set[str],
 ) -> str:
-    """Choose the locally verified tone model without requiring a download."""
+    """Use only the installed Gemma 4 pack selected by hardware policy."""
     available = {str(name).strip().casefold(): str(name).strip() for name in installed_models}
-    if command in COMMANDS and "gemma4:12b" in available:
-        return available["gemma4:12b"]
-    if command in COMMANDS and "qwen3:14b" in available:
-        return available["qwen3:14b"]
-    if command in COMMANDS and "qwen3:8b" in available:
-        return available["qwen3:8b"]
-    if command in (TONE_COMMANDS | {"Rewrite", "Proofread"}) and "qwen2.5:14b" in available:
-        return available["qwen2.5:14b"]
-    if command in (TONE_COMMANDS | {"Rewrite", "Proofread"}) and "qwen2.5:7b" in available:
-        return available["qwen2.5:7b"]
-    return configured_model
+    selected = str(configured_model or "").strip().casefold()
+    if command not in COMMANDS or selected not in _OFFICIAL_GEMMA4_MODELS:
+        return ""
+    return available.get(selected, "")
 
 PROFILES = {
     "General": "Use clear natural language and preserve the original structure when useful.",
@@ -304,10 +315,10 @@ class LocalWritingAssistant:
         try:
             payload = self._transport.get_json("/api/ps", timeout=timeout)
         except LocalTransportError as exc:
-            raise RuntimeError(f"Local writing model unavailable: {exc}") from exc
+            raise RuntimeError(f"Local AI unavailable: {exc}") from exc
         models = payload.get("models")
         if not isinstance(models, list):
-            raise RuntimeError("Local writing model returned invalid runtime status.")
+            raise RuntimeError("Local AI returned invalid runtime status.")
         wanted = str(model).strip().casefold()
         for item in models:
             if not isinstance(item, dict):
@@ -319,7 +330,7 @@ class LocalWritingAssistant:
             gpu_bytes = max(0, int(item.get("size_vram") or 0))
             if gpu_bytes <= 0:
                 backend = "CPU"
-            elif model_bytes > 0 and gpu_bytes < model_bytes * 0.9:
+            elif model_bytes > 0 and gpu_bytes < model_bytes:
                 backend = "Hybrid"
             else:
                 backend = "GPU"
@@ -343,7 +354,7 @@ class LocalWritingAssistant:
         status = self.runtime_status(model, timeout=min(1.0, timeout))
         if not status.loaded:
             try:
-                self._transport.post_json(
+                payload = self._transport.post_json(
                     "/api/generate",
                     {
                         "model": model,
@@ -354,14 +365,15 @@ class LocalWritingAssistant:
                     },
                     timeout=timeout,
                 )
+                _require_exact_response_model(payload, model)
             except LocalTransportError as exc:
-                raise RuntimeError(f"Local writing model unavailable: {exc}") from exc
+                raise RuntimeError(f"Local AI unavailable: {exc}") from exc
             status = self.runtime_status(model, timeout=min(1.0, timeout))
         if not status.loaded:
-            raise RuntimeError("Qwen could not load. GPU proofreading did not start.")
+            raise RuntimeError("Local AI could not load. GPU proofreading did not start.")
         if status.backend != "GPU":
             raise RuntimeError(
-                f"Qwen loaded on {status.backend}. GPU-only proofreading stopped. "
+                f"Local AI loaded on {status.backend}. GPU-only proofreading stopped. "
                 "Repair the NVIDIA device or driver, then try again."
             )
         return status
@@ -432,6 +444,26 @@ class LocalWritingAssistant:
             protect_detected=False,
         )
         protected_literals = _strict_protected_literals(source)
+        # Naming the token system on text that contains no tokens taught small
+        # models to write the word ECHOLINKTOKEN into the correction, and the
+        # mismatch check then discarded the whole answer:
+        # "protected-token mismatch stage=initial expected=() actual=('ECHOLINKTOKEN',)".
+        # State the rule only when there is actually a token to protect. The
+        # concision prompts further down already guard theirs this way.
+        has_immutable_tokens = bool(_IMMUTABLE_TOKEN.search(protected))
+        compact_token_rule = (
+            "- Tokens beginning ECHOLINKTOKEN are immutable: copy each one "
+            "exactly, same spelling, order, and count.\n"
+            if has_immutable_tokens
+            else ""
+        )
+        full_token_rule = (
+            "- Tokens beginning ECHOLINKTOKEN are immutable. Copy each token "
+            "exactly, with the same spelling, order, and occurrence count. "
+            "Never create or explain a token.\n"
+            if has_immutable_tokens
+            else ""
+        )
         task = COMMANDS[command]
         target_language = " ".join(language.split())
         if len(target_language) > 80:
@@ -462,8 +494,7 @@ class LocalWritingAssistant:
                 "never swap a named system, team, or user for we, you, or they.\n"
                 "- Keep privacy limits attached to the same data and destination.\n"
                 "- Add no facts, claims, reasons, or commentary.\n"
-                "- Tokens beginning ECHOLINKTOKEN are immutable: copy each one "
-                "exactly, same spelling, order, and count.\n"
+                f"{compact_token_rule}"
                 "- Fix every spelling, grammar, punctuation, capitalization, "
                 "spacing, and formatting error.\n"
                 "- Keep the same paragraph and line-break structure; add no "
@@ -494,8 +525,7 @@ class LocalWritingAssistant:
                 "- Keep privacy boundaries attached to the same data and destination. For example, do not "
                 "turn 'keep private writing out of reports' into 'keep reports private.'\n"
                 "- Do not add facts, promises, claims, reasons, urgency, or commentary.\n"
-                "- Tokens beginning ECHOLINKTOKEN are immutable. Copy each token exactly, with the same "
-                "spelling, order, and occurrence count. Never create or explain a token.\n"
+                f"{full_token_rule}"
                 "- Correct every obvious spelling, grammar, punctuation, capitalization, spacing, and "
                 "formatting error while applying the requested style.\n"
                 "- Keep the same paragraph and line-break structure. If the selected text is one "
@@ -620,7 +650,7 @@ class LocalWritingAssistant:
             ):
                 raise RuntimeError("The result changed a written-number fact.")
         if not candidate or "```" in candidate:
-            raise RuntimeError("Local writing model returned invalid text.")
+            raise RuntimeError("Local AI returned invalid text.")
         if _obviously_incomplete_edit(protected, candidate, command):
             incomplete_retry_prompt = (
                 f"{prompt}\n\nRETRY RULE: Your prior answer was incomplete or cut off. "
@@ -661,8 +691,8 @@ class LocalWritingAssistant:
             ):
                 raise RuntimeError("The result changed protected content.")
             if _obviously_incomplete_edit(protected, candidate, command):
-                raise RuntimeError("Local writing model returned incomplete text.")
-        # Validate the finished correction, not a dirty draft that Qwen may have
+                raise RuntimeError("Local AI returned incomplete text.")
+        # Validate the finished correction, not a dirty draft that AI may have
         # copied while applying a style. This cleanup is deterministic and
         # fact-preserving; running it here prevents a needless generative retry
         # from replacing a safe draft with a worse one.
@@ -712,7 +742,7 @@ class LocalWritingAssistant:
                 source,
                 _expand_protected_for_validation(candidate, replacements),
             ):
-                raise RuntimeError("Local writing model changed a meaning constraint.")
+                raise RuntimeError("Local AI changed a meaning constraint.")
         if command == "Shorten":
             candidate = _apply_safe_shorten_compression(candidate)
             maximum_words = source_word_count
@@ -820,13 +850,13 @@ class LocalWritingAssistant:
                     source,
                     _expand_protected_for_validation(candidate, replacements),
                 ):
-                    raise RuntimeError("Local writing model changed a meaning constraint.")
+                    raise RuntimeError("Local AI changed a meaning constraint.")
                 if not candidate or "```" in candidate:
-                    raise RuntimeError("Local writing model returned invalid text.")
+                    raise RuntimeError("Local AI returned invalid text.")
                 if _obviously_incomplete_edit(protected, candidate, command):
-                    raise RuntimeError("Local writing model returned incomplete text.")
+                    raise RuntimeError("Local AI returned incomplete text.")
                 if len(_WORD.findall(candidate)) > maximum_words:
-                    raise RuntimeError("Local writing model exceeded the requested word limit.")
+                    raise RuntimeError("Local AI exceeded the requested word limit.")
         if "\u2014" in candidate:
             dash_retry_prompt = (
                 f"{prompt}\n\nRETRY RULE: Your prior answer used an em dash. "
@@ -863,13 +893,13 @@ class LocalWritingAssistant:
                     replacements,
                 )
             if "\u2014" in candidate:
-                raise RuntimeError("Local writing model used a forbidden em dash.")
+                raise RuntimeError("Local AI used a forbidden em dash.")
             if command == "Shorten" and len(_WORD.findall(candidate)) > source_word_count:
-                raise RuntimeError("Local writing model exceeded the requested word limit.")
+                raise RuntimeError("Local AI exceeded the requested word limit.")
         if not candidate or "```" in candidate:
-            raise RuntimeError("Local writing model returned invalid text.")
+            raise RuntimeError("Local AI returned invalid text.")
         if command == "Translate" and _translation_was_not_performed(protected, candidate):
-            raise RuntimeError("Local writing model did not translate the text.")
+            raise RuntimeError("Local AI did not translate the text.")
         if command in _PROOFREAD_CLEANUP_COMMANDS:
             candidate = _safe_final_proofread(protected, candidate, command, replacements)
         for token, value in replacements.items():
@@ -882,25 +912,25 @@ class LocalWritingAssistant:
         if command in _PROOFREAD_CLEANUP_COMMANDS:
             candidate = _restore_proofread_style_options(source, candidate)
         if _INTERNAL_TOKEN_LIKE.search(candidate):
-            raise RuntimeError("Local writing model returned invalid text.")
+            raise RuntimeError("Local AI returned invalid text.")
         if _obviously_incomplete_edit(source, candidate, command):
-            raise RuntimeError("Local writing model returned incomplete text.")
+            raise RuntimeError("Local AI returned incomplete text.")
         if (
             explicit_word_limit is not None
             and len(_WORD.findall(candidate)) > explicit_word_limit
         ):
-            raise RuntimeError("Local writing model exceeded the requested word limit.")
+            raise RuntimeError("Local AI exceeded the requested word limit.")
         if not defer_meaning_validation:
             numeric_change = _numeric_literal_change(source, candidate)
             if numeric_change == "added":
-                raise RuntimeError("Local writing model added a number.")
+                raise RuntimeError("Local AI added a number.")
             if numeric_change is not None:
                 raise RuntimeError("The result changed protected content.")
         candidate_literals = _strict_protected_literals(candidate)
         if candidate_literals != protected_literals:
             raise RuntimeError("The result changed protected content.")
         if surface_meaning_guard and not _meaning_constraints_preserved(source, candidate):
-            raise RuntimeError("Local writing model changed a meaning constraint.")
+            raise RuntimeError("Local AI changed a meaning constraint.")
         return WritingResult(f"{leading}{candidate.strip()}{trailing}", command, model, profile)
 
     def _generate(
@@ -955,9 +985,8 @@ class LocalWritingAssistant:
                 timeout=max(0.2, float(timeout)),
             )
         except LocalTransportError as exc:
-            raise RuntimeError(f"Local writing model unavailable: {exc}") from exc
-        if not isinstance(payload, dict):
-            raise RuntimeError("Local writing model returned invalid text.")
+            raise RuntimeError(f"Local AI unavailable: {exc}") from exc
+        payload = _require_exact_response_model(payload, model)
         return str(payload.get("response") or "").strip().strip('"')
 
 

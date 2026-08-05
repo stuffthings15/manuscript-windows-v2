@@ -22,6 +22,8 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
 if str(ROOT / "tools") not in sys.path:
     sys.path.insert(0, str(ROOT / "tools"))
 
@@ -75,6 +77,21 @@ CORPUS_ARCHIVE_SHA256 = (
 _WORD_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 
+def _essay_files(corpus: Path) -> list[Path]:
+    """Every essay in the folder, ignoring Word's own scratch files.
+
+    Word writes a small "~$name.docx" owner file beside any document it has
+    open. It is not a document, so reading it raised BadZipFile and the run
+    died before reviewing a single essay - which is what happened simply
+    because one of the essays was open in Word at the time.
+    """
+    return sorted(
+        path
+        for path in corpus.glob("*.docx")
+        if not path.name.startswith("~$")
+    )
+
+
 def docx_paragraphs(path: Path) -> list[str]:
     """Return the visible paragraph text of a .docx without extra packages."""
     with zipfile.ZipFile(path) as archive:
@@ -96,7 +113,7 @@ def docx_paragraphs(path: Path) -> list[str]:
 
 def load_essays(corpus: Path) -> list[dict[str, object]]:
     essays = []
-    for path in sorted(corpus.glob("*.docx")):
+    for path in _essay_files(corpus):
         paragraphs = docx_paragraphs(path)
         if not paragraphs:
             continue
@@ -128,7 +145,7 @@ def validate_corpus(corpus: Path) -> list[str]:
         if digest != CORPUS_ARCHIVE_SHA256:
             failures.append("locked source.zip hash changed")
 
-    paths = sorted(corpus.glob("*.docx"))
+    paths = _essay_files(corpus)
     if len(paths) != EXPECTED_ESSAY_COUNT:
         failures.append(
             f"expected {EXPECTED_ESSAY_COUNT} essays, found {len(paths)}"

@@ -48,7 +48,13 @@ def _normalize_newlines(text: str) -> str:
 _SELECTION_RESTORE_RETRY_SECONDS = 0.06
 _CLIPBOARD_UNAVAILABLE = object()
 _WORD_COM_NOT_APPLICABLE = object()
-_WORD_UIA_OMITTED_CHARACTERS = frozenset({"\x01"})
+# Characters Word's COM Content.Text contains that UI Automation never
+# reports. U+0001 is the anchor Word puts where a shape or picture sits.
+# U+00A0 is the non-breaking space: a document whose first character was one
+# read as 5204 characters through COM and 5203 through UI Automation, so the
+# two never matched, every offset after it was out by one, and Replace Text
+# refused a document the writer had not touched.
+_WORD_UIA_OMITTED_CHARACTERS = frozenset({chr(0x01), chr(0xA0)})
 
 
 class _LastInputInfo(ctypes.Structure):
@@ -268,6 +274,58 @@ def _word_visible_text_and_spans(text: str) -> tuple[str, tuple[tuple[int, int],
     return value[:trimmed_length], tuple(spans[:trimmed_length])
 
 
+def _set_foreground_window(user32, handle: int) -> bool:
+    """Give a window the foreground, even when Manuscript is in the background.
+
+    Windows refuses a foreground change from a process that does not already
+    own the foreground; ``SetForegroundWindow`` just returns false and the
+    window never comes forward. Attaching the calling thread to the current
+    foreground thread's input queue lifts that restriction for the length of
+    the call, which is the documented way to hand focus back to the window a
+    user was working in.
+
+    Accept in Word failed on exactly this. The HUD is deliberately shown
+    without activation, so at the moment Accept runs the foreground belongs to
+    whatever the user last clicked, Manuscript is a background process, and
+    returning focus to Word was refused. The replacement then aborted with
+    "target window could not be activated" before it ever reached the COM
+    guards, and the user saw "The document may have been busy". The Word probe
+    already did this; the app did not.
+    """
+    if user32.SetForegroundWindow(handle):
+        return True
+    # Every call below is optional: a stub user32 without them simply means the
+    # plain request above was the only thing available to try.
+    get_foreground = getattr(user32, "GetForegroundWindow", None)
+    get_thread = getattr(user32, "GetWindowThreadProcessId", None)
+    attach = getattr(user32, "AttachThreadInput", None)
+    if not callable(get_foreground) or not callable(get_thread) or not callable(attach):
+        return False
+    foreground = get_foreground()
+    if not foreground:
+        return False
+    this_thread = int(ctypes.windll.kernel32.GetCurrentThreadId())
+    threads = (
+        int(get_thread(foreground, None) or 0),
+        int(get_thread(handle, None) or 0),
+    )
+    attached: list[int] = []
+    try:
+        for thread in threads:
+            if thread and thread != this_thread and thread not in attached:
+                if attach(this_thread, thread, True):
+                    attached.append(thread)
+        bring_to_top = getattr(user32, "BringWindowToTop", None)
+        if callable(bring_to_top):
+            bring_to_top(handle)
+        return bool(user32.SetForegroundWindow(handle))
+    finally:
+        # Leaving input queues attached would tie Manuscript's message loop to
+        # another application's; always detach, even if the call above raised.
+        for thread in attached:
+            attach(this_thread, thread, False)
+
+
 def _word_title_names_document(window_title: str, document_name: str) -> bool:
     """Whether a Word window title refers to the document COM says is active.
 
@@ -333,17 +391,46 @@ def _replace_word_document_range(
         else:
             range_start = int(record.selection_start or 0)
             range_end = int(record.selection_end or 0)
+            live_digest = hashlib.sha256(visible_text.encode("utf-8")).hexdigest()
             if (
-                hashlib.sha256(visible_text.encode("utf-8")).hexdigest()
-                != record.document_digest
+                live_digest != record.document_digest
                 or range_start < 0
                 or range_end > len(visible_text)
             ):
-                logger.warning("Word COM range replacement refused changed document text")
+                logger.warning(
+                    "Word COM range replacement refused changed document text "
+                    "(digest_match=%s live=%s captured=%s doc_chars=%d "
+                    "range=%d..%d)",
+                    live_digest == record.document_digest,
+                    live_digest[:12],
+                    str(record.document_digest)[:12],
+                    len(visible_text),
+                    range_start,
+                    range_end,
+                )
                 return False
             current_range_text = visible_text[range_start:range_end]
         if current_range_text != captured_text or record_text != captured_text:
-            logger.warning("Word COM range replacement refused changed document text")
+            logger.warning(
+                "Word COM range replacement refused changed document text "
+                "(range_matches=%s record_matches=%s range_chars=%d "
+                "captured_chars=%d record_chars=%d first_diff=%s)",
+                current_range_text == captured_text,
+                record_text == captured_text,
+                len(current_range_text),
+                len(captured_text),
+                len(record_text),
+                next(
+                    (
+                        f"{index}:{current_range_text[index]!r}!={captured_text[index]!r}"
+                        for index in range(
+                            min(len(current_range_text), len(captured_text))
+                        )
+                        if current_range_text[index] != captured_text[index]
+                    ),
+                    "length-only",
+                ),
+            )
             return False
         if (
             isinstance(start, bool)
@@ -803,7 +890,7 @@ class WindowsTextInserter:
         is_iconic = getattr(user32, "IsIconic", None)
         if callable(is_iconic) and bool(is_iconic(window.handle)):
             user32.ShowWindow(window.handle, 9)
-        user32.SetForegroundWindow(window.handle)
+        _set_foreground_window(user32, int(window.handle))
         deadline = time.monotonic() + 0.75
         while time.monotonic() < deadline:
             current = active_window()

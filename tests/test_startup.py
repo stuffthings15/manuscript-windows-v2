@@ -95,3 +95,17 @@ def test_source_startup_command_uses_canonical_v2_launcher(monkeypatch) -> None:
 
 def test_startup_argument_is_supported() -> None:
     assert build_parser().parse_args(["--startup"]).startup is True
+
+
+def test_normal_and_startup_launches_enable_global_hotkeys_by_default() -> None:
+    parser = build_parser()
+
+    assert parser.parse_args([]).enable_global_hotkeys is True
+    assert parser.parse_args(["--startup"]).enable_global_hotkeys is True
+
+
+def test_internal_launch_can_explicitly_disable_global_hotkeys() -> None:
+    assert (
+        build_parser().parse_args(["--disable-global-hotkeys"]).enable_global_hotkeys
+        is False
+    )

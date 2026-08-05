@@ -23,6 +23,8 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
 if str(ROOT / "tools") not in sys.path:
     sys.path.insert(0, str(ROOT / "tools"))
 
@@ -421,12 +423,38 @@ def _hud_window(timeout: float):
         return None
 
 def _badge_button(hud):
+    """The badge that opens the review, not merely the first button present.
+
+    The HUD's first enabled button is the settings gear, so taking whatever
+    came first opened Manuscript Settings instead. That dialog then held the
+    foreground, the document could not be brought back to the front, and
+    every capture afterwards read the dialog rather than the document.
+    """
+    buttons = []
     for control in _descendants(hud):
         try:
-            if control.ControlTypeName == "ButtonControl" and control.IsEnabled:
-                return control
+            if control.ControlTypeName != "ButtonControl" or not control.IsEnabled:
+                continue
         except Exception:
             continue
+        buttons.append(control)
+
+    for control in buttons:
+        try:
+            name = str(control.Name).strip().casefold()
+        except Exception:
+            continue
+        if "review" in name or "writing suggestion" in name or "manuscript," in name:
+            return control
+
+    for control in buttons:
+        try:
+            name = str(control.Name).strip().casefold()
+        except Exception:
+            continue
+        if "setting" in name or "close" in name or "dismiss" in name:
+            continue
+        return control
     return None
 
 
@@ -451,6 +479,13 @@ def _counter_text(hud) -> str:
             name = str(control.Name).strip()
             if re.fullmatch(r"\d+ of \d+", name):
                 return name
+            # The accessible name carries a screen-reader label in front of
+            # the position ("Current writing suggestion position, 1 of 10"),
+            # so an exact match read every section as having no counter and
+            # the run stopped as out of order before reviewing anything.
+            match = re.search(r"(\d+ of \d+)\s*$", name)
+            if match:
+                return match.group(1)
         except Exception:
             continue
     return ""

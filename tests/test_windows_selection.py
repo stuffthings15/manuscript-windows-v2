@@ -11,6 +11,9 @@ import pytest
 import echo_link_core.windows_selection as selection_module
 from echo_link_core.insertion import SelectionRecord, WindowSnapshot
 from echo_link_core.windows_selection import (
+    _text_digest,
+)  # noqa: F401
+from echo_link_core.windows_selection import (
     DetectedSelection,
     WindowsSelectionMonitor,
     WindowsSelectionReader,
@@ -600,9 +603,7 @@ def test_monitor_reader_expands_word_page_and_preserves_paragraph_boundaries():
     assert detected is not None
     assert detected.record.text == page_text
     assert detected.record.scope == "selection"
-    assert detected.record.document_digest == hashlib.sha256(
-        document_text.encode("utf-8")
-    ).hexdigest()
+    assert detected.record.document_digest == _text_digest(document_text)
     assert detected.record.control_runtime_id == (7, 8, 9)
     assert detected.anchor == (10, 20, 300, 100)
 
@@ -1192,3 +1193,28 @@ def test_module_never_references_clipboard_fallback():
     assert "pyperclip" not in source
     assert "win32clipboard" not in source
     assert "qapplication.clipboard" not in source
+
+
+def test_capture_and_replacement_agree_on_a_word_document_digest():
+    """Accept was refused on every multi-paragraph Word document.
+
+    Word hands UI Automation a bare carriage return for each paragraph
+    mark and hands COM extra characters of its own. The two sides
+    digested those differently, so the replacement path decided the
+    document had changed underneath it and refused, on a document
+    nobody had touched.
+    """
+    import hashlib as _hashlib
+
+    from echo_link_core.insertion import _word_visible_text_and_spans
+
+    carriage = chr(13)
+    uia_text = carriage.join(
+        ("Dogs Makes Grate Petts", "in Bakersfield", "third line")
+    )
+    com_text = chr(160) + uia_text
+
+    visible, _spans = _word_visible_text_and_spans(com_text)
+    replacement_digest = _hashlib.sha256(visible.encode("utf-8")).hexdigest()
+
+    assert _text_digest(uia_text) == replacement_digest

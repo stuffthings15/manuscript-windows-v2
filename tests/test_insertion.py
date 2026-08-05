@@ -1209,3 +1209,79 @@ def test_word_title_still_refuses_a_different_document():
     assert not insertion._word_title_names_document("", "Quarterly Report.docx")
     # A bare extension must not match every Word window.
     assert not insertion._word_title_names_document("Budget 2027 - Word", ".docx")
+
+
+class _FakeUser32:
+    """Stands in for user32 so the foreground fallback can be tested off-Windows."""
+
+    def __init__(self, *, succeed_first: bool, foreground: int = 999):
+        self.succeed_first = succeed_first
+        self.foreground = foreground
+        self.set_calls = 0
+        self.attach_calls: list[tuple[int, int, bool]] = []
+        self.brought_to_top = 0
+
+    def SetForegroundWindow(self, handle):  # noqa: N802 - mirrors the Win32 name
+        self.set_calls += 1
+        if self.set_calls == 1:
+            return 1 if self.succeed_first else 0
+        return 1
+
+    def GetForegroundWindow(self):  # noqa: N802
+        return self.foreground
+
+    def GetWindowThreadProcessId(self, handle, _process_id):  # noqa: N802
+        # Distinct thread ids for the foreground window and the target window.
+        return 11 if handle == self.foreground else 22
+
+    def AttachThreadInput(self, source, target, attach):  # noqa: N802
+        self.attach_calls.append((source, target, bool(attach)))
+        return 1
+
+    def BringWindowToTop(self, handle):  # noqa: N802
+        self.brought_to_top += 1
+        return 1
+
+
+def test_foreground_is_taken_without_attaching_when_windows_allows_it():
+    user32 = _FakeUser32(succeed_first=True)
+
+    assert insertion._set_foreground_window(user32, 4242) is True
+    assert user32.attach_calls == []
+    assert user32.brought_to_top == 0
+
+
+def test_foreground_falls_back_to_attaching_input_queues():
+    """Accept in Word died here.
+
+    The HUD is shown without activation, so Manuscript is a background process
+    when Accept runs and Windows refuses the foreground change outright. The
+    replacement aborted with "target window could not be activated" before it
+    reached any COM guard, and the user was told the document was busy.
+    """
+    user32 = _FakeUser32(succeed_first=False)
+
+    assert insertion._set_foreground_window(user32, 4242) is True
+    assert user32.brought_to_top == 1
+    attached = [call for call in user32.attach_calls if call[2]]
+    detached = [call for call in user32.attach_calls if not call[2]]
+    # Both the foreground thread and the target thread are attached...
+    assert {call[1] for call in attached} == {11, 22}
+    # ...and every attachment is released, or Manuscript's message loop would
+    # stay tied to another application's input queue.
+    assert {call[1] for call in attached} == {call[1] for call in detached}
+
+
+def test_foreground_detaches_even_when_the_call_raises():
+    user32 = _FakeUser32(succeed_first=False)
+
+    def explode(handle):
+        raise OSError("BringWindowToTop failed")
+
+    user32.BringWindowToTop = explode
+
+    with pytest.raises(OSError):
+        insertion._set_foreground_window(user32, 4242)
+
+    detached = [call for call in user32.attach_calls if not call[2]]
+    assert {call[1] for call in detached} == {11, 22}

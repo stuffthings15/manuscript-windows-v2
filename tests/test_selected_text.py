@@ -1113,8 +1113,10 @@ def test_restore_candidate_semantics_keeps_reported_dog_object_pronoun():
 
 
 class _Response:
-    def __init__(self, payload):
-        self.payload = payload
+    def __init__(self, payload, *, add_default_model=True):
+        self.payload = dict(payload)
+        if add_default_model and "response" in self.payload:
+            self.payload.setdefault("model", "local-model")
 
     def __enter__(self):
         return self
@@ -1126,11 +1128,104 @@ class _Response:
         return json.dumps(self.payload).encode("utf-8")
 
 
-def test_tone_model_routing_uses_locally_verified_models_only():
-    installed = {"gemma4:12b", "qwen2.5:14b", "qwen3:8b", "qwen3:14b"}
+@pytest.mark.parametrize(
+    "configured",
+    (
+        "gemma4:e2b-it-qat",
+        "gemma4:e4b-it-qat",
+        "gemma4:12b-it-q4_K_M",
+    ),
+)
+def test_tone_model_routing_uses_the_hardware_selected_official_gemma4_candidate(
+    configured,
+):
+    installed = {
+        "gemma4:e2b-it-qat",
+        "gemma4:e4b-it-qat",
+        "gemma4:12b-it-q4_K_M",
+        "qwen3:8b",
+        "qwen3:14b",
+        "custom:latest",
+    }
+
     for command in ("Proofread", "Friendly", "Caveman", "Translate", "Summarize"):
-        assert select_local_tone_model(command, "qwen2.5:3b", installed) == "gemma4:12b"
-    assert select_local_tone_model("Friendly", "custom:latest", {"custom:latest"}) == "custom:latest"
+        assert select_local_tone_model(command, configured, installed) == configured
+
+
+@pytest.mark.parametrize("configured", ("qwen3:8b", "qwen3:14b", "custom:latest", ""))
+def test_tone_model_routing_never_selects_qwen_or_an_unapproved_model(configured):
+    installed = {"qwen3:8b", "qwen3:14b", "custom:latest"}
+
+    assert select_local_tone_model("Proofread", configured, installed) == ""
+
+
+def test_tone_model_routing_does_not_guess_when_hardware_choice_is_automatic():
+    installed = {
+        "gemma4:e2b-it-qat",
+        "gemma4:e4b-it-qat",
+        "gemma4:12b-it-q4_K_M",
+    }
+
+    assert select_local_tone_model("Proofread", "", installed) == ""
+
+
+def test_local_writing_runtime_errors_do_not_expose_a_model_brand(monkeypatch):
+    assistant = LocalWritingAssistant()
+    monkeypatch.setattr(
+        assistant._transport,
+        "get_json",
+        lambda *_args, **_kwargs: {"models": "invalid"},
+    )
+
+    with pytest.raises(RuntimeError) as error:
+        assistant.runtime_status("gemma4:e2b-it-qat")
+
+    assert str(error.value) == "Local AI returned invalid runtime status."
+
+
+def test_local_writing_runtime_rejects_even_small_gpu_spill(monkeypatch):
+    assistant = LocalWritingAssistant()
+    monkeypatch.setattr(
+        assistant._transport,
+        "get_json",
+        lambda *_args, **_kwargs: {
+            "models": [
+                {
+                    "name": "local-model",
+                    "size": 100,
+                    "size_vram": 99,
+                }
+            ]
+        },
+    )
+
+    status = assistant.runtime_status("local-model")
+
+    assert status.backend == "Hybrid"
+
+
+@pytest.mark.parametrize("reported_model", [None, "other-model"])
+def test_local_writing_generation_requires_exact_response_model(
+    monkeypatch,
+    reported_model,
+):
+    payload = {"response": "The draft is ready."}
+    if reported_model is not None:
+        payload["model"] = reported_model
+    monkeypatch.setattr(
+        "echo_link_core.local_transport._open_request",
+        lambda _request, _timeout: _Response(
+            payload,
+            add_default_model=False,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="model identity"):
+        LocalWritingAssistant().run(
+            "the draft are ready",
+            command="Proofread",
+            model="local-model",
+        )
 
 
 @pytest.mark.parametrize(
@@ -1260,8 +1355,10 @@ def test_local_writing_assistant_loads_qwen_and_requires_real_gpu_vram(monkeypat
         body = json.loads(request.data.decode("utf-8"))
         if not body.get("prompt"):
             assert body["options"] == {"num_ctx": 8192}
-            return _Response({"done": True})
-        return _Response({"response": "The draft is ready."})
+            return _Response({"done": True, "model": body["model"]})
+        return _Response(
+            {"response": "The draft is ready.", "model": body["model"]}
+        )
 
     monkeypatch.setattr("echo_link_core.local_transport._open_request", fake_urlopen)
     assistant = LocalWritingAssistant()
@@ -3265,3 +3362,53 @@ def test_final_cleanup_repairs_empathetic_live_residual():
     assert _apply_fast_proofread_rules(
         "This data is useful, but it should be explained it more cautiously."
     ) == "This data is useful, but it should be explained more cautiously."
+
+
+def test_token_rule_is_omitted_when_the_text_has_no_protected_tokens(monkeypatch):
+    """Naming a token system the model cannot see made it invent one.
+
+    Every prompt stated the ECHOLINKTOKEN rule unconditionally. On ordinary
+    prose with nothing to protect, small models answered by writing the word
+    ECHOLINKTOKEN into the correction, and the mismatch check threw the whole
+    answer away - the log read
+    "protected-token mismatch stage=initial expected=() actual=('ECHOLINKTOKEN',)"
+    and the section never produced a correction.
+    """
+    prompts: list[str] = []
+
+    def fake_urlopen(request, timeout):
+        body = json.loads(request.data.decode("utf-8"))
+        prompts.append(body["prompt"])
+        selected = body["prompt"].split("SELECTED TEXT:\n", 1)[1]
+        return _Response({"response": selected})
+
+    monkeypatch.setattr("echo_link_core.local_transport._open_request", fake_urlopen)
+    LocalWritingAssistant().run(
+        "the dog were happy and it ran to the gate",
+        command="Proofread",
+        model="local-model",
+    )
+
+    assert prompts
+    assert "ECHOLINKTOKEN" not in prompts[0]
+
+
+def test_token_rule_is_still_stated_when_a_token_is_present(monkeypatch):
+    prompts: list[str] = []
+
+    def fake_urlopen(request, timeout):
+        body = json.loads(request.data.decode("utf-8"))
+        prompts.append(body["prompt"])
+        selected = body["prompt"].split("SELECTED TEXT:\n", 1)[1]
+        return _Response({"response": selected})
+
+    monkeypatch.setattr("echo_link_core.local_transport._open_request", fake_urlopen)
+    LocalWritingAssistant().run(
+        "Email Jane about the gate.",
+        command="Proofread",
+        model="local-model",
+        protected_terms=("Jane",),
+    )
+
+    assert prompts
+    assert "ECHOLINKTOKEN" in prompts[0]

@@ -89,11 +89,19 @@ def test_v2_checkout_is_an_accepted_build_root() -> None:
     build._assert_canonical_project_root(Path(__file__).parents[1])
 
 
-def test_v2_global_hotkeys_require_explicit_launch_opt_in() -> None:
-    assert build_parser().parse_args([]).enable_global_hotkeys is False
+def test_v2_global_hotkeys_are_on_unless_a_launch_turns_them_off() -> None:
+    """Version 2 owns the global shortcuts now.
+
+    This started as an opt-in rule so a Version 2 checkout could run beside
+    the original Windows tree without the two fighting over the same global
+    hotkeys. That tree is superseded, Version 2 is the product, and a
+    dictation app with its hotkeys off by default is not the product - so the
+    default is on and a launch can still turn them off explicitly.
+    """
+    assert build_parser().parse_args([]).enable_global_hotkeys is True
     assert (
-        build_parser().parse_args(["--enable-global-hotkeys"]).enable_global_hotkeys
-        is True
+        build_parser().parse_args(["--disable-global-hotkeys"]).enable_global_hotkeys
+        is False
     )
 
 

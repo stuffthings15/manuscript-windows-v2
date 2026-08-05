@@ -47,7 +47,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--enable-global-hotkeys",
         action="store_true",
-        help="Enable Version 2 global shortcuts for this run",
+        default=True,
+        help="Enable Version 2 global shortcuts for this run (default)",
+    )
+    parser.add_argument(
+        "--disable-global-hotkeys",
+        action="store_false",
+        dest="enable_global_hotkeys",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument("--diagnostics", action="store_true", help="Print local readiness as JSON")
     parser.add_argument(
