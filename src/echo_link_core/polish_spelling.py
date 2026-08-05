@@ -23,8 +23,7 @@ _APPLICATION_WORDS = frozenset(
     {
         "Manuscript",
         "Ollama",
-        "Qwen",
-        "Qwen3",
+        "Gemma",
         "MiniLM",
         "ONNX",
         "PySide",
@@ -304,6 +303,8 @@ class PolishRuleEngine:
                 continue
             if frequency < 20:
                 continue
+            if not _capitalized_repair_is_safe(word, replacement):
+                continue
             material = (
                 f"symspell\0{match.start()}\0{match.end()}\0"
                 f"{word}\0{replacement}"
@@ -387,12 +388,29 @@ def _should_skip_word(text: str, start: int, word: str) -> bool:
         return True
     if word.isupper() or "-" in word or "'" in word:
         return True
-    # A capitalized token can be a person's or product's name even at the
-    # beginning of a sentence. Let deterministic grammar rules handle their
-    # small locked typo list; never let SymSpell guess at title-case words.
-    if word[:1].isupper():
-        return True
+    # Capitalized words are NOT skipped here. A capitalized token can be a
+    # name, so it used to be refused outright - but that also left every
+    # capitalized typo in place, which a reader sees first: "Ansering these
+    # questions" survived a whole essay, and so did the title "Dogs Makes Grate
+    # Petts". The name protection now happens where the repair is known, in
+    # _capitalized_repair_is_safe, which can tell a respelling from a different
+    # word.
     return False
+
+
+def _capitalized_repair_is_safe(word: str, replacement: str) -> bool:
+    """Whether a capitalized word may be respelled, or is likely a name.
+
+    A name and its near-neighbours differ by a substitution or a plain
+    deletion: "Malik" to "Mali" is a real place and a real person, and guessing
+    between them renames someone. A typo is shaped differently - a letter left
+    out, or a doubled letter collapsed - and those are safe to repair.
+
+    Lowercase words never reach this; they are repaired on the usual rules.
+    """
+    if not word[:1].isupper():
+        return True
+    return _typo_shape_rank(word.casefold(), replacement.casefold()) <= 1
 
 
 def _is_sentence_start(text: str, start: int) -> bool:

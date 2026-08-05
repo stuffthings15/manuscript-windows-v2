@@ -93,3 +93,30 @@ def test_speller_prefers_the_shape_of_the_mistake_over_frequency() -> None:
     # The deleted letter must be half of a doubled pair: "adress" drops a
     # leading "a" to reach "dress", and the unrelated "ss" must not excuse it.
     assert repairs.get("adress") == "address"
+
+
+def test_capitalised_typos_repair_but_names_are_left_alone() -> None:
+    """A capitalised word is not automatically a name.
+
+    Refusing every capitalised word left "Ansering these questions" and the
+    title "Dogs Makes Grate Petts" uncorrected through whole essays - the two
+    places a reader looks first. The protection now turns on the shape of the
+    edit: a name and its neighbour differ by a substitution or a plain
+    deletion, a typo by a missing letter or a collapsed double.
+    """
+    from echo_link_core.polish_spelling import PolishRuleEngine
+
+    engine = PolishRuleEngine()
+
+    def repairs(text: str) -> dict[str, str]:
+        return {
+            text[value.start : value.end]: value.replacement
+            for value in engine.analyze_spelling(text)
+        }
+
+    # Missing letter, and a collapsed double: both repaired.
+    assert repairs("Ansering these questions").get("Ansering") == "Answering"
+    assert repairs("Dogs Makes Grate Petts").get("Petts") == "Pets"
+    assert repairs("Warrsaw is cold").get("Warrsaw") == "Warsaw"
+    # A person is not a country. Plain deletion stays refused.
+    assert "Malik" not in repairs("Malik went home")
