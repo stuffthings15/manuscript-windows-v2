@@ -88,6 +88,7 @@ _STAGED_STYLE_COMMANDS = frozenset(
 # that happens to score well elsewhere. PolishValidator also rejects em dashes
 # and _final_cleanup_candidate strips them first - this is the third layer.
 _ALWAYS_BLOCKING_RESIDUALS = frozenset({"em dash"})
+_FAILED_PACK_TTL_SECONDS = 300.0
 _CRITICAL = re.compile(
     r"```[\s\S]*?```"
     r"|`[^`\r\n]*`"
@@ -205,15 +206,92 @@ _DESCRIBED_ABSENCE = re.compile(
 )
 _ACTOR = re.compile(
     r"\b(?:I|we|you|he|she|they|it|user|users|team|developer|developers|"
-    r"group|groups|organizer|organizers|system|service|application|app|model|server|client|customer|customers)\b",
+    r"group|groups|organizer|organizers|system|service|application|app|model|"
+    r"server|client|customer|customers|administrator|administrators|analyst|"
+    r"analysts|assistant|assistants|caregiver|caregivers|child|children|council|"
+    r"doctor|doctors|employee|employees|engineer|engineers|manager|managers|"
+    r"nurse|nurses|officer|officers|operator|operators|owner|owners|parent|"
+    r"parents|patient|patients|reviewer|reviewers|staff|student|students|"
+    r"supervisor|supervisors|teacher|teachers|technician|technicians|visitor|"
+    r"visitors|worker|workers|writer|writers)\b",
     re.IGNORECASE,
 )
 _ACTOR_FORM = re.compile(
     r"\b(?:i|i'm|me|my|mine|we|we're|us|our|ours|you|you're|your|yours|"
     r"he|he's|him|his|she|she's|her|hers|they|they're|their|theirs|there|"
-    r"it|it's|its|user|users|team|group|groups|organizer|organizers|developer|developers|system|service|"
-    r"application|app|model|server|client|customer|customers)\b",
+    r"it|it's|its|user|users|team|group|groups|organizer|organizers|developer|"
+    r"developers|system|service|application|app|model|server|client|customer|"
+    r"customers|administrator|administrators|analyst|analysts|assistant|"
+    r"assistants|caregiver|caregivers|child|children|council|doctor|doctors|"
+    r"employee|employees|engineer|engineers|manager|managers|nurse|nurses|"
+    r"officer|officers|operator|operators|owner|owners|parent|parents|patient|"
+    r"patients|reviewer|reviewers|staff|student|students|supervisor|supervisors|"
+    r"teacher|teachers|technician|technicians|visitor|visitors|worker|workers|"
+    r"writer|writers)\b",
     re.IGNORECASE,
+)
+
+# These pairs describe explicit state reversals, not ordinary paraphrases.
+# Synonyms on the same side are grouped so "approved" -> "accepted" remains
+# valid, while "approved" -> "rejected" is always refused even when a
+# sentence embedding reports a high similarity score.
+_CONTRADICTORY_STATES = (
+    (
+        "approval state reversed",
+        re.compile(r"\b(?:approv(?:e|es|ed|ing|al)|accept(?:s|ed|ing|ance)?)\b", re.IGNORECASE),
+        re.compile(r"\b(?:reject(?:s|ed|ing|ion)?|den(?:y|ies|ied|ial))\b", re.IGNORECASE),
+    ),
+    (
+        "quantity direction reversed",
+        re.compile(
+            r"\b(?:increase[ds]?|increasing|raise[ds]?|raising|rise[sn]?|rose|"
+            r"grow(?:s|ing)?|grew)\b",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"\b(?:decrease[ds]?|decreasing|reduce[ds]?|reducing|"
+            r"drop(?:s|ped|ping)?|fall(?:s|ing)?|fell)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "open state reversed",
+        re.compile(r"\bopen(?:s|ed|ing)?\b", re.IGNORECASE),
+        re.compile(r"\bclos(?:e|es|ed|ing)\b", re.IGNORECASE),
+    ),
+    (
+        "enabled state reversed",
+        re.compile(r"\benabl(?:e|es|ed|ing)\b", re.IGNORECASE),
+        re.compile(r"\bdisabl(?:e|es|ed|ing)\b", re.IGNORECASE),
+    ),
+    (
+        "active state reversed",
+        re.compile(r"\bactive\b", re.IGNORECASE),
+        re.compile(r"\binactive\b", re.IGNORECASE),
+    ),
+    (
+        "availability reversed",
+        re.compile(r"\bavailable\b", re.IGNORECASE),
+        re.compile(r"\bunavailable\b", re.IGNORECASE),
+    ),
+    (
+        "connection state reversed",
+        re.compile(r"\b(?:online|connected)\b", re.IGNORECASE),
+        re.compile(r"\b(?:offline|disconnected)\b", re.IGNORECASE),
+    ),
+    (
+        "action state reversed",
+        re.compile(
+            r"\b(?:start(?:s|ed|ing)?|resume[ds]?|resuming|continue[ds]?|"
+            r"continuing)\b",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"\b(?:stop(?:s|ped|ping)?|pause[ds]?|pausing|"
+            r"halt(?:s|ed|ing)?)\b",
+            re.IGNORECASE,
+        ),
+    ),
 )
 _REPHRASE_ANCHOR_STOPWORDS = frozenset(
     {
@@ -422,6 +500,146 @@ class _SafeCandidate:
     used_llm: bool
 
 
+@dataclass(slots=True)
+class _RuntimeCascadeState:
+    plan: ExecutionPlan
+    attempted_pack_ids: set[str]
+    failure_kind: RuntimeFailureKind = RuntimeFailureKind.NONE
+    failure_message: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class _FailedPackState:
+    reason: str
+    kind: RuntimeFailureKind
+    failed_at: float
+    sequence: int
+
+
+def _contradiction_failures(source: str, candidate: str) -> tuple[str, ...]:
+    """Return explicit action or state reversals introduced by a candidate."""
+    failures: list[str] = []
+    for label, positive, negative in _CONTRADICTORY_STATES:
+        source_positive = len(positive.findall(source))
+        source_negative = len(negative.findall(source))
+        candidate_positive = len(positive.findall(candidate))
+        candidate_negative = len(negative.findall(candidate))
+        positive_became_negative = (
+            source_positive > candidate_positive
+            and candidate_negative > source_negative
+        )
+        negative_became_positive = (
+            source_negative > candidate_negative
+            and candidate_positive > source_positive
+        )
+        if positive_became_negative or negative_became_positive:
+            failures.append(label)
+    return tuple(failures)
+
+
+def _proportional_semantic_windows(
+    source: str,
+    candidate: str,
+    *,
+    maximum_words: int,
+) -> tuple[tuple[str, str], ...]:
+    """Cover both texts with aligned windows small enough for MiniLM."""
+    source_words = _WORD.findall(source)
+    candidate_words = _WORD.findall(candidate)
+    longest = max(len(source_words), len(candidate_words))
+    count = max(1, (longest + maximum_words - 1) // maximum_words)
+    pairs: list[tuple[str, str]] = []
+    for index in range(count):
+        source_start = index * len(source_words) // count
+        source_end = (index + 1) * len(source_words) // count
+        candidate_start = index * len(candidate_words) // count
+        candidate_end = (index + 1) * len(candidate_words) // count
+        source_window = " ".join(source_words[source_start:source_end])
+        candidate_window = " ".join(candidate_words[candidate_start:candidate_end])
+        if source_window and candidate_window:
+            pairs.append((source_window, candidate_window))
+    return tuple(pairs)
+
+
+def _semantic_validation_windows(
+    source: str,
+    candidate: str,
+    *,
+    maximum_words: int = 96,
+) -> tuple[tuple[str, str], ...]:
+    """Return aligned windows that cover long text beyond encoder truncation.
+
+    Equal sentence counts are aligned on sentence boundaries. If a rewrite
+    splits or joins sentences, proportional word windows still cover the full
+    source and candidate without assuming that the first 256 tokens represent
+    the rest of the passage.
+    """
+    if max(len(_WORD.findall(source)), len(_WORD.findall(candidate))) <= maximum_words:
+        return ()
+    source_sentences = tuple(
+        source[start:end].strip()
+        for start, end in _sentence_spans_for_recovery(source)
+        if source[start:end].strip()
+    )
+    candidate_sentences = tuple(
+        candidate[start:end].strip()
+        for start, end in _sentence_spans_for_recovery(candidate)
+        if candidate[start:end].strip()
+    )
+    if len(source_sentences) != len(candidate_sentences) or not source_sentences:
+        return _proportional_semantic_windows(
+            source,
+            candidate,
+            maximum_words=maximum_words,
+        )
+
+    pairs: list[tuple[str, str]] = []
+    source_group: list[str] = []
+    candidate_group: list[str] = []
+    source_word_count = 0
+    candidate_word_count = 0
+    for source_sentence, candidate_sentence in zip(
+        source_sentences, candidate_sentences
+    ):
+        next_source_count = len(_WORD.findall(source_sentence))
+        next_candidate_count = len(_WORD.findall(candidate_sentence))
+        if (
+            source_group
+            and max(
+                source_word_count + next_source_count,
+                candidate_word_count + next_candidate_count,
+            )
+            > maximum_words
+        ):
+            pairs.append((" ".join(source_group), " ".join(candidate_group)))
+            source_group = []
+            candidate_group = []
+            source_word_count = 0
+            candidate_word_count = 0
+        if max(next_source_count, next_candidate_count) > maximum_words:
+            if source_group:
+                pairs.append((" ".join(source_group), " ".join(candidate_group)))
+                source_group = []
+                candidate_group = []
+                source_word_count = 0
+                candidate_word_count = 0
+            pairs.extend(
+                _proportional_semantic_windows(
+                    source_sentence,
+                    candidate_sentence,
+                    maximum_words=maximum_words,
+                )
+            )
+            continue
+        source_group.append(source_sentence)
+        candidate_group.append(candidate_sentence)
+        source_word_count += next_source_count
+        candidate_word_count += next_candidate_count
+    if source_group:
+        pairs.append((" ".join(source_group), " ".join(candidate_group)))
+    return tuple(pairs)
+
+
 class PolishValidator:
     def __init__(self, classifier: MiniLMPolishClassifier) -> None:
         self.classifier = classifier
@@ -447,10 +665,11 @@ class PolishValidator:
         against the original, wording against what the model saw.
 
         Failures refuse the candidate. Advisories describe it and shape the
-        retry, but do not refuse it - measured against the twenty-essay corpus,
-        treating modal, obligation, ordering and actor drift as refusals threw
-        away 279 of 429 vetoes, most of them fluency rather than meaning.
+        retry, but do not refuse it. Meaning-bearing modal, obligation,
+        ordering, actor, and action-state changes are always failures.
         """
+        if grammar_mode is None:
+            grammar_mode = task is PolishTask.PROOFREAD
         wording_reference = prepared if prepared is not None else source
         failures: list[str] = []
         advisories: list[str] = []
@@ -484,10 +703,9 @@ class PolishValidator:
                 + f"candidate {_negation_count(normalized_candidate)})"
             )
         # A prohibition is meaning: losing "must not" inverts an instruction.
-        # Ordinary modal drift is fluency - a dropped redundant "will", "might"
-        # for "may" - and was the single largest source of refusals at 101 of
-        # 429. Android splits these the same way: PROHIBITION hard, PERMISSION
-        # advisory.
+        # A modal changes certainty, permission, capability, or obligation.
+        # Known safe idioms and equivalences are handled by
+        # _modal_meaning_preserved; everything else is a hard meaning failure.
         if _prohibition_counter(normalized_source) != _prohibition_counter(
             normalized_candidate
         ):
@@ -497,44 +715,21 @@ class PolishValidator:
             normalized_candidate,
             grammar_mode=grammar_mode,
         ):
-            # _modal_meaning_preserved has already forgiven the idioms and
-            # equivalences it knows about, so reaching here means the modals
-            # genuinely moved. Under a negation that is a prohibition being
-            # rewritten into a statement of fact; anywhere else it reads as
-            # rephrasing.
             if _negated_modal_count(normalized_source) != _negated_modal_count(
                 normalized_candidate
             ):
                 failures.append("prohibition changed")
             else:
-                source_modals = _modal_meaning_counter(normalized_source)
-                candidate_modals = _modal_meaning_counter(normalized_candidate)
-                modal_replaced = bool(source_modals - candidate_modals) and bool(
-                    candidate_modals - source_modals
-                )
-                if modal_replaced:
-                    failures.append("modal meaning changed")
-                else:
-                    advisories.append("modal meaning changed")
+                failures.append("modal meaning changed")
         source_obligation = _obligation_counter(normalized_source)
         candidate_obligation = _obligation_counter(normalized_candidate)
         if source_obligation != candidate_obligation:
             label = "obligation strength changed" + _counter_diff_label(
                 source_obligation, candidate_obligation
             )
-            # Inventing a duty the writer never wrote is meaning. Dropping a
-            # modal that a list repeats is the repair Android names
-            # listImperativePreservesObligation, and is correct.
-            permission_added = bool(
-                _modal_meaning_counter(normalized_candidate)
-                - _modal_meaning_counter(normalized_source)
-            )
-            if candidate_obligation - source_obligation or permission_added:
-                failures.append(label)
-            else:
-                advisories.append(label)
+            failures.append(label)
         if _modal_subject_counter(source) != _modal_subject_counter(candidate):
-            advisories.append("modal actor changed")
+            failures.append("modal actor changed")
         if not _ordering_preserved(
             source,
             candidate,
@@ -550,26 +745,7 @@ class PolishValidator:
             label = "date or ordering relationship changed" + (
                 relative_diff or ordering_diff
             )
-            # Trading one connector for another inverts the sequence: "before
-            # deployment" becoming "after deployment" is a different
-            # instruction. Only adding a connector, which is how a run-on gets
-            # broken, is the repair the reader wanted - and was refused 49
-            # times. The dates themselves stay guarded by _critical_values.
-            source_ordering = _ordering_counter(source)
-            candidate_ordering = _ordering_counter(candidate)
-            source_relative = _relative_time_counter(source)
-            candidate_relative = _relative_time_counter(candidate)
-            swapped = (
-                bool(source_ordering - candidate_ordering)
-                and bool(candidate_ordering - source_ordering)
-            ) or (
-                bool(source_relative - candidate_relative)
-                and bool(candidate_relative - source_relative)
-            )
-            if swapped:
-                failures.append(label)
-            else:
-                advisories.append(label)
+            failures.append(label)
         # Preserve every actor family, but allow proofreading to add a missing
         # first/second-person subject ("went" -> "I went"). Swaps, removals,
         # and invented third-person owners still fail.
@@ -588,10 +764,8 @@ class PolishValidator:
                 _actor_counter(_normalize_actor_homophones(source)),
                 _actor_counter(_normalize_actor_homophones(candidate)),
             )
-            if _third_person_actor_invented(source, candidate):
-                failures.append(label)
-            else:
-                advisories.append(label)
+            failures.append(label)
+        failures.extend(_contradiction_failures(source, candidate))
         # _named_entities treats any capitalized run as a name, so a model that
         # correctly splits a run-on "invents" one by capitalizing the new
         # sentence. Checking the word against the text the model was given, in
@@ -611,6 +785,7 @@ class PolishValidator:
             value
             for value in _named_entities(source) - candidate_names
             if not _single_word_present(value, candidate)
+            and not _named_entity_matches_source_phrase(value, candidate)
         }
         if new_names:
             failures.append("new named entity added")
@@ -636,8 +811,20 @@ class PolishValidator:
                 f"semantic similarity {similarity:.3f} is below "
                 f"{similarity_floor:.3f}"
             )
-        if grammar_mode is None:
-            grammar_mode = task is PolishTask.PROOFREAD
+        for index, (source_window, candidate_window) in enumerate(
+            _semantic_validation_windows(source, candidate),
+            start=1,
+        ):
+            window_similarity = self.classifier.semantic_similarity(
+                source_window,
+                candidate_window,
+            )
+            similarity = min(similarity, window_similarity)
+            if window_similarity < similarity_floor:
+                failures.append(
+                    f"semantic similarity window {index} "
+                    f"{window_similarity:.3f} is below {similarity_floor:.3f}"
+                )
         if grammar_mode:
             source_words = max(1, len(_WORD.findall(wording_reference)))
             candidate_words = len(_WORD.findall(candidate))
@@ -669,6 +856,7 @@ class PolishEngine:
         hardware_provider: Callable[[], HardwareSnapshot] | None = None,
         benchmark_cache: PolishBenchmarkCache | None = None,
         preferred_pack_provider: Callable[[], str] | None = None,
+        monotonic: Callable[[], float] | None = None,
     ) -> None:
         self.rules = rules or PolishRuleEngine()
         self.classifier = classifier or MiniLMPolishClassifier()
@@ -679,12 +867,16 @@ class PolishEngine:
         self.hardware_provider = hardware_provider or self._hardware_detector.snapshot
         self.benchmark_cache = benchmark_cache or PolishBenchmarkCache(None)
         self.preferred_pack_provider = preferred_pack_provider or (lambda: "")
+        self._monotonic = monotonic or time.monotonic
         self.validator = PolishValidator(self.classifier)
         self.quality_gate = CorrectionQualityGate()
         self._recent_probe_records: dict[
-            tuple[str, str, str],
+            str,
             tuple[float, BenchmarkRecord],
         ] = {}
+        self._failed_pack_lock = threading.Lock()
+        self._failed_pack_states: dict[str, _FailedPackState] = {}
+        self._failed_pack_sequence = 0
 
     def warm(self) -> dict[str, bool]:
         return {
@@ -717,6 +909,12 @@ class PolishEngine:
             candidate,
         ):
             visibility_failure = "concise rewrite did not reduce word count"
+        if not visibility_failure:
+            visibility_failure = _tone_style_failure(
+                source,
+                candidate,
+                command=command_key,
+            )
         if visibility_failure:
             residual_errors = tuple(
                 dict.fromkeys((*quality.residual_errors, visibility_failure))
@@ -814,13 +1012,30 @@ class PolishEngine:
 
         snapshot = self.hardware_provider()
         catalog, catalog_error = self._catalog()
-        records = self._benchmark_records(snapshot, catalog)
         preferred = self.preferred_pack_provider().strip()
         planning_catalog = catalog
         if not request.download_consent:
             installed_catalog = tuple(pack for pack in catalog if pack.installed)
             if installed_catalog:
                 planning_catalog = installed_catalog
+        failed_pack_ids = self._failed_pack_ids()
+        current_lease = getattr(self.runtime, "lease", lambda: None)()
+        current_pack_id = str(
+            getattr(getattr(current_lease, "plan", None), "pack_id", "") or ""
+        )
+        planning_catalog = tuple(
+            pack
+            for pack in planning_catalog
+            if pack.pack_id not in failed_pack_ids or pack.pack_id == current_pack_id
+        )
+        records = self._benchmark_records(
+            snapshot,
+            planning_catalog,
+            task=request.task,
+            mode=request.mode,
+            classifier=classifier,
+            manual=request.manual,
+        )
         plan = self.policy.plan(
             snapshot,
             request.task,
@@ -831,6 +1046,18 @@ class PolishEngine:
             benchmark_records=records,
             manual=request.manual,
         )
+        prior_failure = self._latest_failed_pack()
+        prior_failure_reason = prior_failure.reason if prior_failure is not None else ""
+        if prior_failure_reason:
+            plan = replace(
+                plan,
+                reason=(
+                    plan.reason
+                    if plan.use_llm
+                    else prior_failure_reason
+                ),
+                downgrade_reason=plan.downgrade_reason or prior_failure_reason,
+            )
         if not plan.use_llm:
             return self._result(
                 request,
@@ -843,31 +1070,68 @@ class PolishEngine:
                 started,
                 message=plan.reason or catalog_error or "Instant correction ready.",
                 deterministic_ms=deterministic.elapsed_ms,
-                runtime_failure_kind=RuntimeFailureKind.MODEL_UNAVAILABLE,
+                runtime_failure_kind=(
+                    prior_failure.kind
+                    if prior_failure is not None
+                    else RuntimeFailureKind.MODEL_UNAVAILABLE
+                ),
             )
 
         _notify_plan(request, plan)
+        attempted_pack_ids = self._failed_pack_ids()
+        attempted_pack_ids.add(plan.pack_id)
+        activation_failure_kind = RuntimeFailureKind.MODEL_UNAVAILABLE
+        selected_pack = next(
+            (item for item in planning_catalog if item.pack_id == plan.pack_id),
+            None,
+        )
+        activation_consent = bool(
+            request.download_consent
+            and selected_pack is not None
+            and not selected_pack.installed
+        )
         try:
-            pack = self.packs.ensure(plan, consent=request.download_consent)
+            pack = self.packs.ensure(plan, consent=activation_consent)
+            if pack.pack_id != plan.pack_id:
+                raise ModelPackSecurityError(
+                    "The installed model pack does not match the selected pack."
+                )
+            plan = replace(plan, model=pack.model, pack_id=pack.pack_id)
+            prepare = getattr(self.runtime, "prepare", None)
+            if callable(prepare):
+                prepared = bool(prepare(plan, consent=activation_consent))
+                if not prepared:
+                    reason = str(
+                        getattr(self.runtime, "last_downgrade_reason", "")
+                    ).strip()
+                    if reason:
+                        plan = replace(
+                            plan,
+                            downgrade_reason=(
+                                "Bundled local AI runtime unavailable. Using the "
+                                "compatibility runtime."
+                            )[:300],
+                        )
+            accepted_plan = self._accept_plan(
+                plan,
+                snapshot,
+                pack,
+                allow_installed_fallback=False,
+            )
         except ModelPackConsentRequired as exc:
-            fallback = replace(
+            # Missing consent is a user choice, not a broken pack. Keep the
+            # exact candidate eligible so approving it later works without an
+            # app restart or a five-minute poison delay.
+            activation_failure_kind = RuntimeFailureKind.MODEL_UNAVAILABLE
+            accepted_plan = replace(
                 plan,
                 use_llm=False,
+                pack_id="",
+                model="",
                 backend=RuntimeBackend.RULES,
-                downgrade_reason=str(exc),
-            )
-            return self._result(
-                request,
-                normalized,
-                deterministic.text,
-                _safe_fallback_text(request, normalized, deterministic.text),
-                classifier,
-                fallback,
-                ValidationResult(False, 1.0, ("full AI correction did not run",)),
-                started,
-                message=str(exc),
-                deterministic_ms=deterministic.elapsed_ms,
-                runtime_failure_kind=RuntimeFailureKind.MODEL_UNAVAILABLE,
+                standby_model="",
+                requires_probe=False,
+                downgrade_reason=str(exc)[:300],
             )
         except (
             ModelPackDownloadError,
@@ -877,45 +1141,50 @@ class PolishEngine:
             RuntimeError,
             ValueError,
         ) as exc:
-            fallback = replace(
+            if _is_cancellation_error(exc):
+                raise
+            activation_failure_kind = _runtime_failure_kind(exc, loading=True)
+            self._remember_failed_pack(
+                plan.pack_id,
+                str(exc),
+                kind=activation_failure_kind,
+            )
+            accepted_plan = replace(
                 plan,
                 use_llm=False,
+                pack_id="",
+                model="",
                 backend=RuntimeBackend.RULES,
+                standby_model="",
+                requires_probe=False,
                 downgrade_reason=str(exc)[:300],
             )
-            return self._result(
-                request,
-                normalized,
-                deterministic.text,
-                _safe_fallback_text(request, normalized, deterministic.text),
-                classifier,
-                fallback,
-                ValidationResult(False, 1.0, ("full AI correction did not run",)),
-                started,
-                message=f"Local AI unavailable. {exc}",
-                deterministic_ms=deterministic.elapsed_ms,
-                runtime_failure_kind=_runtime_failure_kind(exc, loading=True),
-            )
 
-        plan = replace(plan, model=pack.model, pack_id=pack.pack_id)
-        prepare = getattr(self.runtime, "prepare", None)
-        if callable(prepare):
-            prepared = bool(prepare(plan, consent=request.download_consent))
-            if not prepared:
-                reason = str(
-                    getattr(self.runtime, "last_downgrade_reason", "")
-                ).strip()
-                if reason:
-                    plan = replace(
-                        plan,
-                        downgrade_reason=(
-                            "Bundled llama.cpp unavailable; using the local "
-                            f"Ollama rollback. {reason}"
-                        )[:300],
-                    )
-        accepted_plan = self._accept_plan(plan, snapshot, pack)
+        if not accepted_plan.use_llm:
+            rejected_activation_plan = replace(
+                plan,
+                downgrade_reason=(
+                    accepted_plan.downgrade_reason
+                    or plan.downgrade_reason
+                ),
+            )
+            accepted_plan = self._accept_smaller_plan(
+                request=request,
+                classifier=classifier,
+                snapshot=snapshot,
+                rejected_plan=rejected_activation_plan,
+                attempted_pack_ids=attempted_pack_ids,
+            )
         _notify_plan(request, accepted_plan)
         if not accepted_plan.use_llm:
+            terminal_message = (
+                accepted_plan.downgrade_reason
+                or "No installed local AI pack completed activation."
+            )
+            activation_failure_kind = _runtime_failure_kind(
+                RuntimeError(terminal_message),
+                loading=True,
+            )
             return self._result(
                 request,
                 normalized,
@@ -925,11 +1194,15 @@ class PolishEngine:
                 accepted_plan,
                 ValidationResult(False, 1.0, ("full AI correction did not run",)),
                 started,
-                message=accepted_plan.downgrade_reason,
+                message=terminal_message,
                 deterministic_ms=deterministic.elapsed_ms,
-                runtime_failure_kind=RuntimeFailureKind.MODEL_UNAVAILABLE,
+                runtime_failure_kind=activation_failure_kind,
             )
 
+        cascade_state = _RuntimeCascadeState(
+            plan=accepted_plan,
+            attempted_pack_ids=attempted_pack_ids,
+        )
         instruction = _generation_instruction(request, classifier)
         generated_protected_terms = tuple(
             dict.fromkeys(
@@ -1073,50 +1346,91 @@ class PolishEngine:
                         + name_inventory
                         + "."
                     )
-            try:
-                generation = self.runtime.generate(
-                    GenerationRequest(
-                        text=generation_input,
-                        command=request.command,
-                        profile=request.profile,
-                        instruction=instruction + retry_note,
-                        language=request.language,
-                        protected_terms=attempt_protected_terms,
-                        plan=accepted_plan,
+            generation = None
+            while generation is None:
+                try:
+                    generation = self.runtime.generate(
+                        GenerationRequest(
+                            text=generation_input,
+                            command=request.command,
+                            profile=request.profile,
+                            instruction=instruction + retry_note,
+                            language=request.language,
+                            protected_terms=attempt_protected_terms,
+                            plan=accepted_plan,
+                        )
                     )
-                )
-            except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
-                if attempt > 0 or _recoverable_generation_error(exc):
-                    validation = ValidationResult(
-                        False,
-                        validation.semantic_similarity,
-                        (
-                            *validation.failures,
-                            f"retry runtime failed: {exc}",
+                except (
+                    AttributeError,
+                    OSError,
+                    RuntimeError,
+                    TypeError,
+                    ValueError,
+                ) as exc:
+                    if _is_cancellation_error(exc):
+                        raise
+
+                    # Acceptance proves only the short probe. A later load,
+                    # GPU-residency, or generation timeout can still fail.
+                    # Reject this pack for the rest of this request and try
+                    # each smaller signed Gemma pack once under the consent
+                    # already attached to the request.
+                    failed_plan = accepted_plan
+                    next_plan = self._fallback_after_runtime_failure(
+                        request=request,
+                        classifier=classifier,
+                        snapshot=snapshot,
+                        state=cascade_state,
+                        error=exc,
+                    )
+                    _notify_plan(request, next_plan)
+                    if next_plan.use_llm:
+                        accepted_plan = next_plan
+                        continue
+                    if _recoverable_generation_error(exc):
+                        # No smaller installed pack was eligible. Keep the
+                        # validation-style failure available to the segmented
+                        # recovery pass instead of pretending the rules result
+                        # was an AI correction.
+                        cascade_state.plan = failed_plan
+                        accepted_plan = failed_plan
+                        validation = ValidationResult(
+                            False,
+                            validation.semantic_similarity,
+                            (
+                                *validation.failures,
+                                f"retry runtime failed: {exc}",
+                            ),
+                        )
+                        retries = attempt + 1
+                        break
+                    return self._result(
+                        request,
+                        normalized,
+                        deterministic.text,
+                        _safe_fallback_text(
+                            request,
+                            normalized,
+                            deterministic.text,
                         ),
+                        classifier,
+                        next_plan,
+                        ValidationResult(
+                            False,
+                            1.0,
+                            ("full AI correction did not run",),
+                        ),
+                        started,
+                        message=(
+                            "Local AI stopped safely. "
+                            f"{cascade_state.failure_message}"
+                        ),
+                        deterministic_ms=deterministic.elapsed_ms,
+                        generation_seconds=generation_seconds,
+                        runtime_failure_kind=cascade_state.failure_kind,
                     )
-                    retries = attempt + 1
-                    break
-                fallback = replace(
-                    accepted_plan,
-                    use_llm=False,
-                    backend=RuntimeBackend.RULES,
-                    downgrade_reason=str(exc)[:300],
-                )
-                return self._result(
-                    request,
-                    normalized,
-                    deterministic.text,
-                    _safe_fallback_text(request, normalized, deterministic.text),
-                    classifier,
-                    fallback,
-                    ValidationResult(False, 1.0, ("full AI correction did not run",)),
-                    started,
-                    message=f"Local AI stopped safely. {exc}",
-                    deterministic_ms=deterministic.elapsed_ms,
-                    generation_seconds=generation_seconds,
-                    runtime_failure_kind=_runtime_failure_kind(exc),
-                )
+            if generation is None:
+                break
             generation_seconds += generation.elapsed_seconds
             cold_load_seconds += generation.cold_load_seconds
             candidate = _final_cleanup_candidate(
@@ -1216,7 +1530,7 @@ class PolishEngine:
                                 residual_errors=fallback_quality.residual_errors,
                                 tone_verified=fallback_quality.tone_verified,
                                 quality_score=fallback_quality.score,
-                                used_llm=True,
+                                used_llm=False,
                             )
                         )
                         used_safe_tone_fallback = True
@@ -1266,6 +1580,7 @@ class PolishEngine:
             retries = attempt + 1
 
         accepted = validation.accepted and quality.complete
+        accepted_used_llm = accepted and not used_safe_tone_fallback
         if (
             not accepted
             and request.manual
@@ -1280,8 +1595,12 @@ class PolishEngine:
                     plan=accepted_plan,
                     instruction=instruction,
                     safe_candidates=safe_candidates,
+                    classifier=classifier,
+                    snapshot=snapshot,
+                    cascade_state=cascade_state,
                 )
             )
+            accepted_plan = cascade_state.plan
             retries += recovery_calls
             generation_seconds += recovery_generation
             cold_load_seconds += recovery_load
@@ -1298,6 +1617,7 @@ class PolishEngine:
                         command=request.command,
                     )
                     accepted = True
+                    accepted_used_llm = recovery.used_llm
 
         if accepted:
             final_text = candidate
@@ -1310,8 +1630,13 @@ class PolishEngine:
                 message = f"Local AI plus safe {request.command} rewrite ready."
             else:
                 message = f"{accepted_plan.status_label} {ready_kind} ready."
-            used_llm = True
-            rejected_llm = used_safe_tone_fallback
+            used_llm = accepted_used_llm
+            rejected_llm = used_safe_tone_fallback or not used_llm
+            if not used_llm:
+                message = (
+                    "AI output was rejected. The deterministic repair is not "
+                    "ready for review."
+                )
         elif safe_candidates:
             best = max(safe_candidates, key=_safe_candidate_rank)
             final_text = best.text
@@ -1334,23 +1659,43 @@ class PolishEngine:
                 accepted = True
                 quality = best_quality
                 rejected_llm = False
-                ready_kind = (
-                    "correction"
-                    if request.command.strip().casefold() == "proofread"
-                    else "rewrite"
-                )
-                message = f"{accepted_plan.status_label} {ready_kind} ready."
+                if best_quality.complete:
+                    ready_kind = (
+                        "correction"
+                        if request.command.strip().casefold() == "proofread"
+                        else "rewrite"
+                    )
+                    message = f"{accepted_plan.status_label} {ready_kind} ready."
+                else:
+                    message = (
+                        "AI quality repair was incomplete. "
+                        "Not ready for review."
+                    )
             else:
                 rejected_llm = True
                 message = (
-                    "Best safe correction ready for review. "
-                    "AI quality repair was incomplete."
+                    "AI quality repair was incomplete. "
+                    "Not ready for review."
                 )
         else:
             final_text = _safe_fallback_text(
                 request,
                 normalized,
                 deterministic.text,
+            )
+            validation = self.validator.validate(
+                normalized,
+                final_text,
+                task=request.task,
+                grammar_mode=request.command.strip().casefold() == "proofread",
+                protected_terms=request.protected_terms,
+                prepared=deterministic.text,
+            )
+            validation = _validate_rephrase_actions(
+                validation,
+                normalized,
+                final_text,
+                command=request.command,
             )
             used_llm = False
             rejected_llm = True
@@ -1363,6 +1708,20 @@ class PolishEngine:
                 "AI correction was not accepted. Every spelling, agreement "
                 "and punctuation repair is applied."
             )
+        terminal_runtime_kind = RuntimeFailureKind.NONE
+        if not used_llm and cascade_state.failure_kind is not RuntimeFailureKind.NONE:
+            terminal_runtime_kind = cascade_state.failure_kind
+            # A rejected answer is not a stopped correction. Saying "stopped
+            # safely: validation failed: modal meaning changed" reads as a
+            # breakage and names an internal guard, when what actually
+            # happened is that the rules repair stands. Keep the reader-facing
+            # wording set above for that case; real runtime faults - no model,
+            # no GPU, a dead connection - still say they stopped.
+            if terminal_runtime_kind is not RuntimeFailureKind.VALIDATION_FAILURE:
+                message = (
+                    "Correction stopped safely. "
+                    f"{cascade_state.failure_message}"
+                )
         return self._result(
             request,
             normalized,
@@ -1379,6 +1738,7 @@ class PolishEngine:
             deterministic_ms=deterministic.elapsed_ms,
             generation_seconds=generation_seconds,
             cold_load_seconds=cold_load_seconds,
+            runtime_failure_kind=terminal_runtime_kind,
         )
 
     def _recover_failed_generation(
@@ -1390,9 +1750,23 @@ class PolishEngine:
         plan: ExecutionPlan,
         instruction: str,
         safe_candidates: list[_SafeCandidate],
+        classifier: ClassifierDecision | None = None,
+        snapshot: HardwareSnapshot | None = None,
+        cascade_state: _RuntimeCascadeState | None = None,
     ) -> tuple[_SafeCandidate | None, int, float, float]:
         """Repair a failed section in smaller, independently checked pieces."""
-        if request.command.strip().casefold() == "concise" and safe_candidates:
+        if cascade_state is None:
+            cascade_state = _RuntimeCascadeState(
+                plan=plan,
+                attempted_pack_ids={plan.pack_id},
+            )
+        plan = cascade_state.plan
+        deterministic_recovery: _SafeCandidate | None = None
+        if (
+            request.command.strip().casefold() == "concise"
+            and safe_candidates
+            and cascade_state.failure_kind is RuntimeFailureKind.NONE
+        ):
             best = max(safe_candidates, key=_safe_candidate_rank)
             compact = _apply_safe_concise_reductions(best.text)
             compact_quality = self._evaluate_quality(
@@ -1448,18 +1822,13 @@ class PolishEngine:
                 command=request.command,
             )
             if compact_validation.accepted and compact_quality.complete:
-                return (
-                    _SafeCandidate(
-                        text=compact,
-                        validation=compact_validation,
-                        residual_errors=compact_quality.residual_errors,
-                        tone_verified=compact_quality.tone_verified,
-                        quality_score=compact_quality.score,
-                        used_llm=False,
-                    ),
-                    0,
-                    0.0,
-                    0.0,
+                deterministic_recovery = _SafeCandidate(
+                    text=compact,
+                    validation=compact_validation,
+                    residual_errors=compact_quality.residual_errors,
+                    tone_verified=compact_quality.tone_verified,
+                    quality_score=compact_quality.score,
+                    used_llm=False,
                 )
         if request.command.strip().casefold() == "proofread":
             repaired = _final_cleanup_candidate("Proofread", deterministic)
@@ -1476,22 +1845,17 @@ class PolishEngine:
                 protected_terms=request.protected_terms,
             )
             if repaired_validation.accepted and repaired_quality.complete:
-                return (
-                    _SafeCandidate(
-                        text=repaired,
-                        validation=repaired_validation,
-                        residual_errors=repaired_quality.residual_errors,
-                        tone_verified=repaired_quality.tone_verified,
-                        quality_score=repaired_quality.score,
-                        used_llm=False,
-                    ),
-                    0,
-                    0.0,
-                    0.0,
+                deterministic_recovery = _SafeCandidate(
+                    text=repaired,
+                    validation=repaired_validation,
+                    residual_errors=repaired_quality.residual_errors,
+                    tone_verified=repaired_quality.tone_verified,
+                    quality_score=repaired_quality.score,
+                    used_llm=False,
                 )
         spans = _sentence_spans_for_recovery(normalized)
         if not spans:
-            return None, 0, 0.0, 0.0
+            return deterministic_recovery, 0, 0.0, 0.0
 
         single_seed = deterministic
         if len(spans) == 1 and safe_candidates:
@@ -1641,31 +2005,53 @@ class PolishEngine:
                 + actor_rule
                 + negation_rule
             )
-            calls += 1
-            try:
-                generation = self.runtime.generate(
-                    GenerationRequest(
-                        text=seed,
-                        command=request.command,
-                        profile=request.profile,
-                        instruction=recovery_instruction,
-                        language=request.language,
-                        protected_terms=segment_terms,
-                        plan=plan,
+            generation = None
+            while generation is None and plan.use_llm:
+                calls += 1
+                try:
+                    generation = self.runtime.generate(
+                        GenerationRequest(
+                            text=seed,
+                            command=request.command,
+                            profile=request.profile,
+                            instruction=recovery_instruction,
+                            language=request.language,
+                            protected_terms=segment_terms,
+                            plan=plan,
+                        )
                     )
-                )
-            except (
-                AttributeError,
-                IndexError,
-                OSError,
-                RuntimeError,
-                TypeError,
-                ValueError,
-            ):
+                except (
+                    AttributeError,
+                    IndexError,
+                    OSError,
+                    RuntimeError,
+                    TypeError,
+                    ValueError,
+                ) as exc:
+                    if _is_cancellation_error(exc):
+                        raise
+                    if classifier is not None and snapshot is not None:
+                        plan = self._fallback_after_runtime_failure(
+                            request=request,
+                            classifier=classifier,
+                            snapshot=snapshot,
+                            state=cascade_state,
+                            error=exc,
+                        )
+                        _notify_plan(request, plan)
+                        if plan.use_llm:
+                            continue
+                    break
+            if generation is None:
                 if can_keep_seed:
                     selected_parts.append((start, end, seed_candidate))
                     continue
-                return None, calls, generation_seconds, cold_load_seconds
+                return (
+                    deterministic_recovery,
+                    calls,
+                    generation_seconds,
+                    cold_load_seconds,
+                )
 
             generation_seconds += generation.elapsed_seconds
             cold_load_seconds += generation.cold_load_seconds
@@ -1707,10 +2093,67 @@ class PolishEngine:
                 command=request.command,
             )
             if not generated_validation.accepted or not generated_quality.complete:
+                if classifier is not None and snapshot is not None:
+                    failure_details = tuple(
+                        dict.fromkeys(
+                            (
+                                *generated_validation.failures,
+                                *(
+                                    f"residual {value}"
+                                    for value in generated_quality.residual_errors
+                                ),
+                                *(
+                                    ()
+                                    if generated_quality.tone_verified
+                                    else ("tone contract failed",)
+                                ),
+                            )
+                        )
+                    )
+                    plan = self._fallback_after_runtime_failure(
+                        request=request,
+                        classifier=classifier,
+                        snapshot=snapshot,
+                        state=cascade_state,
+                        error=RuntimeError(
+                            "validation failed: "
+                            + (
+                                "; ".join(failure_details)
+                                or "Local writing model returned incomplete text"
+                            )
+                        ),
+                    )
+                    _notify_plan(request, plan)
+                    if plan.use_llm:
+                        nested, nested_calls, nested_generation, nested_load = (
+                            self._recover_failed_generation(
+                                request=replace(request, text=source),
+                                normalized=source,
+                                deterministic=seed,
+                                plan=plan,
+                                instruction=instruction,
+                                safe_candidates=[],
+                                classifier=classifier,
+                                snapshot=snapshot,
+                                cascade_state=cascade_state,
+                            )
+                        )
+                        calls += nested_calls
+                        generation_seconds += nested_generation
+                        cold_load_seconds += nested_load
+                        plan = cascade_state.plan
+                        if nested is not None:
+                            selected_parts.append((start, end, nested))
+                            continue
                 if can_keep_seed:
                     selected_parts.append((start, end, seed_candidate))
                     continue
-                return None, calls, generation_seconds, cold_load_seconds
+                return (
+                    deterministic_recovery,
+                    calls,
+                    generation_seconds,
+                    cold_load_seconds,
+                )
             selected_parts.append(
                 (
                     start,
@@ -1726,14 +2169,27 @@ class PolishEngine:
                 )
             )
 
-        selected_used_llm = any(
-            value.used_llm for _, _, value in selected_parts
+        all_parts_ai_backed = bool(selected_parts) and (
+            len(selected_parts) == len(spans)
+            and all(value.used_llm for _, _, value in selected_parts)
         )
-        safe_concise_recovery = (
-            request.command.strip().casefold() == "concise"
-        )
-        if not selected_used_llm and not safe_concise_recovery:
-            return None, calls, generation_seconds, cold_load_seconds
+        if not all_parts_ai_backed:
+            if deterministic_recovery is not None:
+                return (
+                    deterministic_recovery,
+                    calls,
+                    generation_seconds,
+                    cold_load_seconds,
+                )
+            any_part_ai_backed = any(
+                value.used_llm for _, _, value in selected_parts
+            )
+            all_deterministic_concise = (
+                not any_part_ai_backed
+                and request.command.strip().casefold() == "concise"
+            )
+            if not all_deterministic_concise:
+                return None, calls, generation_seconds, cold_load_seconds
 
         pieces: list[str] = []
         cursor = 0
@@ -1757,12 +2213,24 @@ class PolishEngine:
             command=request.command,
         )
         if not recovered_validation.accepted:
-            return None, calls, generation_seconds, cold_load_seconds
+            return (
+                deterministic_recovery,
+                calls,
+                generation_seconds,
+                cold_load_seconds,
+            )
         recovered_quality = self._evaluate_quality(
             normalized,
             recovered_text,
             command=request.command,
         )
+        if not recovered_quality.complete:
+            return (
+                deterministic_recovery,
+                calls,
+                generation_seconds,
+                cold_load_seconds,
+            )
         return (
             _SafeCandidate(
                 text=recovered_text,
@@ -1770,7 +2238,7 @@ class PolishEngine:
                 residual_errors=recovered_quality.residual_errors,
                 tone_verified=recovered_quality.tone_verified,
                 quality_score=recovered_quality.score,
-                used_llm=selected_used_llm or safe_concise_recovery,
+                used_llm=all_parts_ai_backed,
             ),
             calls,
             generation_seconds,
@@ -1783,17 +2251,91 @@ class PolishEngine:
         except (ModelPackSecurityError, OSError, RuntimeError, ValueError) as exc:
             return (), str(exc)
 
+    def _remember_failed_pack(
+        self,
+        pack_id: str,
+        reason: str,
+        *,
+        kind: RuntimeFailureKind | None = None,
+        loading: bool = False,
+    ) -> None:
+        pack_id = str(pack_id or "").strip()
+        if not pack_id:
+            return
+        safe_reason = str(reason or "Local AI pack failed.").strip()[:300]
+        failure_kind = kind or _runtime_failure_kind(
+            RuntimeError(safe_reason),
+            loading=loading,
+        )
+        failed_at = self._monotonic()
+        with self._failed_pack_lock:
+            self._failed_pack_sequence += 1
+            self._failed_pack_states[pack_id] = _FailedPackState(
+                reason=safe_reason,
+                kind=failure_kind,
+                failed_at=failed_at,
+                sequence=self._failed_pack_sequence,
+            )
+
+    def _prune_failed_packs_locked(self, now: float) -> None:
+        expired = tuple(
+            pack_id
+            for pack_id, state in self._failed_pack_states.items()
+            if now - state.failed_at >= _FAILED_PACK_TTL_SECONDS
+        )
+        for pack_id in expired:
+            self._failed_pack_states.pop(pack_id, None)
+
+    def _failed_pack_ids(self) -> set[str]:
+        now = self._monotonic()
+        with self._failed_pack_lock:
+            self._prune_failed_packs_locked(now)
+            return set(self._failed_pack_states)
+
+    def _latest_failed_pack(self) -> _FailedPackState | None:
+        now = self._monotonic()
+        with self._failed_pack_lock:
+            self._prune_failed_packs_locked(now)
+            return max(
+                self._failed_pack_states.values(),
+                key=lambda state: (state.failed_at, state.sequence),
+                default=None,
+            )
+
+    def _failed_pack_reason(self) -> str:
+        state = self._latest_failed_pack()
+        return state.reason if state is not None else ""
+
     def _benchmark_records(
         self,
         snapshot: HardwareSnapshot,
         packs: Iterable[PolishModelPack],
+        *,
+        task: PolishTask,
+        mode: PolishMode,
+        classifier: ClassifierDecision,
+        manual: bool,
     ) -> dict[str, BenchmarkRecord]:
         records: dict[str, BenchmarkRecord] = {}
         for pack in packs:
+            candidate_plan = self.policy.plan(
+                snapshot,
+                task,
+                mode,
+                classifier=classifier,
+                packs=(pack,),
+                manual=manual,
+            )
+            if (
+                not candidate_plan.use_llm
+                or candidate_plan.pack_id != pack.pack_id
+            ):
+                continue
             key = self.benchmark_cache.key(
                 snapshot,
                 runtime_id=self.runtime.runtime_id,
                 pack=pack,
+                plan=candidate_plan,
             )
             value = self.benchmark_cache.get(key)
             if value is not None:
@@ -1805,24 +2347,37 @@ class PolishEngine:
         plan: ExecutionPlan,
         snapshot: HardwareSnapshot,
         pack: PolishModelPack,
+        *,
+        allow_installed_fallback: bool = True,
     ) -> ExecutionPlan:
+        is_current = getattr(self.runtime, "is_current", None)
+        if callable(is_current) and is_current(
+            pack.pack_id,
+            plan.model,
+            plan.policy_version,
+            require_loaded=True,
+        ):
+            # A verified warm lease remains valid across every document
+            # section. Content validation failure must not force another
+            # hardware probe or poison the model for later sections.
+            return replace(plan, requires_probe=False)
         key = self.benchmark_cache.key(
             snapshot,
             runtime_id=self.runtime.runtime_id,
             pack=pack,
+            plan=plan,
         )
         record = self.benchmark_cache.get(key)
-        recent_key = (
-            self.runtime.runtime_id,
-            snapshot.gpu_name.casefold(),
-            pack.pack_id,
-        )
+        # The short-lived cache uses the same full identity as persistence.
+        # Driver, CPU, RAM, pack version/digest, mode, latency, backend, and
+        # full-GPU requirements must all match.
+        recent_key = key
         recent = self._recent_probe_records.get(recent_key)
         if (
             record is None
             and recent is not None
             and snapshot.driver_healthy
-            and time.monotonic() - recent[0] <= 300.0
+            and self._monotonic() - recent[0] <= 300.0
         ):
             record = recent[1]
         if record is None:
@@ -1838,8 +2393,29 @@ class PolishEngine:
             )
             self.benchmark_cache.put(key, record)
         if record.accepted:
-            self._recent_probe_records[recent_key] = (time.monotonic(), record)
+            self._recent_probe_records[recent_key] = (self._monotonic(), record)
             return replace(plan, requires_probe=False)
+
+        failure_reason = (
+            "Selected local AI failed its local acceptance probe: "
+            f"{record.reason or 'correctness or latency gate failed'}"
+        )
+        self._remember_failed_pack(
+            pack.pack_id,
+            failure_reason,
+            kind=RuntimeFailureKind.VALIDATION_FAILURE,
+        )
+        if not allow_installed_fallback:
+            return replace(
+                plan,
+                use_llm=False,
+                pack_id="",
+                model="",
+                backend=RuntimeBackend.RULES,
+                standby_model="",
+                requires_probe=False,
+                downgrade_reason=failure_reason,
+            )
 
         # Try only already installed smaller packs. Never surprise the user
         # with a second multi-gigabyte download after a failed probe.
@@ -1847,38 +2423,289 @@ class PolishEngine:
         installed = tuple(
             value
             for value in catalog
-            if value.installed and value.pack_id != pack.pack_id
+            if value.installed
+            and value.pack_id != pack.pack_id
+            and value.size_bytes < pack.size_bytes
         )
-        records = self._benchmark_records(snapshot, installed)
+        fallback_classifier = ClassifierDecision(
+            needs_llm=True,
+            error_categories=("probe-fallback",),
+            severity=1.0,
+            context_scope=_scope_for_plan(plan),
+            english_confidence=1.0,
+            backend="probe-fallback",
+            elapsed_ms=0.0,
+        )
+        records = self._benchmark_records(
+            snapshot,
+            installed,
+            task=plan.task,
+            mode=plan.mode,
+            classifier=fallback_classifier,
+            manual=True,
+        )
         records[pack.pack_id] = record
         fallback = self.policy.plan(
             snapshot,
             plan.task,
             plan.mode,
-            classifier=ClassifierDecision(
-                needs_llm=True,
-                error_categories=("probe-fallback",),
-                severity=1.0,
-                context_scope=_scope_for_plan(plan),
-                english_confidence=1.0,
-                backend="probe-fallback",
-                elapsed_ms=0.0,
-            ),
+            classifier=fallback_classifier,
             packs=installed,
             benchmark_records=records,
         )
         if fallback.use_llm:
+            if _backend_placement_rank(fallback.backend) < _backend_placement_rank(
+                plan.backend
+            ):
+                return replace(
+                    fallback,
+                    use_llm=False,
+                    pack_id="",
+                    model="",
+                    backend=RuntimeBackend.RULES,
+                    standby_model="",
+                    requires_probe=False,
+                    downgrade_reason=failure_reason,
+                )
             fallback_pack = next(
                 value for value in installed if value.pack_id == fallback.pack_id
             )
             return self._accept_plan(fallback, snapshot, fallback_pack)
         return replace(
             fallback,
-            downgrade_reason=(
-                f"{pack.display_name} failed its local acceptance probe: "
-                f"{record.reason or 'correctness or latency gate failed'}"
-            ),
+            downgrade_reason=failure_reason,
         )
+
+    def _accept_smaller_plan(
+        self,
+        *,
+        request: CorrectionRequest,
+        classifier: ClassifierDecision,
+        snapshot: HardwareSnapshot,
+        rejected_plan: ExecutionPlan,
+        attempted_pack_ids: set[str],
+    ) -> ExecutionPlan:
+        """Prepare and probe each smaller eligible pack once.
+
+        Fallbacks must already be installed. Consent for the primary pack never
+        authorizes another multi-gigabyte download. Every installed candidate
+        is ensured and prepared before its acceptance probe, and a failed pack
+        is never selected again during this engine run.
+        """
+
+        full_catalog, _ = self._catalog()
+        rejected_pack = next(
+            (
+                pack
+                for pack in full_catalog
+                if pack.pack_id == rejected_plan.pack_id
+            ),
+            None,
+        )
+        catalog = tuple(pack for pack in full_catalog if pack.installed)
+        failure_reason = (
+            rejected_plan.downgrade_reason
+            or rejected_plan.reason
+            or "Local AI pack failed."
+        )
+        terminal = replace(
+            rejected_plan,
+            use_llm=False,
+            pack_id="",
+            model="",
+            backend=RuntimeBackend.RULES,
+            standby_model="",
+            requires_probe=False,
+            downgrade_reason=failure_reason[:300],
+        )
+        if not rejected_plan.use_llm or rejected_pack is None:
+            return terminal
+        size_ceiling = rejected_pack.size_bytes
+        minimum_placement = _backend_placement_rank(rejected_plan.backend)
+        # The caller owns this per-request set. Mutating it guarantees that a
+        # later generation failure cannot retry a pack that already failed its
+        # install, preparation, or acceptance step in this request.
+        attempted = attempted_pack_ids
+        attempted.update(self._failed_pack_ids())
+
+        # The signed catalog is finite. The bound also protects custom pack
+        # providers from returning the same candidate forever.
+        for _ in range(len(catalog)):
+            candidates = tuple(
+                pack
+                for pack in catalog
+                if pack.pack_id not in attempted
+                and pack.size_bytes < size_ceiling
+            )
+            if not candidates:
+                break
+            records = self._benchmark_records(
+                snapshot,
+                candidates,
+                task=request.task,
+                mode=request.mode,
+                classifier=classifier,
+                manual=request.manual,
+            )
+            next_plan = self.policy.plan(
+                snapshot,
+                request.task,
+                request.mode,
+                classifier=classifier,
+                packs=candidates,
+                benchmark_records=records,
+                manual=request.manual,
+            )
+            if not next_plan.use_llm or next_plan.pack_id in attempted:
+                break
+
+            selected_pack = next(
+                (
+                    pack
+                    for pack in candidates
+                    if pack.pack_id == next_plan.pack_id
+                ),
+                None,
+            )
+            if selected_pack is None:
+                break
+            attempted.add(next_plan.pack_id)
+            size_ceiling = selected_pack.size_bytes
+            if _backend_placement_rank(next_plan.backend) < minimum_placement:
+                continue
+            _notify_plan(request, next_plan)
+            try:
+                pack = self.packs.ensure(
+                    next_plan,
+                    consent=False,
+                )
+                if pack.pack_id != next_plan.pack_id:
+                    raise ModelPackSecurityError(
+                        "The installed model pack does not match the selected pack."
+                    )
+                next_plan = replace(
+                    next_plan,
+                    model=pack.model,
+                    pack_id=pack.pack_id,
+                )
+                prepare = getattr(self.runtime, "prepare", None)
+                if callable(prepare):
+                    prepared = bool(
+                        prepare(
+                            next_plan,
+                            consent=False,
+                        )
+                    )
+                    if not prepared:
+                        reason = str(
+                            getattr(self.runtime, "last_downgrade_reason", "")
+                        ).strip()
+                        if reason:
+                            next_plan = replace(
+                                next_plan,
+                                downgrade_reason=(
+                                    "Bundled local AI runtime unavailable. Using the "
+                                    "compatibility runtime."
+                                )[:300],
+                            )
+                checked = self._accept_plan(
+                    next_plan,
+                    snapshot,
+                    pack,
+                    allow_installed_fallback=False,
+                )
+            except (
+                ModelPackConsentRequired,
+                ModelPackDownloadError,
+                ModelPackNotFoundError,
+                ModelPackSecurityError,
+                OSError,
+                RuntimeError,
+                ValueError,
+            ) as exc:
+                if _is_cancellation_error(exc):
+                    raise
+                self._remember_failed_pack(
+                    next_plan.pack_id,
+                    str(exc),
+                    kind=_runtime_failure_kind(exc, loading=True),
+                )
+                terminal = replace(
+                    next_plan,
+                    use_llm=False,
+                    pack_id="",
+                    model="",
+                    backend=RuntimeBackend.RULES,
+                    standby_model="",
+                    requires_probe=False,
+                    downgrade_reason=str(exc)[:300],
+                )
+                continue
+
+            _notify_plan(request, checked)
+            if checked.use_llm:
+                reasons = tuple(
+                    dict.fromkeys(
+                        value
+                        for value in (
+                            terminal.downgrade_reason.strip(),
+                            checked.downgrade_reason.strip(),
+                            self._failed_pack_reason().strip(),
+                        )
+                        if value
+                    )
+                )
+                return replace(
+                    checked,
+                    downgrade_reason="; ".join(reasons)[:300],
+                )
+            terminal = checked
+
+        return terminal
+
+    def _fallback_after_runtime_failure(
+        self,
+        *,
+        request: CorrectionRequest,
+        classifier: ClassifierDecision,
+        snapshot: HardwareSnapshot,
+        state: _RuntimeCascadeState,
+        error: BaseException,
+    ) -> ExecutionPlan:
+        if _is_cancellation_error(error):
+            raise error
+        failed_plan = state.plan
+        original_reason = str(error).strip()[:300]
+        original_kind = _runtime_failure_kind(error)
+        self._remember_failed_pack(
+            failed_plan.pack_id,
+            original_reason,
+            kind=original_kind,
+        )
+        state.attempted_pack_ids.add(failed_plan.pack_id)
+        state.failure_kind = original_kind
+        state.failure_message = original_reason
+        rejected_plan = replace(
+            failed_plan,
+            downgrade_reason=original_reason,
+        )
+        next_plan = self._accept_smaller_plan(
+            request=request,
+            classifier=classifier,
+            snapshot=snapshot,
+            rejected_plan=rejected_plan,
+            attempted_pack_ids=state.attempted_pack_ids,
+        )
+        if not next_plan.use_llm:
+            latest_failure = self._latest_failed_pack()
+            if latest_failure is not None:
+                state.failure_message = latest_failure.reason
+                state.failure_kind = latest_failure.kind
+            else:
+                state.failure_message = next_plan.downgrade_reason or original_reason
+                state.failure_kind = original_kind
+        state.plan = next_plan
+        return next_plan
 
     def _result(
         self,
@@ -1913,6 +2740,7 @@ class PolishEngine:
             final_text.strip()
             and used_llm
             and validation.accepted
+            and quality.complete
         )
         if rejected_llm and runtime_failure_kind is RuntimeFailureKind.NONE:
             runtime_failure_kind = RuntimeFailureKind.VALIDATION_FAILURE
@@ -2715,6 +3543,134 @@ def _concise_rewrite_is_visible(source: str, candidate: str) -> bool:
         return True
     required_reduction = max(1, source_count // 20)
     return candidate_count <= source_count - required_reduction
+
+
+_FRIENDLY_STYLE_SIGNAL = re.compile(
+    r"\b(?:glad|happy|help(?:ful|ing)?|welcome|please|appreciate|"
+    r"good news|make things easier|work well together)\b",
+    re.IGNORECASE,
+)
+_CARE_STYLE_SIGNAL = re.compile(
+    r"\b(?:understand|recognize|acknowledge|support|help|care|"
+    r"challeng(?:e|ed|ing)|difficult(?:y)?|make things easier|"
+    r"people affected|impact on)\b",
+    re.IGNORECASE,
+)
+_HOSTILE_STYLE = re.compile(
+    r"\b(?:idiot(?:ic)?|stupid|incompetent|ridiculous|worthless|"
+    r"your fault|you failed|obviously you|shut up|lazy|pathetic)\b",
+    re.IGNORECASE,
+)
+_CASUAL_STYLE = re.compile(
+    r"\b(?:gonna|wanna|ain't|kinda|sorta|you guys|nope|yep|"
+    r"super easy|a bunch of)\b",
+    re.IGNORECASE,
+)
+_CONVERSATIONAL_FILLER = re.compile(
+    r"\b(?:um+|uh+|you know)\b|(?:^|,\s*)like(?=\s*,)",
+    re.IGNORECASE,
+)
+_PRESSURE_STYLE = re.compile(
+    r"\b(?:act now|no choice|or else|must (?:accept|agree|approve|buy))\b",
+    re.IGNORECASE,
+)
+_CHILDISH_STYLE = re.compile(
+    r"\b(?:widdle|goo-goo|choo-choo|owie|num-nums)\b",
+    re.IGNORECASE,
+)
+_MARKETING_STYLE = re.compile(
+    r"\b(?:revolutionary|game-changing|best-in-class|world-class|magical)\b",
+    re.IGNORECASE,
+)
+_INFLATED_STYLE = re.compile(
+    r"\b(?:aforementioned|heretofore|paradigm shift|utilization thereof|elucidates?)\b",
+    re.IGNORECASE,
+)
+_APOLOGY_STYLE = re.compile(
+    r"\b(?:(?:I am|we are) sorry|we apologize|I apologize)\b",
+    re.IGNORECASE,
+)
+_PROPOSAL_STYLE = re.compile(
+    r"\b(?:we|I|the team)\s+(?:propose|suggest|recommend)\b",
+    re.IGNORECASE,
+)
+_THREAT_STYLE = re.compile(
+    r"\b(?:or else|face consequences|you will regret|pay the price)\b",
+    re.IGNORECASE,
+)
+_CAVEMAN_LIST_OR_HEADING = re.compile(
+    r"(?m)^\s*(?:[-*\u2022]|\d+[.)])\s+|^\s*#{1,6}\s+",
+)
+
+
+def _introduced_style(pattern: re.Pattern[str], source: str, candidate: str) -> bool:
+    return bool(pattern.search(candidate) and not pattern.search(source))
+
+
+def _tone_style_failure(source: str, candidate: str, *, command: str) -> str:
+    """Reject obvious tone misses without pretending regex can grade prose."""
+    source_clean = " ".join(source.casefold().split())
+    candidate_clean = " ".join(candidate.casefold().split())
+    unchanged = source_clean == candidate_clean
+
+    if command == "rephrase" and unchanged:
+        return "rephrase did not change sentence construction"
+    if command == "shorten" and not _concise_rewrite_is_visible(source, candidate):
+        return "shorten rewrite did not reduce word count"
+    if command == "friendly":
+        if _HOSTILE_STYLE.search(candidate):
+            return "friendly rewrite contains hostile wording"
+        if _CASUAL_STYLE.search(candidate):
+            return "friendly rewrite contains slang"
+        if unchanged and not _FRIENDLY_STYLE_SIGNAL.search(candidate):
+            return "friendly rewrite is not visibly warm"
+    if command == "conversational" and len(
+        _CONVERSATIONAL_FILLER.findall(candidate)
+    ) >= 2:
+        return "conversational rewrite contains filler overload"
+    if command == "persuasive" and _introduced_style(
+        _PRESSURE_STYLE,
+        source,
+        candidate,
+    ):
+        return "persuasive rewrite contains pressure tactics"
+    if command == "confident" and _HOSTILE_STYLE.search(candidate):
+        return "confident rewrite contains hostility"
+    if command in {"casual", "simplified", "high-school level"} and _CHILDISH_STYLE.search(
+        candidate
+    ):
+        return f"{command} rewrite contains childish wording"
+    if command == "technical" and _MARKETING_STYLE.search(candidate):
+        return "technical rewrite contains marketing language"
+    if command == "college level" and _INFLATED_STYLE.search(candidate):
+        return "college level rewrite contains inflated wording"
+    if command == "empathetic" and _introduced_style(
+        _APOLOGY_STYLE,
+        source,
+        candidate,
+    ):
+        return "empathetic rewrite invents an apology"
+    if command == "cooperative" and _introduced_style(
+        _PROPOSAL_STYLE,
+        source,
+        candidate,
+    ):
+        return "cooperative rewrite invents a proposal"
+    if command == "assertive" and _THREAT_STYLE.search(candidate):
+        return "assertive rewrite contains a threat"
+    if command == "caveman" and _CAVEMAN_LIST_OR_HEADING.search(candidate):
+        return "caveman rewrite contains a heading or list"
+    if command in {"diplomatic", "empathetic", "cooperative", "assertive"}:
+        if _HOSTILE_STYLE.search(candidate):
+            return f"{command} rewrite contains hostile wording"
+    if command == "empathetic" and unchanged and not _CARE_STYLE_SIGNAL.search(
+        candidate
+    ):
+        return "empathetic rewrite does not make care visible"
+    if command in {"formal", "academic", "professional", "technical"}:
+        if _CASUAL_STYLE.search(candidate):
+            return f"{command} rewrite contains casual wording"
+    return ""
 
 
 
@@ -3624,6 +4580,8 @@ def _runtime_failure_kind(
     if any(value in message for value in ("gpu", "cuda", "vram", "code 43")):
         return RuntimeFailureKind.GPU_FAILURE
     if any(value in message for value in ("timed out", "timeout")):
+        if any(value in message for value in ("load", "loading")):
+            return RuntimeFailureKind.LOAD_TIMEOUT
         return (
             RuntimeFailureKind.LOAD_TIMEOUT
             if loading
@@ -3634,9 +4592,58 @@ def _runtime_failure_kind(
         for value in ("connection", "refused", "unreachable", "service unavailable")
     ):
         return RuntimeFailureKind.CONNECTION_FAILURE
-    if any(value in message for value in ("json", "response", "schema", "empty output")):
+    if any(
+        value in message
+        for value in (
+            "json",
+            "response",
+            "schema",
+            "empty output",
+            "invalid text",
+            "incomplete text",
+        )
+    ):
         return RuntimeFailureKind.INVALID_RESPONSE
+    if any(
+        value in message
+        for value in (
+            "meaning constraint",
+            "protected content",
+            "quality check",
+            "validation",
+            "tone contract",
+            "word limit",
+            "forbidden em dash",
+        )
+    ):
+        return RuntimeFailureKind.VALIDATION_FAILURE
     return RuntimeFailureKind.MODEL_UNAVAILABLE
+
+
+def _is_cancellation_error(error: BaseException) -> bool:
+    class_name = type(error).__name__.casefold()
+    message = str(error).casefold()
+    return (
+        class_name in {"cancellederror", "cancelederror"}
+        or "cancelled by user" in message
+        or "canceled by user" in message
+        or "operation cancelled" in message
+        or "operation canceled" in message
+    )
+
+
+def _backend_placement_rank(backend: RuntimeBackend) -> int:
+    """Rank whole-model placement so fallback never turns GPU work into CPU work."""
+    if backend in {
+        RuntimeBackend.CUDA,
+        RuntimeBackend.VULKAN,
+        RuntimeBackend.HIP,
+        RuntimeBackend.SYCL,
+    }:
+        return 2
+    if backend is RuntimeBackend.CPU:
+        return 1
+    return 0
 
 
 def _recoverable_generation_error(error: BaseException) -> bool:
@@ -3936,6 +4943,7 @@ def _actor_counter(text: str) -> Counter[str]:
         for actor, forms in families.items()
         for form in forms
     }
+    canonical["children"] = "child"
     actors: list[str] = []
     for match in _ACTOR_FORM.finditer(text):
         form = match.group(0).casefold()
@@ -4788,6 +5796,22 @@ def _named_entity_matches_source_phrase(value: str, source: str) -> bool:
             if candidate_word != source_word
         ]
         if not mismatches:
+            return True
+        if (
+            len(mismatches) <= 3
+            and len(entity_words) >= 3
+            and all(
+                min(len(candidate_word), len(source_word)) >= 4
+                and abs(len(candidate_word) - len(source_word)) <= 2
+                and SequenceMatcher(
+                    a=candidate_word,
+                    b=source_word,
+                    autojunk=False,
+                ).ratio()
+                >= 0.78
+                for candidate_word, source_word in mismatches
+            )
+        ):
             return True
         if len(mismatches) != 1:
             continue

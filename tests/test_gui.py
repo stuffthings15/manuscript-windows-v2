@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from collections import defaultdict
 import os
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, Qt
@@ -27,6 +29,13 @@ from echo_link_core.models import DictationMode, InsertionMode, SessionEvent, Se
 from echo_link_core.insertion import WindowSnapshot
 from echo_link_core.learning import LearningProposal
 from echo_link_core.storage import EchoLinkStore
+from echo_link_core.polish_types import (
+    ExecutionPlan,
+    PolishMode,
+    PolishTask,
+    RuntimeBackend,
+    RuntimeFailureKind,
+)
 
 
 @pytest.fixture(scope="module")
@@ -75,12 +84,562 @@ def _contrast_ratio(left: str, right: str) -> float:
     return (lighter + 0.05) / (darker + 0.05)
 
 
+def test_startup_shares_the_model_returned_by_the_acceptance_probe(app, tmp_path):
+    store = EchoLinkStore(tmp_path / "echo-link.db")
+    persisted = store.get_settings()
+    persisted.ollama_model = "gemma4:e2b-it-qat"
+    persisted.polish_model_pack_id = "gemma4-e2b-qat-v1"
+    store.save_settings(persisted)
+    window = EchoLinkWindow(store, enable_hotkey=False)
+    attempted = ExecutionPlan(
+        policy_version=7,
+        mode=PolishMode.AUTO,
+        task=PolishTask.PROOFREAD,
+        use_llm=True,
+        pack_id="gemma4-12b-q4-k-m-v1",
+        model="gemma4:12b-it-q4_K_M",
+        backend=RuntimeBackend.CUDA,
+    )
+    accepted = ExecutionPlan(
+        policy_version=8,
+        mode=PolishMode.AUTO,
+        task=PolishTask.PROOFREAD,
+        use_llm=True,
+        pack_id="gemma4-e4b-qat-v1",
+        model="gemma4:e4b-it-qat",
+        backend=RuntimeBackend.CUDA,
+    )
+    pack = SimpleNamespace(pack_id=attempted.pack_id, installed=True, validated=True)
+    startup_events = []
+    runtime = SimpleNamespace(
+        runtime_id="adaptive:fallback:test",
+        prepare=lambda plan, consent: startup_events.append(
+            ("prepare", plan.pack_id, consent)
+        )
+        or True,
+        status=lambda _model, timeout: SimpleNamespace(
+            loaded=True,
+            model=accepted.model,
+            backend=accepted.backend,
+            model_bytes=4_000,
+            gpu_bytes=4_000,
+        ),
+        close=lambda: None,
+    )
+
+    def accept_after_prepare(
+        plan,
+        _snapshot,
+        selected_pack,
+        *,
+        allow_installed_fallback,
+    ):
+        assert startup_events == [("prepare", attempted.pack_id, False)]
+        assert plan is attempted
+        assert selected_pack is pack
+        assert allow_installed_fallback is False
+        return accepted
+
+    window.polish_engine = SimpleNamespace(
+        warm=lambda: {"dictionary": True, "classifier": True},
+        hardware_provider=lambda: SimpleNamespace(),
+        packs=SimpleNamespace(
+            catalog=lambda refresh_installed: (pack,),
+            migrate_pack_id=lambda value: value,
+        ),
+        policy=SimpleNamespace(plan=lambda *_args, **_kwargs: attempted),
+        _accept_plan=accept_after_prepare,
+        runtime=window.ai_coordinator,
+    )
+    window.ai_coordinator._runtime = runtime
+
+    assert window.engine.settings.ollama_model == ""
+    assert window.drafts_panel._model_provider() == ""
+    assert window.document_panel._writing_model_provider() == ""
+
+    window._warm_adaptive_polish()
+
+    saved = store.get_settings()
+    assert saved.ollama_model == accepted.model
+    assert saved.polish_model_pack_id == accepted.pack_id
+    assert saved.polish_policy_version == accepted.policy_version
+    assert window.engine.correction.accepted_model == accepted.model
+    assert window.drafts_panel._model_provider() == accepted.model
+    assert window.document_panel._writing_model_provider() == accepted.model
+    assert window._accepted_writing_model() == accepted.model
+    assert attempted.model not in window._installed_writing_models
+    window.close()
+
+
+def test_startup_validates_compatibility_runtime_after_bundled_prepare_fails(
+    app,
+    tmp_path,
+):
+    store = EchoLinkStore(tmp_path / "echo-link.db")
+    window = EchoLinkWindow(store, enable_hotkey=False)
+    plan = ExecutionPlan(
+        policy_version=8,
+        mode=PolishMode.AUTO,
+        task=PolishTask.PROOFREAD,
+        use_llm=True,
+        pack_id="gemma4-e4b-qat-v1",
+        model="gemma4:e4b-it-qat",
+        backend=RuntimeBackend.CUDA,
+        require_full_gpu=True,
+    )
+    pack = SimpleNamespace(
+        pack_id=plan.pack_id,
+        model=plan.model,
+        installed=True,
+        validated=True,
+    )
+    events = []
+    runtime = SimpleNamespace(
+        runtime_id="adaptive:fallback:test",
+        prepare=lambda selected, consent: events.append(
+            ("prepare-failed", selected.pack_id, consent)
+        )
+        or False,
+        acceptance_probe=lambda selected: events.append(
+            ("fallback-probed", selected.pack_id)
+        )
+        or SimpleNamespace(accepted=True),
+        status=lambda *_args, **_kwargs: SimpleNamespace(
+            loaded=True,
+            model=plan.model,
+            backend=plan.backend,
+            model_bytes=4_000,
+            gpu_bytes=4_000,
+        ),
+        close=lambda: None,
+    )
+    window.ai_coordinator._runtime = runtime
+
+    def accept_fallback(selected, _snapshot, selected_pack, **_kwargs):
+        assert selected is plan
+        assert selected_pack is pack
+        probe = window.ai_coordinator.acceptance_probe(selected)
+        assert probe.accepted
+        return selected
+
+    window.polish_engine = SimpleNamespace(
+        warm=lambda: {"dictionary": True, "classifier": True},
+        hardware_provider=lambda: SimpleNamespace(),
+        packs=SimpleNamespace(
+            catalog=lambda refresh_installed: (pack,),
+            migrate_pack_id=lambda value: value,
+        ),
+        policy=SimpleNamespace(plan=lambda *_args, **_kwargs: plan),
+        _accept_plan=accept_fallback,
+        runtime=window.ai_coordinator,
+    )
+
+    window._warm_adaptive_polish()
+
+    assert events == [
+        ("prepare-failed", plan.pack_id, False),
+        ("fallback-probed", plan.pack_id),
+    ]
+    lease = window.ai_coordinator.lease()
+    assert lease is not None
+    assert lease.plan == plan
+    assert store.get_settings().ollama_model == plan.model
+    window.close()
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_model", "expected_backend"),
+    (
+        (
+            SimpleNamespace(
+                loaded=True,
+                model="wrong:model",
+                backend=RuntimeBackend.CUDA,
+                model_bytes=4_000,
+                gpu_bytes=4_000,
+            ),
+            "gemma4:e4b-it-qat",
+            RuntimeBackend.CUDA,
+        ),
+        (
+            SimpleNamespace(
+                loaded=True,
+                model="gemma4:e4b-it-qat",
+                backend=RuntimeBackend.CPU,
+                model_bytes=4_000,
+                gpu_bytes=0,
+            ),
+            "gemma4:e4b-it-qat",
+            RuntimeBackend.CUDA,
+        ),
+        (
+            SimpleNamespace(
+                loaded=True,
+                model="gemma4:e4b-it-qat",
+                backend=RuntimeBackend.CUDA,
+                model_bytes=4_000,
+                gpu_bytes=3_999,
+            ),
+            "gemma4:e4b-it-qat",
+            RuntimeBackend.CUDA,
+        ),
+    ),
+)
+def test_startup_runtime_verification_requires_exact_identity_and_full_gpu(
+    status,
+    expected_model,
+    expected_backend,
+):
+    plan = ExecutionPlan(
+        policy_version=8,
+        mode=PolishMode.AUTO,
+        task=PolishTask.PROOFREAD,
+        use_llm=True,
+        pack_id="gemma4-e4b-qat-v1",
+        model=expected_model,
+        backend=expected_backend,
+        require_full_gpu=True,
+    )
+
+    assert not window_module._runtime_status_matches_plan(
+        status,
+        plan,
+        expected_model=expected_model,
+        expected_backend=expected_backend,
+    )
+
+
+def test_startup_does_not_accept_a_model_that_fails_to_warm(app, tmp_path):
+    store = EchoLinkStore(tmp_path / "echo-link.db")
+    window = EchoLinkWindow(store, enable_hotkey=False)
+    accepted = ExecutionPlan(
+        policy_version=8,
+        mode=PolishMode.AUTO,
+        task=PolishTask.PROOFREAD,
+        use_llm=True,
+        pack_id="gemma4-e4b-qat-v1",
+        model="gemma4:e4b-it-qat",
+        backend=RuntimeBackend.CUDA,
+        context_window=2048,
+    )
+    pack = SimpleNamespace(pack_id=accepted.pack_id, installed=True, validated=True)
+
+    def fail_warm(_request):
+        raise RuntimeError("GPU load failed")
+
+    window.polish_engine = SimpleNamespace(
+        warm=lambda: {"dictionary": True, "classifier": True},
+        hardware_provider=lambda: SimpleNamespace(),
+        packs=SimpleNamespace(
+            catalog=lambda refresh_installed: (pack,),
+            migrate_pack_id=lambda value: value,
+        ),
+        policy=SimpleNamespace(plan=lambda *_args, **_kwargs: accepted),
+        _accept_plan=lambda *_args, **_kwargs: accepted,
+        runtime=SimpleNamespace(
+            status=lambda _model, timeout: SimpleNamespace(loaded=False),
+            generate=fail_warm,
+        ),
+    )
+
+    window._warm_adaptive_polish()
+
+    assert window.engine.settings.ollama_model == ""
+    assert window.engine.correction.accepted_model == ""
+    assert store.get_settings().ollama_model == ""
+    window.close()
+
+
+def test_startup_never_probes_or_accepts_an_uninstalled_pack(app, tmp_path):
+    store = EchoLinkStore(tmp_path / "echo-link.db")
+    window = EchoLinkWindow(store, enable_hotkey=False)
+    attempted = ExecutionPlan(
+        policy_version=8,
+        mode=PolishMode.AUTO,
+        task=PolishTask.PROOFREAD,
+        use_llm=True,
+        pack_id="gemma4-e4b-qat-v1",
+        model="gemma4:e4b-it-qat",
+        backend=RuntimeBackend.CUDA,
+    )
+    probes = []
+    window.polish_engine = SimpleNamespace(
+        warm=lambda: {"dictionary": True, "classifier": True},
+        hardware_provider=lambda: SimpleNamespace(),
+        packs=SimpleNamespace(
+            catalog=lambda refresh_installed: (
+                SimpleNamespace(
+                    pack_id=attempted.pack_id,
+                    installed=False,
+                    validated=False,
+                ),
+            ),
+            migrate_pack_id=lambda value: value,
+        ),
+        policy=SimpleNamespace(plan=lambda *_args, **_kwargs: attempted),
+        _accept_plan=lambda *_args, **_kwargs: probes.append(True) or attempted,
+        runtime=SimpleNamespace(),
+    )
+
+    window._warm_adaptive_polish()
+
+    assert probes == []
+    assert window.engine.settings.ollama_model == ""
+    assert store.get_settings().ollama_model == ""
+    window.close()
+
+
+def test_completed_polish_requests_refresh_and_clear_the_shared_ai_plan(
+    app,
+    tmp_path,
+    monkeypatch,
+):
+    accepted = ExecutionPlan(
+        policy_version=8,
+        mode=PolishMode.AUTO,
+        task=PolishTask.PROOFREAD,
+        use_llm=True,
+        pack_id="gemma4-e4b-qat-v1",
+        model="gemma4:e4b-it-qat",
+        backend=RuntimeBackend.CUDA,
+    )
+
+    class FakeAdapter:
+        def __init__(self, *_args, **_kwargs):
+            self.last_correction_result = SimpleNamespace(
+                used_llm=True,
+                review_ready=True,
+                plan=accepted,
+                runtime_failure_kind=SimpleNamespace(value="none"),
+            )
+
+        def run(self, *_args, **_kwargs):
+            return SimpleNamespace(text="Corrected.")
+
+    monkeypatch.setattr(window_module, "PolishWritingAssistantAdapter", FakeAdapter)
+    window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
+
+    # A result object alone is not proof that the accepted runtime generated
+    # it. The shared routes are wired correctly, but the claimed result must
+    # not publish a model without matching generation evidence.
+    window.document_panel.writing_assistant.run("Source", command="Proofread")
+
+    assert window.document_panel.writing_assistant is window.writing_assistant
+    assert window.writing_assistant._coordinator is window.ai_coordinator
+    assert window.drafts_panel.assistant._inference is window.ai_coordinator
+    assert window.source_chat._inference is window.ai_coordinator
+    assert window.engine.settings.ollama_model == ""
+    assert window.drafts_panel._model_provider() == ""
+
+    window.ai_coordinator.accept_verified(accepted)
+    assert window.engine.settings.ollama_model == accepted.model
+
+    window.writing_assistant._delegate.last_correction_result = SimpleNamespace(
+        used_llm=False,
+        review_ready=False,
+        plan=accepted,
+        runtime_failure_kind=SimpleNamespace(value="gpu_failure"),
+    )
+    window.writing_assistant.run("Source", command="Proofread")
+
+    assert window.engine.settings.ollama_model == ""
+    assert window.engine.correction.accepted_model == ""
+    window.close()
+
+
+def test_writing_commands_never_select_an_unaccepted_installed_model(app, tmp_path):
+    window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
+    plan = ExecutionPlan(
+        policy_version=8,
+        mode=PolishMode.AUTO,
+        task=PolishTask.PROOFREAD,
+        use_llm=True,
+        pack_id="gemma4-e4b-qat-v1",
+        model="gemma4:e4b-it-qat",
+        backend=RuntimeBackend.CUDA,
+    )
+    window.ai_coordinator.accept_verified(plan)
+    window._installed_writing_models = {
+        plan.model,
+        "gemma4:unaccepted-larger-model",
+    }
+
+    assert window._writing_model_for("Professional") == plan.model
+    assert window._writing_model_for("Proofread") == plan.model
+    window.close()
+
+
+def test_startup_rejects_live_cpu_spill_for_a_gpu_plan(app, tmp_path):
+    window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
+    plan = ExecutionPlan(
+        policy_version=8,
+        mode=PolishMode.AUTO,
+        task=PolishTask.PROOFREAD,
+        use_llm=True,
+        pack_id="gemma4-e4b-qat-v1",
+        model="gemma4:e4b-it-qat",
+        backend=RuntimeBackend.CUDA,
+        require_full_gpu=True,
+    )
+    pack = SimpleNamespace(
+        pack_id=plan.pack_id,
+        model=plan.model,
+        installed=True,
+        validated=True,
+    )
+    runtime = SimpleNamespace(
+        runtime_id="adaptive:fallback:test",
+        prepare=lambda *_args, **_kwargs: True,
+        status=lambda *_args, **_kwargs: SimpleNamespace(
+                loaded=True,
+                model=plan.model,
+                backend=RuntimeBackend.CPU,
+                model_bytes=6_000,
+                gpu_bytes=0,
+        ),
+        close=lambda: None,
+    )
+    window.ai_coordinator._runtime = runtime
+    window.polish_engine = SimpleNamespace(
+        warm=lambda: {"dictionary": True, "classifier": True},
+        packs=SimpleNamespace(
+            catalog=lambda refresh_installed: (pack,),
+            migrate_pack_id=lambda value: value,
+        ),
+        hardware_provider=lambda: SimpleNamespace(),
+        policy=SimpleNamespace(plan=lambda *_args, **_kwargs: plan),
+        _accept_plan=lambda *_args, **_kwargs: plan,
+        runtime=window.ai_coordinator,
+    )
+
+    window._warm_adaptive_polish()
+
+    assert window.ai_coordinator.lease() is None
+    assert window.engine.settings.ollama_model == ""
+    window.close()
+
+
 def test_rules_only_manual_fallback_is_not_presented_as_ai_correction():
     result = SimpleNamespace(
         quality_complete=False,
         review_ready=True,
         used_llm=False,
         validation=SimpleNamespace(accepted=False),
+    )
+
+    assert not window_module._polish_result_ready_for_review(result)
+
+
+def test_prewarm_retries_while_the_gpu_is_still_letting_go():
+    """A busy GPU at launch must not cost the user their first correction.
+
+    Relaunching while the previous copy still held VRAM made the startup
+    planner pick rules-only and skip the prewarm. Nothing revisited it, so the
+    first correction paid a full cold load - 91 seconds for a 20-character
+    sentence, against 2 seconds warm.
+    """
+    attempts = []
+    window = SimpleNamespace(
+        _warm_retry_stop=threading.Event(),
+        _gpu_pack_is_installed=lambda: True,
+    )
+
+    def warm() -> bool:
+        attempts.append(len(attempts))
+        # No room the first two times, then the GPU frees up.
+        return len(attempts) >= 3
+
+    window._warm_adaptive_polish = warm
+    with mock.patch.object(window_module, "_WARM_RETRY_DELAY_SECONDS", 0.0):
+        window_module.EchoLinkWindow._warm_adaptive_polish_until_ready(window)
+
+    assert len(attempts) == 3
+
+
+def test_prewarm_does_not_retry_without_a_model_to_load():
+    """A machine with no installed pack must not keep a thread spinning."""
+    attempts = []
+    window = SimpleNamespace(
+        _warm_retry_stop=threading.Event(),
+        _gpu_pack_is_installed=lambda: False,
+        _warm_adaptive_polish=lambda: bool(attempts.append(1)) or False,
+    )
+
+    with mock.patch.object(window_module, "_WARM_RETRY_DELAY_SECONDS", 0.0):
+        window_module.EchoLinkWindow._warm_adaptive_polish_until_ready(window)
+
+    assert len(attempts) == 1
+
+
+def test_prewarm_retry_stops_at_once_when_the_window_closes():
+    stop = threading.Event()
+    stop.set()
+    attempts = []
+    window = SimpleNamespace(
+        _warm_retry_stop=stop,
+        _gpu_pack_is_installed=lambda: True,
+        _warm_adaptive_polish=lambda: bool(attempts.append(1)) or False,
+    )
+
+    with mock.patch.object(window_module, "_WARM_RETRY_DELAY_SECONDS", 30.0):
+        window_module.EchoLinkWindow._warm_adaptive_polish_until_ready(window)
+
+    assert len(attempts) == 1
+
+
+def test_rejected_ai_answer_still_shows_its_deterministic_repair():
+    """A turned-down AI answer must not swallow the whole section.
+
+    Essay 1 lost three of ten sections this way: the AI answer tripped a
+    meaning guard, the HUD refused the result because ``used_llm`` was False,
+    and the reader got no review card at all - not even the spelling and
+    punctuation repairs the rules layer had already made. The HUD sat on
+    "analyzing" until the run timed out.
+    """
+    result = SimpleNamespace(
+        quality_complete=False,
+        review_ready=False,
+        used_llm=False,
+        text="The reports are ready.",
+        validation=SimpleNamespace(accepted=False),
+        runtime_failure_kind=RuntimeFailureKind.VALIDATION_FAILURE,
+    )
+
+    assert window_module._polish_result_ready_for_review(result)
+
+
+def test_a_broken_runtime_is_not_offered_as_a_correction():
+    """The escape hatch above is only for a rejected answer.
+
+    No model, no GPU or a dead connection means there was no AI stage to fall
+    back from, so those keep the error path.
+    """
+    for kind in (
+        RuntimeFailureKind.MODEL_UNAVAILABLE,
+        RuntimeFailureKind.GPU_FAILURE,
+        RuntimeFailureKind.CONNECTION_FAILURE,
+        RuntimeFailureKind.LOAD_TIMEOUT,
+    ):
+        result = SimpleNamespace(
+            quality_complete=False,
+            review_ready=False,
+            used_llm=False,
+            text="The reports are ready.",
+            validation=SimpleNamespace(accepted=False),
+            runtime_failure_kind=kind,
+        )
+
+        assert not window_module._polish_result_ready_for_review(result), kind
+
+
+def test_a_rejected_answer_with_no_text_is_still_refused():
+    result = SimpleNamespace(
+        quality_complete=False,
+        review_ready=False,
+        used_llm=False,
+        text="   ",
+        validation=SimpleNamespace(accepted=False),
+        runtime_failure_kind=RuntimeFailureKind.VALIDATION_FAILURE,
     )
 
     assert not window_module._polish_result_ready_for_review(result)
@@ -610,6 +1169,96 @@ def test_dictation_hotkey_uses_target_captured_at_physical_keypress(
     app.processEvents()
 
     assert captured == [target]
+    window.close()
+
+
+def test_dictation_hotkey_starts_during_processing_without_reactivating_target(
+    app,
+    tmp_path,
+    monkeypatch,
+):
+    window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
+    target = WindowSnapshot(81, 91, "Draft - Word", "OpusApp")
+    captured = []
+    activated = []
+    monkeypatch.setattr(
+        window.engine,
+        "start_recording",
+        lambda **kwargs: captured.append(kwargs.get("target_window")) or True,
+    )
+    monkeypatch.setattr(
+        window.engine.inserter,
+        "activate_window",
+        lambda value: activated.append(value),
+    )
+    with window.engine._lock:
+        window.engine._active_job = SimpleNamespace(sequence=1)
+
+    window._hotkey_press(target)
+
+    assert captured == [target]
+    assert activated == []
+    with window.engine._lock:
+        window.engine._active_job = None
+    window.close()
+
+
+def test_processing_event_during_capture_keeps_recording_enabled_and_sounds_exact(
+    app,
+    tmp_path,
+    monkeypatch,
+):
+    window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
+    sounds = []
+    tray_actions = []
+    monkeypatch.setattr(window_module, "play_start", lambda _settings: sounds.append("start"))
+    monkeypatch.setattr(window_module, "play_stop", lambda _settings: sounds.append("stop"))
+    monkeypatch.setattr(
+        type(window.engine),
+        "state",
+        property(lambda _engine: SessionState.LISTENING),
+    )
+    window.tray_icon = SimpleNamespace(
+        setToolTip=lambda _text: None,
+        hide=lambda: None,
+        deleteLater=lambda: None,
+    )
+    window.tray_dictate_action = SimpleNamespace(
+        setText=lambda text: tray_actions.append(text)
+    )
+    window.tray_hands_free_action = SimpleNamespace(setText=lambda _text: None)
+
+    window._handle_session_event(
+        SessionEvent(
+            SessionState.LISTENING,
+            "Listening...",
+            capture_id=2,
+            capture_started=True,
+        )
+    )
+    window._handle_session_event(
+        SessionEvent(
+            SessionState.REFINING,
+            "AI processing 1. 1 queued.",
+            capture_id=2,
+            job_sequence=1,
+        )
+    )
+
+    assert sounds == ["start"]
+    assert window.record_button.text() == "Stop recording"
+    assert window.record_button.isEnabled()
+    assert tray_actions[-1] == "Stop dictation"
+    window._handle_session_event(
+        SessionEvent(
+            SessionState.TRANSCRIBING,
+            "Transcribing locally...",
+            capture_id=2,
+            job_sequence=2,
+            capture_stopped=True,
+        )
+    )
+    assert sounds == ["start", "stop"]
     window.close()
 
 

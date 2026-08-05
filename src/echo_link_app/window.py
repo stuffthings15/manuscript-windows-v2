@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
 
 from echo_link_app.settings_dialog import SettingsDialog
 from echo_link_app.accessibility import set_accessible, update_status_label
+from echo_link_app.ai_status import user_ai_status
 from echo_link_app.branding import APP_NAME, APP_SHORT_NAME, APP_TAGLINE, ICON_ICO, ICON_PNG
 from echo_link_app.documents_panel import DocumentEditorPanel
 from echo_link_app.drafts_panel import DraftsPanel
@@ -60,6 +61,7 @@ from echo_link_app.startup import configure_startup
 from echo_link_app.target_underline import TargetUnderline
 from echo_link_app.theme import COLORS
 from echo_link_core.audio import AudioCaptureError, play_pcm16, stop_audio_playback
+from echo_link_core.accepted_inference import AcceptedInferenceCoordinator
 from echo_link_core.engine import DictationEngine
 from echo_link_core.documents import DocumentWorkspace
 from echo_link_core.evaluation import export_evaluation_run, load_evaluation_cases, summarize_evaluation
@@ -93,12 +95,13 @@ from echo_link_core.polish_types import (
     GenerationRequest,
     PolishMode,
     PolishTask,
+    RuntimeBackend,
+    RuntimeFailureKind,
 )
 from echo_link_core.readability import analyze_readability
 from echo_link_core.selected_text import (
     COMMANDS,
     PROFILES,
-    select_local_tone_model,
 )
 from echo_link_core.writing_models import LocalWritingModelManager
 from echo_link_core.speech_logs import analyze_punctuation, format_punctuation_analysis
@@ -112,6 +115,65 @@ from echo_link_core.windows_selection import (
 
 
 logger = logging.getLogger(__name__)
+
+_GPU_RUNTIME_BACKENDS = frozenset(
+    {
+        RuntimeBackend.CUDA,
+        RuntimeBackend.HIP,
+        RuntimeBackend.VULKAN,
+        RuntimeBackend.SYCL,
+    }
+)
+
+
+def _runtime_status_matches_plan(
+    status,
+    plan,
+    *,
+    expected_model: str,
+    expected_backend: RuntimeBackend,
+) -> bool:
+    if not bool(getattr(status, "loaded", False)):
+        return False
+    if str(getattr(status, "model", "") or "").strip() != expected_model:
+        return False
+    if getattr(status, "backend", RuntimeBackend.RULES) is not expected_backend:
+        return False
+    if not plan.require_full_gpu:
+        return True
+    model_bytes = max(0, int(getattr(status, "model_bytes", 0) or 0))
+    gpu_bytes = max(0, int(getattr(status, "gpu_bytes", 0) or 0))
+    return bool(
+        expected_backend in _GPU_RUNTIME_BACKENDS
+        and model_bytes > 0
+        and gpu_bytes >= model_bytes
+    )
+
+
+class _AcceptedPlanWritingAssistant:
+    """Share each completed adaptive plan with every local writing consumer."""
+
+    def __init__(self, delegate, coordinator, result_callback) -> None:
+        self._delegate = delegate
+        self._coordinator = coordinator
+        self._result_callback = result_callback
+
+    def __getattr__(self, name):
+        return getattr(self._delegate, name)
+
+    def run(self, *args, **kwargs):
+        token = self._coordinator.begin_update()
+        try:
+            output = self._delegate.run(*args, **kwargs)
+            result = getattr(self._delegate, "last_correction_result", None)
+            published = self._coordinator.publish_correction_result(result, token)
+            self._result_callback(
+                result,
+                published=published,
+            )
+            return output
+        finally:
+            self._coordinator.finish_update(token)
 
 
 def _restore_native_window(handle: int) -> None:
@@ -127,15 +189,45 @@ def _restore_native_window(handle: int) -> None:
         logger.exception("Could not restore Manuscript from the system tray")
 
 
+# How long to keep trying to prewarm when the GPU has no room yet. A relaunch
+# releases the previous copy's VRAM in seconds, so a few spaced retries cover
+# it without keeping a thread alive on a machine that has no model to load.
+_WARM_RETRY_ATTEMPTS = 4
+_WARM_RETRY_DELAY_SECONDS = 20.0
+
+
 def _polish_result_ready_for_review(result: object) -> bool:
+    """Whether the HUD has a correction worth putting in front of the reader.
+
+    An LLM answer that passed validation is obviously reviewable. So is the
+    deterministic repair left behind when the LLM answer was *rejected*: the
+    engine's fallback is the rules repair, with every spelling, agreement and
+    punctuation fix already applied, and refusing it threw that work away.
+
+    Requiring ``used_llm`` alone meant a section whose AI answer tripped a
+    meaning guard produced no review card at all - the HUD sat on "analyzing"
+    and the reader never saw the repairs that had been made. Three of ten
+    sections in essay 1 were lost this way.
+
+    A genuine runtime fault is different: no model, no GPU, a dead connection.
+    Those keep the error path, because there is no AI stage to fall back from.
+    """
     validation = getattr(result, "validation", None)
-    return bool(
+    if (
         getattr(result, "used_llm", False)
         and getattr(validation, "accepted", False)
         and (
             getattr(result, "quality_complete", False)
             or getattr(result, "review_ready", False)
         )
+    ):
+        return True
+    # VALIDATION_FAILURE is set only when the model answered and the answer was
+    # turned down, never when the runtime itself broke.
+    return (
+        getattr(result, "runtime_failure_kind", RuntimeFailureKind.NONE)
+        is RuntimeFailureKind.VALIDATION_FAILURE
+        and bool(str(getattr(result, "text", "")).strip())
     )
 
 
@@ -247,14 +339,30 @@ class EchoLinkWindow(QMainWindow):
             store=self.store,
             preferred_pack_provider=lambda: self.engine.settings.polish_model_pack_id,
         )
+        self.ai_coordinator = AcceptedInferenceCoordinator(self.polish_engine.runtime)
+        self.polish_engine.runtime = self.ai_coordinator
+        try:
+            for pack in self.polish_engine.packs.catalog(refresh_installed=False):
+                self.ai_coordinator.register_model_pack(pack.pack_id, pack.model)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            logger.warning("Could not register signed local AI pack identities", exc_info=True)
+        self.engine.set_ai_coordinator(self.ai_coordinator)
+        self.engine.set_ai_plan_validator(self._dictation_ai_plan_is_current)
         self.polish_writing_adapter = PolishWritingAssistantAdapter(
             self.polish_engine,
             mode_provider=lambda: self.engine.settings.polish_mode,
             consent_provider=lambda: self.engine.settings.polish_download_consent,
         )
         # Keep the mature UI boundary stable while routing its work through PolishEngine.
-        self.writing_assistant = self.polish_writing_adapter
-        self._installed_writing_models = {self.engine.settings.ollama_model}
+        self.writing_assistant = _AcceptedPlanWritingAssistant(
+            self.polish_writing_adapter,
+            self.ai_coordinator,
+            self._share_completed_polish_result,
+        )
+        self._installed_writing_models: set[str] = set()
+        # Lets the prewarm retry give up at once when the window closes,
+        # instead of sitting out its delay in a daemon thread.
+        self._warm_retry_stop = threading.Event()
         if os.environ.get("ECHOLINK_DISABLE_MODEL_SETUP") != "1":
             threading.Thread(
                 target=self._refresh_installed_writing_models,
@@ -262,13 +370,13 @@ class EchoLinkWindow(QMainWindow):
                 name="echo-link-tone-model-discovery",
             ).start()
             threading.Thread(
-                target=self._warm_adaptive_polish,
+                target=self._warm_adaptive_polish_until_ready,
                 daemon=True,
                 name="manuscript-adaptive-polish-setup",
             ).start()
         self.document_workspace = DocumentWorkspace(store)
         self.local_source_index = LocalSourceIndex()
-        self.source_chat = ApprovedSourceChat()
+        self.source_chat = ApprovedSourceChat(inference=self.ai_coordinator)
         self._source_chat_request_id = 0
         self._palette_request_id = 0
         self._palette_ai_lock = threading.Lock()
@@ -432,7 +540,7 @@ class EchoLinkWindow(QMainWindow):
         self._show_from_tray()
         if self.engine.hands_free_session:
             self.engine.stop_recording()
-        elif not self.engine.is_busy:
+        elif self.engine.can_start_recording:
             self.engine.start_recording(insert_result=False, hands_free=True)
 
     def _open_settings_from_tray(self) -> None:
@@ -509,19 +617,20 @@ class EchoLinkWindow(QMainWindow):
         self.tabs.addTab(self._build_writing_tab(), "Writing tools")
         self.drafts_panel = DraftsPanel(
             self.document_workspace,
-            model_provider=lambda: self.engine.settings.ollama_model,
+            model_provider=self._accepted_writing_model,
             protected_terms_provider=lambda: tuple(self.store.vocabulary_map().values()),
             timeout_provider=lambda: max(
                 30.0,
                 self.engine.settings.correction_timeout_seconds,
             ),
+            inference=self.ai_coordinator,
         )
         self.drafts_panel.stage_private_paste_requested.connect(self._stage_private_text)
         self.tabs.addTab(self.drafts_panel, "Drafts")
         self.document_panel = DocumentEditorPanel(
             self.document_workspace,
-            writing_assistant=self.polish_writing_adapter,
-            writing_model_provider=lambda: self.engine.settings.ollama_model,
+            writing_assistant=self.writing_assistant,
+            writing_model_provider=self._accepted_writing_model,
             protected_terms_provider=lambda: tuple(self.store.vocabulary_map().values()),
             writing_timeout_provider=lambda: max(
                 30.0,
@@ -1398,6 +1507,22 @@ class EchoLinkWindow(QMainWindow):
 
     def _capture_selected_text_for_review(self, *, show_palette: bool) -> None:
         logger.info("Selected-text hotkey/capture requested")
+        if (
+            show_palette
+            and self.selected_text_record is not None
+            and self.rewrite_palette.isVisible()
+            and self.rewrite_palette.view == "badge"
+        ):
+            current = active_window()
+            captured = self.selected_text_record.window
+            if (
+                current.handle == captured.handle
+                and current.process_id == captured.process_id
+            ):
+                logger.info("Opening existing Writing HUD capture without rereading source")
+                self._pause_selection_monitor()
+                self.rewrite_palette.open_current_capture()
+                return
         if show_palette:
             self._pause_selection_monitor()
         record = None
@@ -1631,6 +1756,21 @@ class EchoLinkWindow(QMainWindow):
             or self.rewrite_palette.view != "badge"
         ):
             return
+        record = self.selected_text_record
+        focused = active_window()
+        if (
+            record is not None
+            and focused.handle > 0
+            and (
+                focused.handle != record.window.handle
+                or focused.process_id != record.window.process_id
+            )
+        ):
+            # A different top-level window is an exact focus loss, not Word's
+            # transient UI Automation flap. Remove the icon immediately.
+            self._badge_clear_pending_record = record
+            self._finish_badge_clear()
+            return
         # Word's UI Automation flaps focus once per poll while the caret sits
         # still, which made the badge blink and re-request AI every second.
         # Give the same capture a grace window to re-detect before hiding.
@@ -1736,7 +1876,7 @@ class EchoLinkWindow(QMainWindow):
         )
         update_status_label(
             self.writing_state,
-            "Entire document loaded. Review one sentence at a time.",
+            "Entire document loaded. Review each completed section in order.",
         )
 
     def _analyze_writing(self) -> None:
@@ -1753,16 +1893,21 @@ class EchoLinkWindow(QMainWindow):
             f"Readability: {report.score}/100 ({report.label}).",
         )
 
-    def _warm_adaptive_polish(self) -> None:
+    def _warm_adaptive_polish(self) -> bool:
+        token = self.ai_coordinator.begin_update()
         try:
             readiness = self.polish_engine.warm()
             snapshot = self.polish_engine.hardware_provider()
             catalog = self.polish_engine.packs.catalog(refresh_installed=True)
-            migrated_pack_id = self.polish_engine.packs.migrate_pack_id(
+            installed_catalog = tuple(
+                pack
+                for pack in catalog
+                if bool(getattr(pack, "installed", False))
+                and bool(getattr(pack, "validated", False))
+            )
+            preferred_pack_id = self.polish_engine.packs.migrate_pack_id(
                 self.engine.settings.polish_model_pack_id
             )
-            if migrated_pack_id != self.engine.settings.polish_model_pack_id:
-                self.engine.settings.polish_model_pack_id = migrated_pack_id
             decision = ClassifierDecision(
                 needs_llm=True,
                 error_categories=("first-launch-probe",),
@@ -1777,16 +1922,9 @@ class EchoLinkWindow(QMainWindow):
                 PolishTask.PROOFREAD,
                 PolishMode.AUTO,
                 classifier=decision,
-                packs=catalog,
-                preferred_pack_id=self.engine.settings.polish_model_pack_id,
+                packs=installed_catalog,
+                preferred_pack_id=preferred_pack_id,
             )
-            if plan.pack_id and (
-                self.engine.settings.polish_model_pack_id != plan.pack_id
-                or self.engine.settings.polish_policy_version != plan.policy_version
-            ):
-                self.engine.settings.polish_model_pack_id = plan.pack_id
-                self.engine.settings.polish_policy_version = plan.policy_version
-                self.store.save_settings(self.engine.settings)
             logger.info(
                 "Adaptive Polish ready dictionary=%s classifier=%s pack=%s backend=%s",
                 readiness.get("dictionary"),
@@ -1800,51 +1938,158 @@ class EchoLinkWindow(QMainWindow):
             # the first request skips its own probe entirely.
             if plan.use_llm and plan.pack_id:
                 pack = next(
-                    (value for value in catalog if value.pack_id == plan.pack_id),
+                    (
+                        value
+                        for value in installed_catalog
+                        if value.pack_id == plan.pack_id
+                    ),
                     None,
                 )
                 if pack is not None:
-                    warmed = self.polish_engine._accept_plan(plan, snapshot, pack)
-                    # A cached passing benchmark skips the probe, which also
-                    # skips the model load. Generate one throwaway token so
-                    # the model is resident before the first user correction.
-                    status = self.polish_engine.runtime.status(
-                        warmed.model, timeout=2.0
-                    )
-                    if warmed.use_llm and not status.loaded:
-                        self.polish_engine.runtime.generate(
-                            GenerationRequest(
-                                text="Warm start.",
-                                command="Proofread",
-                                profile="General",
-                                instruction=(
-                                    "Return the text unchanged. This is a "
-                                    "model warm-up request."
-                                ),
-                                language="",
-                                protected_terms=(),
-                                plan=dataclass_replace(
-                                    warmed,
-                                    max_output_tokens=32,
-                                    context_window=min(
-                                        2048, warmed.context_window or 2048
-                                    ),
-                                ),
-                            )
+                    prepare = getattr(self.polish_engine.runtime, "prepare", None)
+                    if callable(prepare) and not bool(
+                        prepare(
+                            plan,
+                            consent=self.engine.settings.polish_download_consent,
                         )
+                    ):
+                        # A missing bundled host is not a failed model. The
+                        # adaptive runtime still has its verified compatibility
+                        # backend, which must receive the normal acceptance probe.
+                        logger.info(
+                            "Bundled local AI preparation failed; probing fallback"
+                        )
+                    warmed = self.polish_engine._accept_plan(
+                        plan,
+                        snapshot,
+                        pack,
+                        allow_installed_fallback=False,
+                    )
+                    loaded = False
+                    if warmed.use_llm:
+                        # A cached passing benchmark skips the probe, which
+                        # also skips the model load. Warm it before sharing
+                        # the accepted plan with dictation and other tools.
+                        runtime_status = self.polish_engine.runtime.status(
+                            warmed.model, timeout=2.0
+                        )
+                        generation = None
+                        if not runtime_status.loaded:
+                            generation = self.polish_engine.runtime.generate(
+                                GenerationRequest(
+                                    text="Warm start.",
+                                    command="Proofread",
+                                    profile="General",
+                                    instruction=(
+                                        "Return the text unchanged. This is a "
+                                        "model warm-up request."
+                                    ),
+                                    language="",
+                                    protected_terms=(),
+                                    plan=dataclass_replace(
+                                        warmed,
+                                        max_output_tokens=32,
+                                        context_window=min(
+                                            2048, warmed.context_window or 2048
+                                        ),
+                                    ),
+                                )
+                            )
+                            runtime_status = self.polish_engine.runtime.status(
+                                generation.model, timeout=2.0
+                            )
+                        expected_model = (
+                            str(getattr(generation, "model", "") or "").strip()
+                            or warmed.model
+                        )
+                        expected_backend = getattr(
+                            generation,
+                            "backend",
+                            warmed.backend,
+                        )
+                        if not _runtime_status_matches_plan(
+                            runtime_status,
+                            warmed,
+                            expected_model=expected_model,
+                            expected_backend=expected_backend,
+                        ):
+                            raise RuntimeError(
+                                "Accepted local AI failed exact runtime verification."
+                            )
+                        loaded = True
+                        published = self.ai_coordinator.accept_verified(
+                            warmed,
+                            token=token,
+                            actual_model=expected_model,
+                            actual_backend=expected_backend,
+                        )
+                    else:
+                        published = self.ai_coordinator.clear(token=token)
+                    lease = self.ai_coordinator.lease() if published else None
+                    if lease is not None:
+                        self._installed_writing_models.add(lease.plan.model)
                     logger.info(
                         "Adaptive Polish model prewarmed pack=%s use_llm=%s "
                         "loaded=%s",
-                        plan.pack_id,
+                        warmed.pack_id,
                         warmed.use_llm,
-                        self.polish_engine.runtime.status(
-                            warmed.model, timeout=2.0
-                        ).loaded,
+                        loaded,
                     )
+                    return loaded
+                else:
+                    self.ai_coordinator.clear(token=token)
+            else:
+                self.ai_coordinator.clear(token=token)
         except Exception:
             # Startup probing is optional and runs in a daemon thread. Any
             # normal provider failure must leave the app in rules-only mode.
             logger.warning("Adaptive Polish setup fell back to rules", exc_info=True)
+            self.ai_coordinator.clear(token=token)
+        finally:
+            self.ai_coordinator.finish_update(token)
+        return False
+
+    def _warm_adaptive_polish_until_ready(self) -> None:
+        """Prewarm at startup, retrying while the GPU is still letting go.
+
+        The startup plan is made once, seconds after launch. Relaunch the app
+        while the previous copy's model is still resident - or while any other
+        program holds VRAM - and the planner sees no room, picks rules-only,
+        and skips the prewarm entirely. Nothing revisits that decision, so the
+        user pays a full cold load on their first correction: a 20-character
+        sentence took 91 seconds on one such launch, against 2 seconds warm.
+
+        Per-request planning does recover on its own, so this only needs to
+        stop the first correction from being the one that waits. A few quiet
+        retries cost nothing on a machine that genuinely has no GPU, because
+        the loop only runs while an installed, validated pack exists to load.
+        """
+        for attempt in range(_WARM_RETRY_ATTEMPTS):
+            if self._warm_adaptive_polish():
+                return
+            if not self._gpu_pack_is_installed():
+                return
+            logger.info(
+                "Adaptive Polish prewarm found no room for the model; "
+                "retrying in %.0fs (attempt %d of %d)",
+                _WARM_RETRY_DELAY_SECONDS,
+                attempt + 1,
+                _WARM_RETRY_ATTEMPTS,
+            )
+            if self._warm_retry_stop.wait(_WARM_RETRY_DELAY_SECONDS):
+                return
+
+    def _gpu_pack_is_installed(self) -> bool:
+        """Whether a model is present to load, so a retry could still succeed."""
+        try:
+            catalog = self.polish_engine.packs.catalog(refresh_installed=True)
+        except Exception:  # noqa: BLE001 - a pack query failure is not fatal here
+            return False
+        return any(
+            bool(getattr(pack, "installed", False))
+            and bool(getattr(pack, "validated", False))
+            for pack in catalog
+        )
 
     def _refresh_installed_writing_models(self) -> None:
         try:
@@ -1857,12 +2102,46 @@ class EchoLinkWindow(QMainWindow):
         if names:
             self._installed_writing_models = names
 
-    def _writing_model_for(self, command: str) -> str:
-        return select_local_tone_model(
-            command,
-            self.engine.settings.ollama_model,
-            self._installed_writing_models,
+    def _accepted_writing_model(self) -> str:
+        return str(self.engine.settings.ollama_model or "").strip()
+
+    def _dictation_ai_plan_is_current(
+        self,
+        pack_id: str,
+        model: str,
+        policy_version: int,
+        require_loaded: bool = False,
+    ) -> bool:
+        return self.ai_coordinator.is_current(
+            pack_id,
+            model,
+            policy_version,
+            require_loaded=require_loaded,
         )
+
+    def _share_completed_polish_result(
+        self,
+        result,
+        *,
+        published: bool | None = None,
+    ) -> None:
+        if result is None:
+            return
+        if published is None:
+            token = self.ai_coordinator.begin_update()
+            try:
+                published = self.ai_coordinator.publish_correction_result(result, token)
+            finally:
+                self.ai_coordinator.finish_update(token)
+        if not published:
+            return
+        lease = self.ai_coordinator.lease()
+        if lease is not None:
+            self._installed_writing_models.add(lease.plan.model)
+
+    def _writing_model_for(self, command: str) -> str:
+        del command
+        return self._accepted_writing_model()
 
     def _run_writing_command(self) -> None:
         source = self.writing_source.toPlainText().strip()
@@ -1991,38 +2270,7 @@ class EchoLinkWindow(QMainWindow):
             threading.Thread(target=self._palette_ai_worker_loop, daemon=True).start()
 
     def _palette_ai_width(self) -> int:
-        """Concurrent section generations this machine can afford right now.
-
-        Gated first on what the active runtime can genuinely overlap: the
-        Ollama rollback serializes large requests, so running several at
-        once only multiplied every request's latency until it timed out and the
-        section fell back to rules-only text. Only then does free VRAM
-        raise the width, and battery or CPU-only machines stay at one.
-        """
-        try:
-            slots = int(getattr(self.polish_engine.runtime, "parallel_slots", 1))
-        except Exception:
-            slots = 1
-        if slots <= 1:
-            return 1
-        try:
-            snapshot = self.polish_engine.hardware_provider()
-        except Exception:
-            return 1
-        if getattr(snapshot, "on_battery", False):
-            return 1
-        if not getattr(snapshot, "driver_healthy", False):
-            return 1
-        available = int(getattr(snapshot, "available_vram_bytes", 0) or 0)
-        loaded = sum(
-            max(0, int(value))
-            for _model, value in getattr(snapshot, "loaded_model_vram", ())
-        )
-        headroom = available + loaded
-        if headroom >= 12 * 1024**3:
-            return min(3, slots)
-        if headroom >= 8 * 1024**3:
-            return min(2, slots)
+        """Use one ordered worker because correction state and GPU residency are shared."""
         return 1
 
     def _palette_ai_worker_loop(self) -> None:
@@ -2079,7 +2327,7 @@ class EchoLinkWindow(QMainWindow):
                 runtime_done,
             ),
             daemon=True,
-            name="manuscript-qwen-runtime-status",
+            name="manuscript-ai-runtime-status",
         ).start()
         hud_timeout = max(
             120.0,
@@ -2091,7 +2339,7 @@ class EchoLinkWindow(QMainWindow):
                 "model": model,
                 "profile": profile,
                 # PolishEngine and LocalWritingAssistant own the correction
-                # contract. Repeating it here caused Qwen to lose immutable
+                # contract. Repeating it here caused AI to lose immutable
                 # tokens on full-page HUD reviews.
                 "instruction": "",
                 "protected_terms": protected_terms,
@@ -2283,6 +2531,7 @@ class EchoLinkWindow(QMainWindow):
         request_id, ok, text, message = payload
         if request_id != self._palette_request_id or self.selected_text_record is None:
             return
+        message = user_ai_status(message)
         update_status_label(self.writing_state, message, assertive=not ok)
         if not ok:
             self.rewrite_palette.show_error(message)
@@ -2297,6 +2546,7 @@ class EchoLinkWindow(QMainWindow):
         request_id, attempt_id, suggestion_id, ok, text, message = payload
         if request_id != self._palette_request_id or self.selected_text_record is None:
             return
+        message = user_ai_status(message)
         update_status_label(self.writing_state, message, assertive=not ok)
         if not ok:
             self.rewrite_palette.show_sentence_error(attempt_id, suggestion_id, message)
@@ -2726,7 +2976,13 @@ class EchoLinkWindow(QMainWindow):
                 "Approve at least one local source first.",
             )
             return
-        model = self.engine.settings.ollama_model
+        model = self._accepted_writing_model()
+        if not model:
+            update_status_label(
+                self.source_chat_state,
+                "AI is still getting ready. Try again shortly.",
+            )
+            return
         self._source_chat_request_id += 1
         request_id = self._source_chat_request_id
         self.source_add_button.setEnabled(False)
@@ -2740,6 +2996,10 @@ class EchoLinkWindow(QMainWindow):
 
         def work() -> None:
             try:
+                if not self.engine.prepare_ai_for_execution(
+                    timeout=max(30.0, self.engine.settings.correction_timeout_seconds)
+                ):
+                    raise RuntimeError("Local AI is not ready. Try again shortly.")
                 result = self.source_chat.ask(
                     question,
                     sources=self.local_source_index,
@@ -2769,6 +3029,7 @@ class EchoLinkWindow(QMainWindow):
         self.source_add_button.setEnabled(True)
         self.source_clear_button.setEnabled(True)
         self.source_chat_button.setEnabled(True)
+        message = user_ai_status(message)
         update_status_label(self.source_chat_state, message, assertive=not ok)
         if not ok or not isinstance(result, LocalChatResult):
             return
@@ -2857,9 +3118,10 @@ class EchoLinkWindow(QMainWindow):
         self.bridge.hotkey_pressed.emit(active_window())
 
     def _hotkey_press(self, target_window=None) -> None:
-        if not self.engine.is_busy:
-            if target_window is not None:
-                self.engine.inserter.activate_window(target_window)
+        # The captured target identifies where this dictation belongs. Do not
+        # reactivate it here: moving foreground focus can move the caret and
+        # the engine already allows capture while earlier AI jobs process.
+        if self.engine.can_start_recording:
             self.engine.start_recording(target_window=target_window)
 
     def _hotkey_release(self) -> None:
@@ -2869,7 +3131,7 @@ class EchoLinkWindow(QMainWindow):
     def _toggle_hands_free_recording(self) -> None:
         if self.engine.hands_free_session:
             self.engine.stop_recording()
-        elif not self.engine.is_busy:
+        elif self.engine.can_start_recording:
             self.engine.start_recording(hands_free=True)
 
     def _cancel_hands_free_recording(self) -> None:
@@ -2879,18 +3141,36 @@ class EchoLinkWindow(QMainWindow):
     def _handle_session_event(self, event: SessionEvent) -> None:
         previous_state = self._last_session_state
         self._last_session_state = event.state
+        explicit_capture_event = bool(event.capture_started or event.capture_stopped)
+        capture_started = bool(event.capture_started)
+        capture_stopped = bool(event.capture_stopped)
+        # Keep older tests and third-party event adapters working. Real engine
+        # events carry capture/job IDs, so interleaved processing updates can
+        # never masquerade as microphone transitions.
+        if not explicit_capture_event and not event.capture_id and not event.job_sequence:
+            capture_started = bool(
+                event.state is SessionState.LISTENING
+                and previous_state is not SessionState.LISTENING
+            )
+            capture_stopped = bool(
+                previous_state is SessionState.LISTENING
+                and event.state is not SessionState.LISTENING
+            )
+        capture_is_active = bool(
+            self.engine.state is SessionState.LISTENING
+            or (capture_started and not capture_stopped)
+        )
         if (
             self.engine.settings.pause_media_during_dictation
-            and event.state is SessionState.LISTENING
-            and previous_state is not SessionState.LISTENING
+            and capture_started
         ):
             self.media_pause.pause()
-        elif previous_state is SessionState.LISTENING and event.state is not SessionState.LISTENING:
+        elif capture_stopped:
             self.media_pause.resume()
         if self.tray_icon is not None:
             self.tray_icon.setToolTip(f"Manuscript - {event.message}")
             self.tray_dictate_action.setText(
-                "Stop dictation" if event.state is SessionState.LISTENING else "Dictate in Manuscript"
+                "Stop dictation" if capture_is_active else "Dictate in Manuscript"
             )
             self.tray_hands_free_action.setText(
                 "Stop hands-free dictation" if self.engine.hands_free_session else "Start hands-free dictation"
@@ -2898,17 +3178,18 @@ class EchoLinkWindow(QMainWindow):
         if self.engine.settings.show_echo_bar:
             self.echo_bar.show_state(event.state, event.message)
         if self.engine.settings.sound_enabled:
-            if event.state is SessionState.LISTENING and previous_state is not SessionState.LISTENING:
+            if capture_started:
                 play_start(self.engine.settings)
-            elif previous_state is SessionState.LISTENING and event.state is not SessionState.LISTENING:
+            elif capture_stopped:
                 play_stop(self.engine.settings)
         color = COLORS["green"]
-        if event.state is SessionState.LISTENING:
+        if capture_is_active or (capture_started and not capture_stopped):
             color = COLORS["red"]
             self.record_button.setText("Stop recording")
         elif event.state in (SessionState.TRANSCRIBING, SessionState.REFINING):
             color = COLORS["amber"]
-            self.record_button.setEnabled(False)
+            self.record_button.setText("Start recording")
+            self.record_button.setEnabled(self.engine.can_start_recording)
         elif event.state is SessionState.ERROR:
             color = COLORS["red"]
             self.record_button.setText("Start recording")
@@ -3776,6 +4057,7 @@ class EchoLinkWindow(QMainWindow):
         if self._shutdown_complete:
             return
         self._shutdown_complete = True
+        self._warm_retry_stop.set()
         with self._palette_ai_lock:
             self._palette_ai_shutdown = True
             self._palette_ai_queue.clear()
@@ -3797,6 +4079,7 @@ class EchoLinkWindow(QMainWindow):
                 listener.join(timeout=1.0)
         self.private_text_buffer.clear()
         self.engine.shutdown()
+        self.ai_coordinator.close()
         self.media_pause.shutdown()
         self.echo_bar.close()
         self.target_underline.close()
