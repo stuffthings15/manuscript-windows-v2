@@ -45,7 +45,7 @@ _FUNCTION_WORDS = frozenset(
     of to in on at by for with from into onto upon about over under
     as if then than so and or but nor yet because while when where
     there here not no nor never very just really quite also too
-    all any some each every both few more most other another such
+    all any some each every both few more most other another such like
     own same only own
     """.split()
 )
@@ -197,7 +197,42 @@ def _explains(lost: str, replacement: str) -> bool:
         return True
     if distance == 2 and len(replacement) >= len(lost) and lost[:1] == replacement[:1]:
         return True
+    # A badly misspelled word sits further than two edits from its repair:
+    # "edjucashunal" to "educational", "atenshun" to "attention", "lernt" to
+    # "learned". Refusing those would refuse the corrections this product
+    # exists to make. The relaxation is only for words the dictionary does not
+    # know, so it cannot excuse replacing a real word - "person" is spelled
+    # correctly and stays protected, and so does "enters", which is how
+    # "measures" is still caught.
+    if _is_misspelling(lost) and lost[:2] == replacement[:2]:
+        return abs(len(lost) - len(replacement)) <= 3
     return False
+
+
+_DICTIONARY: object | None = None
+
+
+def _is_misspelling(word: str) -> bool:
+    """Whether the bundled dictionary does not recognise this word."""
+    global _DICTIONARY
+    if _DICTIONARY is None:
+        try:
+            from .polish_spelling import EnglishDictionary
+
+            dictionary = EnglishDictionary()
+            dictionary.warm()
+            _DICTIONARY = dictionary
+        except Exception:  # noqa: BLE001 - the dictionary is optional here
+            _DICTIONARY = False
+    if _DICTIONARY is False:
+        # Without a dictionary every word looks correctly spelled, which keeps
+        # the strict rule rather than the relaxed one. Guarding is the safe
+        # direction to fail.
+        return False
+    try:
+        return not _DICTIONARY.contains(word)  # type: ignore[union-attr]
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _all_words(text: str) -> list[str]:

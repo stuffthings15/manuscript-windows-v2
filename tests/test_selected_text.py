@@ -3548,3 +3548,46 @@ def test_protected_content_is_never_restored_by_guesswork() -> None:
     # was nothing to change", which is not what happened.
     one_sentence = "Keep ECHOLINKTOKEN0X unchanged."
     assert _restore_missing_immutable_tokens(one_sentence, "Token removed.", {}) == ""
+
+
+@pytest.mark.parametrize(
+    ("source", "candidate"),
+    [
+        ("it is edjucashunal and fun", "it is educational and fun"),
+        ("it needs atenshun daily", "it needs attention daily"),
+        ("they lernt much bout it", "they learned much about it"),
+        ("a dog can make a like regular place feel nice",
+         "a dog can make a regular place feel nice"),
+    ],
+)
+def test_a_badly_misspelled_word_may_be_repaired_from_further_away(
+    source: str, candidate: str
+) -> None:
+    """Two edits is not far enough for the spellings this product actually sees.
+
+    "edjucashunal" sits four edits from "educational" and "atenshun" three from
+    "attention", so a strict two-edit rule refused the corrections the product
+    exists to make. The relaxation only applies to words the dictionary does
+    not recognise, so it cannot excuse replacing a correctly spelled one.
+    """
+    from echo_link_core.meaning_diff import unexplained_losses
+
+    assert unexplained_losses(source, candidate) == ()
+
+
+@pytest.mark.parametrize(
+    ("source", "candidate"),
+    [
+        ("when the oner ENTERS the ROOM", "when the owner measures the room"),
+        ("the dog barks loudly", "the dog sleeps loudly"),
+        ("she walked to the store", "she drove to the store"),
+        ("the vet checked the animal", "the doctor checked the animal"),
+    ],
+)
+def test_a_correctly_spelled_word_is_still_protected(
+    source: str, candidate: str
+) -> None:
+    """The relaxation above must not reopen the case it was built to catch."""
+    from echo_link_core.meaning_diff import unexplained_losses
+
+    assert unexplained_losses(source, candidate) != ()
