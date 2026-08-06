@@ -616,7 +616,15 @@ class LocalWritingAssistant:
                 candidate = _restore_candidate_semantics(source, candidate, replacements)
                 if _immutable_tokens_changed(protected, candidate, replacements):
                     _log_immutable_token_mismatch("final-retry", protected, candidate)
-                    raise RuntimeError("The result changed protected content.")
+                    # Three prompts have now asked for the token and not got it.
+                    # Keep the writer's own sentence for the clause that holds
+                    # it rather than throwing the whole corrected section away.
+                    repaired = _restore_missing_immutable_tokens(
+                        protected, candidate, replacements
+                    )
+                    if not repaired:
+                        raise RuntimeError("The result changed protected content.")
+                    candidate = repaired
         numeric_surface_change = _numeric_literal_change(protected, candidate)
         missing_number_facts = _missing_number_fact_phrases(
             number_fact_phrases,
@@ -1677,6 +1685,63 @@ def _log_immutable_token_mismatch(stage: str, source: str, candidate: str) -> No
         expected,
         actual,
     )
+
+
+def _sentence_pieces(text: str) -> list[str]:
+    """Split into sentences, keeping their punctuation and spacing."""
+    return [piece for piece in re.split(r"(?<=[.!?])(\s+)", text) if piece != ""]
+
+
+def _restore_missing_immutable_tokens(
+    source: str,
+    candidate: str,
+    replacements: dict[str, str],
+) -> str:
+    """Put back the sentences whose protected tokens the model dropped.
+
+    A protected token stands in for something the writer must keep exactly - a
+    saved vocabulary term, a name, a number. Small packs drop one anyway, and
+    they keep dropping it through the retry and the final retry, so asking
+    again a fourth time is not a plan. Until now the whole section was refused,
+    which cost every correction in it to save one clause.
+
+    Sentences are the unit because that is the largest piece that can be put
+    back without guessing. A dropped token cannot be reinserted into the
+    model's own sentence - there is no way to know where it belongs - but the
+    writer's original sentence is known exactly, so that sentence is kept as it
+    was and the rest of the answer stands.
+
+    Returns "" when the sentences do not line up, and the caller refuses the
+    answer as before. Protected content is never reconstructed by guesswork.
+    """
+    missing = set(_missing_immutable_tokens(source, candidate))
+    if not missing:
+        # Nothing is absent, so the answer changed the tokens some other way -
+        # it reordered them, or wrote a malformed one. Restoring a sentence
+        # cannot fix either, and a protected value in the wrong order is a
+        # different statement. Refuse.
+        return ""
+    source_pieces = _sentence_pieces(source)
+    candidate_pieces = _sentence_pieces(candidate)
+    if len(source_pieces) != len(candidate_pieces):
+        return ""
+    rebuilt = list(candidate_pieces)
+    for index, piece in enumerate(source_pieces):
+        tokens = {match.group(0).upper() for match in _IMMUTABLE_TOKEN.finditer(piece)}
+        if tokens & missing:
+            rebuilt[index] = piece
+    result = "".join(rebuilt)
+    if result == source:
+        # Every sentence had to be put back, so nothing the model produced
+        # survived. Returning this would hand the writer their own text and
+        # read as "there was nothing to change", which is not what happened.
+        # Refuse and let the caller report the failure.
+        return ""
+    if _missing_immutable_tokens(source, result):
+        return ""
+    if _immutable_tokens_changed(source, result, replacements):
+        return ""
+    return result
 
 
 def _missing_immutable_tokens(source: str, candidate: str) -> tuple[str, ...]:

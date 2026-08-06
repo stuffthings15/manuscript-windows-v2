@@ -3488,3 +3488,63 @@ def test_ordinary_repairs_are_not_mistaken_for_meaning_changes(
     that refuses these is worse than no guard, because the user sees nothing.
     """
     assert _meaning_constraints_preserved(source, candidate)
+
+
+def test_a_dropped_protected_token_costs_one_sentence_not_the_section() -> None:
+    """Small packs drop a protected token and keep dropping it on every retry.
+
+    A token stands in for something the writer must keep exactly - a saved
+    vocabulary term, a name, a number. The initial answer, the retry and the
+    final retry all came back without it, which is what the live logs showed:
+    `expected=('ECHOLINKTOKEN1X','ECHOLINKTOKEN0X') actual=('ECHOLINKTOKEN0X',)`
+    at all three stages. The whole corrected section was then refused, so one
+    dropped clause cost every correction around it.
+
+    The writer's own sentence is known exactly, so it is put back and the rest
+    of the answer stands. The token is never reinserted into the model's
+    sentence - there is no way to know where it would belong.
+    """
+    from echo_link_core.selected_text import _restore_missing_immutable_tokens
+
+    source = (
+        "the oner met ECHOLINKTOKEN0X today. she gave ECHOLINKTOKEN1X a bowl. "
+        "the dog was happy."
+    )
+    candidate = (
+        "The owner met ECHOLINKTOKEN0X today. She gave a bowl. The dog was happy."
+    )
+
+    repaired = _restore_missing_immutable_tokens(source, candidate, {})
+
+    assert "ECHOLINKTOKEN1X" in repaired
+    # The clause that lost the token keeps the writer's wording exactly.
+    assert "she gave ECHOLINKTOKEN1X a bowl." in repaired
+    # Everything else keeps the correction.
+    assert repaired.startswith("The owner met ECHOLINKTOKEN0X today.")
+    assert repaired.endswith("The dog was happy.")
+
+
+def test_protected_content_is_never_restored_by_guesswork() -> None:
+    """When the sentences do not line up, the answer is refused as before.
+
+    Merging or splitting sentences makes it impossible to say which clause the
+    token belonged to, and a protected value put in the wrong place is worse
+    than no correction at all.
+    """
+    from echo_link_core.selected_text import _restore_missing_immutable_tokens
+
+    source = "the oner met ECHOLINKTOKEN0X. she gave ECHOLINKTOKEN1X a bowl."
+    merged = "The owner met ECHOLINKTOKEN0X and she gave a bowl."
+
+    assert _restore_missing_immutable_tokens(source, merged, {}) == ""
+
+    # Reordering loses nothing, so no sentence can be put back to repair it -
+    # and a protected value in the wrong order is a different statement.
+    reordered = "She gave ECHOLINKTOKEN1X a bowl. The owner met ECHOLINKTOKEN0X."
+    assert _restore_missing_immutable_tokens(source, reordered, {}) == ""
+
+    # When every sentence has to be put back, nothing the model wrote
+    # survived. Handing the writer their own text back would read as "there
+    # was nothing to change", which is not what happened.
+    one_sentence = "Keep ECHOLINKTOKEN0X unchanged."
+    assert _restore_missing_immutable_tokens(one_sentence, "Token removed.", {}) == ""

@@ -28,17 +28,41 @@ from .polish_types import (
 )
 
 
-POLISH_POLICY_VERSION = 5
+POLISH_POLICY_VERSION = 6
 _GIB = 1024**3
 _PACK_ORDER = (
     "gemma4-12b-q4-k-m-v1",
-    "qwen3-14b-q6-v1",
-    "qwen3-14b-q5-v1",
-    "qwen3-14b-q4-k-m-v1",
-    "qwen3-8b-q4-k-m-v1",
-    "qwen3-4b-q4-k-m-v1",
-    "qwen3-1.7b-q4-k-m-v1",
+    "gemma4-e4b-qat-v1",
+    "gemma4-e2b-qat-v1",
 )
+_PACK_IDS = frozenset(_PACK_ORDER)
+_MODE_PACK_ORDER = {
+    PolishMode.INSTANT: ("gemma4-e2b-qat-v1",),
+    PolishMode.AUTO: (
+        "gemma4-e4b-qat-v1",
+        "gemma4-e2b-qat-v1",
+        "gemma4-12b-q4-k-m-v1",
+    ),
+    PolishMode.BALANCED: (
+        "gemma4-e4b-qat-v1",
+        "gemma4-e2b-qat-v1",
+        "gemma4-12b-q4-k-m-v1",
+    ),
+    PolishMode.PROFESSIONAL: _PACK_ORDER,
+}
+_PACK_MIN_RAM = {
+    "gemma4-e2b-qat-v1": 8 * _GIB,
+    "gemma4-e4b-qat-v1": 16 * _GIB,
+    "gemma4-12b-q4-k-m-v1": 32 * _GIB,
+}
+_PACK_MIN_VRAM = {
+    "gemma4-e2b-qat-v1": 6 * _GIB,
+    "gemma4-e4b-qat-v1": 8 * _GIB,
+    "gemma4-12b-q4-k-m-v1": 12 * _GIB,
+}
+# The 12B pack is intentionally GPU-only. Letting it spill to the CPU makes
+# interactive correction unusably slow. E2B and E4B remain the CPU tiers.
+_CPU_PACK_IDS = frozenset({"gemma4-e2b-qat-v1", "gemma4-e4b-qat-v1"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +100,7 @@ class PolishBenchmarkCache:
         *,
         runtime_id: str,
         pack: PolishModelPack,
+        plan: ExecutionPlan,
     ) -> str:
         material = {
             "policy": POLISH_POLICY_VERSION,
@@ -88,6 +113,17 @@ class PolishBenchmarkCache:
             "pack": pack.pack_id,
             "pack_version": pack.version,
             "digest": pack.manifest_digest,
+            # A probe authorizes one exact execution contract. A slower
+            # Professional pass must never authorize Balanced or Instant, and
+            # a CPU or Vulkan result must never authorize a CUDA full-GPU run.
+            # These fields also make every legacy key miss naturally.
+            "mode": PolishMode.coerce(plan.mode).value,
+            "warm_latency_limit_seconds": max(
+                0.0,
+                float(plan.warm_latency_limit_seconds),
+            ),
+            "backend": plan.backend.value,
+            "require_full_gpu": bool(plan.require_full_gpu),
         }
         encoded = json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
@@ -146,7 +182,7 @@ class PolishBenchmarkCache:
 
 
 class HardwarePolicyManager:
-    """Choose the largest safe, available, locally validated model pack."""
+    """Choose the fastest suitable, available, locally validated model pack."""
 
     policy_version = POLISH_POLICY_VERSION
 
@@ -194,16 +230,37 @@ class HardwarePolicyManager:
 
         records = benchmark_records or {}
         failed_reasons: list[str] = []
-        selected: PolishModelPack | None = None
-        selected_probe = False
+        passing: list[tuple[float, int, PolishModelPack]] = []
+        unmeasured: list[PolishModelPack] = []
         for pack in candidates:
             record = records.get(pack.pack_id)
             if record is not None and not record.accepted:
-                failed_reasons.append(f"{pack.display_name}: {record.reason or 'local probe failed'}")
+                failed_reasons.append(
+                    "A larger local AI pack failed: "
+                    f"{record.reason or 'local probe failed'}"
+                )
                 continue
-            selected = pack
-            selected_probe = record is None
-            break
+            backend = self._select_backend(snapshot, pack)
+            if record is not None and record.backend.casefold() == backend.value:
+                passing.append(
+                    (max(0.0, record.elapsed_seconds), len(passing), pack)
+                )
+            else:
+                unmeasured.append(pack)
+        selected: PolishModelPack | None
+        selected_probe: bool
+        if passing:
+            # Every accepted record passed the same mode-specific correctness,
+            # preservation, residency, and latency gates. Prefer its measured
+            # speed instead of assuming the larger pack is faster.
+            selected = min(passing, key=lambda value: (value[0], value[1]))[2]
+            selected_probe = False
+        elif unmeasured:
+            selected = unmeasured[0]
+            selected_probe = True
+        else:
+            selected = None
+            selected_probe = False
         if selected is None:
             reason = failed_reasons[0] if failed_reasons else "Every local model probe failed."
             return self._rules_plan(mode, task, reason)
@@ -252,7 +309,7 @@ class HardwarePolicyManager:
             requires_probe=selected_probe,
             standby_model=standby,
             reason=(
-                f"{selected.display_name} selected for {mode.value} "
+                f"Local AI selected for {mode.value} "
                 f"{scope.value} correction."
             ),
             downgrade_reason=failed_reasons[0] if failed_reasons else "",
@@ -300,30 +357,37 @@ class HardwarePolicyManager:
         preferred_pack_id: str,
         mode: PolishMode,
     ) -> list[PolishModelPack]:
-        pack_values = [pack for pack in packs if pack.available]
-        rank = {pack_id: index for index, pack_id in enumerate(_PACK_ORDER)}
+        pack_values = [
+            pack
+            for pack in packs
+            if pack.available
+            and pack.pack_id in _PACK_IDS
+            and snapshot.total_ram_bytes
+            >= max(pack.min_ram_bytes, _PACK_MIN_RAM[pack.pack_id])
+            # A fully resident GPU model still needs enough host memory to be
+            # staged. Under pressure, choose the next smaller Gemma pack.
+            and snapshot.available_ram_bytes >= pack.size_bytes
+        ]
+        mode_order = _MODE_PACK_ORDER[mode]
+        rank = {pack_id: index for index, pack_id in enumerate(mode_order)}
+        pack_values = [pack for pack in pack_values if pack.pack_id in rank]
+        gpu_backends = {
+            RuntimeBackend.CUDA,
+            RuntimeBackend.HIP,
+            RuntimeBackend.VULKAN,
+            RuntimeBackend.SYCL,
+        }
         pack_values.sort(
             key=lambda pack: (
+                0
+                if self._select_backend(snapshot, pack) in gpu_backends
+                else 1,
                 rank.get(pack.pack_id, len(rank)),
                 0 if pack.pack_id == preferred_pack_id else 1,
             )
         )
-        fast_interactive_pack_available = any(
-            pack.pack_id.startswith("qwen3-8b")
-            and snapshot.total_ram_bytes >= pack.min_ram_bytes
-            and self._select_backend(snapshot, pack) is not RuntimeBackend.RULES
-            for pack in pack_values
-        )
         eligible: list[PolishModelPack] = []
         for pack in pack_values:
-            if (
-                mode is not PolishMode.PROFESSIONAL
-                and fast_interactive_pack_available
-                and pack.pack_id.startswith("qwen3-14b")
-            ):
-                continue
-            if snapshot.total_ram_bytes < pack.min_ram_bytes:
-                continue
             if self._select_backend(snapshot, pack) is RuntimeBackend.RULES:
                 continue
             eligible.append(pack)
@@ -339,17 +403,12 @@ class HardwarePolicyManager:
         # Ollama can unload the currently resident model before loading the
         # selected pack. Count all model VRAM as reclaimable so a loaded larger
         # model cannot falsely force the policy down to CPU or a smaller pack.
-        loaded_vram = sum(
-            max(0, int(value))
-            for _model, value in snapshot.loaded_model_vram
-        )
-        effective_available_vram = min(
-            snapshot.dedicated_vram_bytes,
-            snapshot.available_vram_bytes + loaded_vram,
-        )
+        effective_available_vram = _reclaimable_vram(snapshot)
+        hard_min_vram = _PACK_MIN_VRAM.get(pack.pack_id, pack.min_vram_bytes)
         gpu_fits = (
             snapshot.driver_healthy
-            and snapshot.dedicated_vram_bytes >= pack.min_vram_bytes
+            and snapshot.dedicated_vram_bytes
+            >= max(pack.min_vram_bytes, hard_min_vram)
             and max(0, effective_available_vram - reserve) >= pack.size_bytes
         )
         for backend in (
@@ -360,6 +419,11 @@ class HardwarePolicyManager:
         ):
             if backend in available and gpu_fits:
                 return backend
+        # A selected GPU plan must stay fully resident. When the GPU is healthy
+        # but too small, selecting the CPU backend is a separate whole-model
+        # plan, not partial offload or GPU spill.
+        if pack.pack_id not in _CPU_PACK_IDS:
+            return RuntimeBackend.RULES
         ram_budget = min(
             snapshot.total_ram_bytes // 2,
             int(snapshot.available_ram_bytes * 0.70),
@@ -389,7 +453,15 @@ class HardwarePolicyManager:
             return "Graphics driver is unhealthy; using rules and MiniLM."
         if snapshot.available_ram_bytes < 4 * _GIB:
             return "Available RAM is low; using rules and MiniLM."
-        if snapshot.gpu_name and snapshot.available_vram_bytes < 2 * _GIB:
+        # Reclaimable, not free. Every pack the cascade tries stays resident on
+        # the card afterwards, so a few refused corrections were enough to fill
+        # the GPU with this app's own models - and then this check saw a full
+        # card, dropped to rules, and never recovered, because nothing unloads
+        # while the plan says rules. Measured on a 16 GB card: essays 1 to 3
+        # corrected normally, then every paragraph after came back rules-only
+        # with "Available VRAM is low". `_select_backend` already counts loaded
+        # model VRAM as reclaimable for exactly this reason; the two disagreed.
+        if snapshot.gpu_name and _reclaimable_vram(snapshot) < 2 * _GIB:
             return "Available VRAM is low; using rules and MiniLM."
         return ""
 
@@ -503,16 +575,15 @@ def _standby_model(
     cost the reader the whole section. A small model answering late beats no
     answer, so one is kept loaded beside the primary.
 
-    It is only offered when it genuinely fits beside the primary in VRAM, or
-    when the machine has the RAM to run it on the CPU. On a small machine there
-    is no standby and nothing changes - the Windows build ships to a wide range
-    of hardware and must not assume headroom.
+    It is only offered when it genuinely fits beside the primary in VRAM.
+    A GPU plan never advertises a CPU-spill standby.
     """
     smaller = sorted(
         (
             pack
             for pack in packs
             if pack.installed
+            and pack.pack_id in _PACK_IDS
             and pack.pack_id != selected.pack_id
             and pack.size_bytes < selected.size_bytes
         ),
@@ -528,26 +599,32 @@ def _standby_model(
     )
     if spare_vram >= candidate.size_bytes:
         return candidate.model
-    # No room on the card. The CPU can still hold it, provided the machine is
-    # not already tight on memory.
-    if snapshot.available_ram_bytes >= candidate.size_bytes * 2:
-        return candidate.model
     return ""
 
 
 def _latency_limit(mode: PolishMode) -> float:
-    """How long a warm probe may take before a pack is considered slow.
-
-    This ranks packs; it no longer decides whether the local AI runs at all, so
-    it can afford to be realistic. The old 2s Instant limit was unreachable for
-    any pack the app actually ships - a measured section costs about 10s on the
-    8B pack - which meant the probe reported failure on healthy hardware.
-    """
+    """Hard warm-generation limit before policy selects a smaller pack."""
     if mode is PolishMode.INSTANT:
-        return 6.0
+        return 2.0
     if mode is PolishMode.PROFESSIONAL:
-        return 30.0
-    return 12.0
+        return 15.0
+    return 5.0
+
+
+def _reclaimable_vram(snapshot: HardwareSnapshot) -> int:
+    """Free VRAM plus whatever a resident model could give back.
+
+    Ollama unloads the model it is holding before it loads another one, so
+    VRAM occupied by a language model is available to the next one. Treating
+    it as unavailable makes the app's own success look like a full card.
+    """
+    loaded_vram = sum(
+        max(0, int(value)) for _model, value in snapshot.loaded_model_vram
+    )
+    return min(
+        snapshot.dedicated_vram_bytes,
+        snapshot.available_vram_bytes + loaded_vram,
+    )
 
 
 def _vram_reserve(dedicated_vram_bytes: int) -> int:
@@ -678,6 +755,27 @@ def _nvidia_status() -> dict[str, object] | None:
     }
 
 
+_LOADED_MODEL_CACHE: dict[str, object] = {"at": 0.0, "value": ((), ())}
+# Long enough to cover a generation, short enough that a model genuinely
+# unloaded by the keep-alive window is forgotten soon after.
+_LOADED_MODEL_CACHE_SECONDS = 120.0
+
+
+def _last_loaded_models() -> tuple[
+    tuple[str, ...],
+    tuple[tuple[str, int], ...],
+]:
+    """The most recent successful reading, while it is still plausible.
+
+    A failed query means "not known", not "nothing is loaded", and the two
+    answers send the policy in opposite directions. Treating a timeout as an
+    empty card made the app disable itself precisely when it was busiest.
+    """
+    if time.time() - float(_LOADED_MODEL_CACHE["at"]) <= _LOADED_MODEL_CACHE_SECONDS:
+        return _LOADED_MODEL_CACHE["value"]  # type: ignore[return-value]
+    return (), ()
+
+
 def _ollama_loaded_models() -> tuple[
     tuple[str, ...],
     tuple[tuple[str, int], ...],
@@ -685,13 +783,18 @@ def _ollama_loaded_models() -> tuple[
     try:
         payload = LoopbackJSONTransport("http://127.0.0.1:11434").get_json(
             "/api/ps",
-            timeout=0.5,
+            # Half a second is not long enough while the server is generating,
+            # which is exactly when this is asked. The answer decides whether
+            # VRAM held by a loaded model counts as reclaimable, so losing it
+            # reads as "the card is full and nothing can be freed" and drops
+            # the whole app to rules.
+            timeout=2.0,
         )
     except (LocalTransportError, OSError, RuntimeError, TypeError, ValueError):
-        return (), ()
+        return _last_loaded_models()
     values = payload.get("models")
     if not isinstance(values, list):
-        return (), ()
+        return _last_loaded_models()
     names: list[str] = []
     vram: list[tuple[str, int]] = []
     for item in values:
@@ -706,7 +809,10 @@ def _ollama_loaded_models() -> tuple[
         except (TypeError, ValueError):
             gpu_bytes = 0
         vram.append((name, gpu_bytes))
-    return tuple(dict.fromkeys(names)), tuple(vram)
+    value = (tuple(dict.fromkeys(names)), tuple(vram))
+    _LOADED_MODEL_CACHE["at"] = time.time()
+    _LOADED_MODEL_CACHE["value"] = value
+    return value
 
 
 def _ollama_version() -> str:
