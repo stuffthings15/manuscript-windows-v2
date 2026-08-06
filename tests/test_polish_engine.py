@@ -5193,3 +5193,39 @@ def test_a_refused_correction_does_not_take_the_pack_out_of_service() -> None:
     assert "gemma4-e2b-qat-v1" in engine._failed_pack_ids()
     clock[0] += _FAILED_PACK_TTL_SECONDS
     assert engine._failed_pack_ids() == set()
+
+
+def test_a_broken_model_manifest_is_reported_not_swallowed(caplog):
+    """Losing the catalogue turns the local AI off, so it must be visible.
+
+    A manifest was once edited without being re-signed, and every pack failed
+    its signature check. The engine fell back to deterministic rules and said
+    nothing at all - no log line, no status text - so the product's main
+    feature was off for a whole session and the only symptom was writing that
+    was quietly worse.
+    """
+    import logging
+
+    from echo_link_core.polish import PolishEngine
+    from echo_link_core.polish_model_packs import ModelPackSecurityError
+
+    class BrokenPacks:
+        def catalog(self, refresh_installed=False):
+            raise ModelPackSecurityError("Polish model manifest signature failed.")
+
+    engine = PolishEngine(packs=BrokenPacks())
+    with caplog.at_level(logging.WARNING, logger="echo_link_core.polish"):
+        first_catalog, first_reason = engine._catalog()
+        engine._catalog()
+
+    assert first_catalog == ()
+    assert "signature failed" in first_reason
+    warnings = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+        and "rules only" in record.getMessage()
+    ]
+    # Reported, and reported once rather than on every paragraph.
+    assert len(warnings) == 1
+    assert "signature failed" in warnings[0].getMessage()

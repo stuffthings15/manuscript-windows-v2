@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import threading
 import time
@@ -51,6 +52,9 @@ from .selected_text import (
     _apply_fast_proofread_rules,
     _apply_safe_caveman_splits,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 _WORD = re.compile(r"\b[\w'-]+\b", re.UNICODE)
@@ -905,6 +909,7 @@ class PolishEngine:
         self.packs = packs or ModelPackManager()
         self.runtime = runtime or AdaptiveInferenceRuntime(model_packs=self.packs)
         self._hardware_detector = HardwareDetector()
+        self._last_catalog_error = ""
         self.hardware_provider = hardware_provider or self._hardware_detector.snapshot
         self.benchmark_cache = benchmark_cache or PolishBenchmarkCache(None)
         self.preferred_pack_provider = preferred_pack_provider or (lambda: "")
@@ -2288,9 +2293,26 @@ class PolishEngine:
 
     def _catalog(self) -> tuple[tuple[PolishModelPack, ...], str]:
         try:
-            return self.packs.catalog(refresh_installed=True), ""
+            catalog = self.packs.catalog(refresh_installed=True)
         except (ModelPackSecurityError, OSError, RuntimeError, ValueError) as exc:
-            return (), str(exc)
+            reason = str(exc)
+            # Losing the catalogue turns the local AI off and leaves only the
+            # deterministic rules. That happened for a whole session because a
+            # manifest was edited without being re-signed, and nothing said
+            # so: no log line, no status text, just quietly worse writing.
+            # Repeat it once per distinct reason so it is visible without
+            # filling the log on every paragraph.
+            if reason != self._last_catalog_error:
+                self._last_catalog_error = reason
+                logger.warning(
+                    "Local AI unavailable, correcting with rules only: %s",
+                    reason,
+                )
+            return (), reason
+        if self._last_catalog_error:
+            logger.info("Local AI model catalogue is readable again")
+            self._last_catalog_error = ""
+        return catalog, ""
 
     def _remember_failed_pack(
         self,
