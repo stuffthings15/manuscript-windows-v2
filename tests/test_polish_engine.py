@@ -5177,8 +5177,10 @@ def test_a_refused_correction_does_not_take_the_pack_out_of_service() -> None:
     # Still recorded, so this request can cascade to a smaller pack.
     assert "gemma4-e2b-qat-v1" in engine._failed_pack_ids()
 
-    # Gone well before the next paragraph is sent.
-    clock[0] += _VALIDATION_FAILURE_TTL_SECONDS + 1.0
+    # Gone before the next paragraph is sent. The window is shorter than one
+    # rules-only paragraph on purpose: at five seconds one refusal still
+    # covered the next ten paragraphs, and one of those re-armed it.
+    clock[0] += _VALIDATION_FAILURE_TTL_SECONDS + 0.01
     assert engine._failed_pack_ids() == set()
 
     # A real runtime fault still holds the pack out for the full window.
@@ -5187,7 +5189,7 @@ def test_a_refused_correction_does_not_take_the_pack_out_of_service() -> None:
         "CUDA device was lost.",
         kind=RuntimeFailureKind.GPU_FAILURE,
     )
-    clock[0] += _VALIDATION_FAILURE_TTL_SECONDS + 1.0
+    clock[0] += _VALIDATION_FAILURE_TTL_SECONDS + 0.01
     assert "gemma4-e2b-qat-v1" in engine._failed_pack_ids()
     clock[0] += _FAILED_PACK_TTL_SECONDS
     assert engine._failed_pack_ids() == set()

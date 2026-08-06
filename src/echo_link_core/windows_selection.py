@@ -142,9 +142,17 @@ class WindowsSelectionReader:
                                 page_range = selected_range.Clone()
                                 page_range.ExpandToEnclosingUnit(page_unit)
                                 page_text = page_range.GetText(self.max_characters + 1)
+                                # Grow, never shrink. Widening a caret or a
+                                # short selection to its page is how the badge
+                                # offers a useful amount to review. Applying it
+                                # to a larger selection throws text away:
+                                # selecting a whole two-page essay came back as
+                                # page one, and paragraphs 8 to 10 were never
+                                # offered at all.
                                 if (
                                     isinstance(page_text, str)
                                     and page_text.strip()
+                                    and len(page_text) > len(text)
                                     and len(page_text) <= self.max_characters
                                 ):
                                     selected_range = page_range

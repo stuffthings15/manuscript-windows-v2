@@ -1218,3 +1218,38 @@ def test_capture_and_replacement_agree_on_a_word_document_digest():
     replacement_digest = _hashlib.sha256(visible.encode("utf-8")).hexdigest()
 
     assert _text_digest(uia_text) == replacement_digest
+
+
+def test_word_page_expansion_never_shrinks_a_larger_selection():
+    """Selecting a whole essay came back as page one.
+
+    Widening a caret or a short selection to its page is how the automatic
+    badge offers a useful amount of text to review. The same code ran on real
+    selections too, so asking for a review of a whole two-page document
+    replaced it with the rendered page - and paragraphs 8 to 10 of the essays
+    driven in Word were never offered at all, which read as the corrector
+    ignoring the end of the document.
+    """
+    page_text = "First paragraph has one sentence.\rSecond paragraph has two."
+    whole_document = f"{page_text}\rThird paragraph is on the next page.\rFourth as well."
+    selected = _PageRange(whole_document, page_text, [_Rect(10, 20, 300, 100)])
+    control = _Control(
+        [selected],
+        document_range=_Range(whole_document),
+        control_type="DocumentControl",
+        runtime_id=(7, 8, 9),
+    )
+    automation = _Automation(control)
+    automation.TextUnit = type("TextUnit", (), {"Page": 6})
+
+    detected = _reader(
+        control,
+        loader=lambda: automation,
+        title="Draft - Word",
+        include_word_page=True,
+        max_characters=500,
+    ).read()
+
+    assert detected is not None
+    assert detected.record.text == whole_document
+    assert "Third paragraph is on the next page." in detected.record.text

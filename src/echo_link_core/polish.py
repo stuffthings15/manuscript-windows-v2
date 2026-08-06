@@ -100,9 +100,15 @@ _FAILED_PACK_TTL_SECONDS = 300.0
 # correction was costing every correction after it.
 #
 # The record still has to outlive the request that created it, because the
-# cascade to a smaller pack reads it moments later. A few seconds does that and
-# is long gone before the next paragraph is sent.
-_VALIDATION_FAILURE_TTL_SECONDS = 5.0
+# cascade to a smaller pack reads it moments later.
+#
+# It must not outlive it by much. Five seconds was tried and still latched: a
+# paragraph that runs rules-only finishes in about half a second, so one
+# refusal covered the next ten paragraphs, and whichever of those finally
+# reached the model could refuse again and re-arm the whole thing. Essays came
+# back with two or three corrected paragraphs out of ten, over and over. The
+# window has to be shorter than one rules-only paragraph.
+_VALIDATION_FAILURE_TTL_SECONDS = 0.25
 
 
 def _failed_pack_ttl(kind: "RuntimeFailureKind") -> float:
