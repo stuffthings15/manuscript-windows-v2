@@ -186,3 +186,54 @@ directions; the corpus-wide number is not yet a clean measure of it.
 - Run the suite with
   `--basetemp=C:/Users/stuff/AppData/Local/Temp/mspt`; without it 31 tests fail
   on a `PermissionError` that is environment, not code.
+
+## Word automation: what works and what does not (2026-08-06)
+
+`tools/word_essay_session.py` is the harness that produces the file worth
+reading - `build/corrected/<name>.review.md`, one paragraph per row, Was and
+Now. It refuses to start when the local AI has fallen back to the rules, and
+it reports a short capture instead of hiding one.
+
+**It worked once, driven against a document a person had already opened and
+left in front.** 8 sections, 44 seconds, real corrections. That run is what
+found both product defects listed below.
+
+**Seven consecutive runs after that failed, all in the harness, never in the
+app.** Every one ended with the app saying `Writing HUD capture failed: No
+selected text was found` while Word had the whole document selected through
+COM. Things tried and ruled out, each disproved by one command:
+
+- Page-bound capture. Wrong: UI Automation reports the whole 5187-character
+  document, not a page.
+- Protected View. Wrong: the working copy carries no Zone.Identifier.
+- Stale badge from the caret placed on open. Real, and fixed - the badge went
+  from 8 sections to 11 - but not the cause of the capture failure.
+- Dismissing the stale badge after selecting. Real, and fixed: it pulled
+  focus off Word and dropped the selection.
+- Ten leftover Word windows, several in Protected View, with
+  `focus_word` matching any title ending "- Word". Real, and fixed.
+- Removing the focus step entirely in `--use-open-document`. Made it worse:
+  PowerShell was then the foreground window when the hotkey fired.
+
+What is left: driving `Ctrl+Shift+Space` from a background process does not
+reliably present Word's selection to the app, even with Word foregrounded and
+a single window open. The app is not at fault in any of these traces - its
+log shows `section counter start -> 1 of 11 (available=11 visible=11
+total=11)`, so it captured the whole essay and offered every section.
+
+**Do not spend another session on the hotkey.** Two better routes:
+
+1. Use the HUD's own **Check entire document** button rather than a global
+   hotkey and a selection. It asks the app to fetch the document itself,
+   which removes the selection handoff completely.
+2. Have a person select the text and press the hotkey, then let the harness
+   take over from the badge onwards. That is the path that worked.
+
+## The two product defects this found
+
+1. `practice esay 1??` became `practice **is easy** 1?`. A meaning
+   corruption, same family as the earlier `esay` -> `ebay`.
+2. **Protected View is unhandled.** A document opened from a downloaded
+   location is read-only, and the app reports "No selected text was found"
+   rather than saying the document needs Enable Editing. A writer opening an
+   emailed or downloaded draft hits this immediately.

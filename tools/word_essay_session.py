@@ -181,17 +181,26 @@ def run_session(
     first_wait: float,
     section_wait: float,
     hotkey: str,
+    use_open_document: bool = False,
 ) -> dict:
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
     working = OUTPUT_ROOT / essay_path.name
 
     _dismiss_existing_hud()
     word = word_application()
+    if use_open_document:
+        # Review whatever the writer already has open and in front. Opening
+        # and refocusing a document from a background process is the part
+        # that keeps failing - Windows refuses the foreground change, or one
+        # of several leftover windows answers to the same title - and none
+        # of that is the product under test.
+        document = word.ActiveDocument
+        working = Path(str(document.FullName))
     # The previous run's copy is usually still open, and Word holds it, so
     # replacing it fails outright. Close that document first, and if it is
     # locked for any other reason use the next free name rather than losing
     # the run at its first step.
-    for open_document in list(word.Documents):
+    for open_document in [] if use_open_document else list(word.Documents):
         try:
             if Path(str(open_document.FullName)).name == working.name:
                 open_document.Close(SaveChanges=0)
@@ -199,7 +208,8 @@ def run_session(
         except Exception:  # noqa: BLE001 - Word raises assorted COM errors
             continue
     try:
-        shutil.copyfile(essay_path, working)
+        if not use_open_document:
+            shutil.copyfile(essay_path, working)
     except PermissionError:
         for suffix in range(2, 40):
             candidate = OUTPUT_ROOT / f"{essay_path.stem}-{suffix}{essay_path.suffix}"
@@ -220,8 +230,9 @@ def run_session(
         (working.parent / f"{working.name}:Zone.Identifier").unlink()
     except OSError:
         pass
-    document = word.Documents.Open(str(working.resolve()))
-    time.sleep(2.5)
+    if not use_open_document:
+        document = word.Documents.Open(str(working.resolve()))
+        time.sleep(2.5)
 
     before = visible_text(document)
     report: dict = {
@@ -247,6 +258,10 @@ def run_session(
     # several of them in Protected View, where nothing can be selected at
     # all. The app then answered "No selected text was found" while the
     # essay under test sat selected in a window that never came forward.
+    # Word has to be the foreground window when the hotkey fires, whoever
+    # opened the document. Without this the key went to whatever really was
+    # in front and the app answered "No selected text was found" about a
+    # document that was fully selected.
     focus_named_word_window(working.stem)
     select_whole_story(word)
     press_hud_hotkey(hotkey)
@@ -389,6 +404,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--section-wait", type=float, default=150.0)
     parser.add_argument("--hotkey", default="ctrl+shift+space")
     parser.add_argument(
+        "--use-open-document",
+        action="store_true",
+        help="Review the document already open and focused in Word.",
+    )
+    parser.add_argument(
         "--allow-rules-only",
         action="store_true",
         help="Run even when the local AI is off, to measure the floor.",
@@ -429,6 +449,7 @@ def main(argv: list[str] | None = None) -> int:
         first_wait=args.first_wait,
         section_wait=args.section_wait,
         hotkey=args.hotkey,
+        use_open_document=args.use_open_document,
     )
     json_path = Path(str(Path(report["document"]).with_suffix("")) + ".json")
     json_path.write_text(
