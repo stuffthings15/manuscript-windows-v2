@@ -238,6 +238,13 @@ def score_essay(
             if not plain or not chosen:
                 continue
             substitutions.append(f"p{number}: {original} -> {replacement}")
+            if plain == chosen:
+                # Only the punctuation moved, as in "cant" -> "can't". There
+                # is no letter choice here to second-guess, but stripping
+                # punctuation before comparing hid that and the judge asked
+                # why the speller had not written "chant" instead. Eight of
+                # these were the whole of the wrong-substitution count.
+                continue
             if not _explains(plain, chosen):
                 bad_spell.append(f"p{number}: {original} -> {replacement} (implausible)")
                 continue
@@ -373,6 +380,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--essays", type=int, default=0, help="Limit essay count.")
     parser.add_argument("--label", default="current")
     parser.add_argument(
+        "--pack",
+        default="",
+        help=(
+            "Pack id to prefer, so two models can be compared on the same "
+            "corpus (for example gemma4-e2b-qat-v1 or gemma4-e4b-qat-v1)."
+        ),
+    )
+    parser.add_argument(
         "--mode",
         default="balanced",
         choices=[value.value for value in PolishMode],
@@ -381,7 +396,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, default=ROOT / "build" / "correction-quality.md")
     args = parser.parse_args(argv)
 
-    engine = PolishEngine()
+    engine = (
+        PolishEngine(preferred_pack_provider=lambda: args.pack)
+        if args.pack
+        else PolishEngine()
+    )
     rules = PolishRuleEngine()
     dictionary = rules.dictionary
     mode = PolishMode(args.mode)
