@@ -16,6 +16,7 @@ from .correction import (
     _protected_value_pattern,
 )
 from .local_transport import LocalTransportError, LoopbackJSONTransport
+from .meaning_diff import unexplained_losses
 from .polish_quality import tone_contract_instruction
 from .models import OLLAMA_KEEP_ALIVE
 
@@ -702,6 +703,8 @@ class LocalWritingAssistant:
         if surface_meaning_guard and not _meaning_constraints_preserved(
             source,
             meaning_candidate,
+            command=command,
+            check_word_losses=True,
         ):
             source_force_words = tuple(match.group(0) for match in _OBLIGATION.finditer(source))
             meaning_retry_prompt = (
@@ -741,6 +744,7 @@ class LocalWritingAssistant:
             if surface_meaning_guard and not _meaning_constraints_preserved(
                 source,
                 _expand_protected_for_validation(candidate, replacements),
+                command=command,
             ):
                 raise RuntimeError("Local AI changed a meaning constraint.")
         if command == "Shorten":
@@ -849,6 +853,7 @@ class LocalWritingAssistant:
                 if surface_meaning_guard and not _meaning_constraints_preserved(
                     source,
                     _expand_protected_for_validation(candidate, replacements),
+                    command=command,
                 ):
                     raise RuntimeError("Local AI changed a meaning constraint.")
                 if not candidate or "```" in candidate:
@@ -929,7 +934,9 @@ class LocalWritingAssistant:
         candidate_literals = _strict_protected_literals(candidate)
         if candidate_literals != protected_literals:
             raise RuntimeError("The result changed protected content.")
-        if surface_meaning_guard and not _meaning_constraints_preserved(source, candidate):
+        if surface_meaning_guard and not _meaning_constraints_preserved(
+            source, candidate, command=command, check_word_losses=True
+        ):
             raise RuntimeError("Local AI changed a meaning constraint.")
         return WritingResult(f"{leading}{candidate.strip()}{trailing}", command, model, profile)
 
@@ -1769,6 +1776,7 @@ def _safe_final_proofread(
     if _requires_surface_meaning_guard(command) and not _meaning_constraints_preserved(
         source,
         cleaned,
+        command=command,
     ):
         return candidate
     return cleaned
@@ -4459,7 +4467,34 @@ def _translation_was_not_performed(source: str, candidate: str) -> bool:
     return shared / len(source_words) >= 0.7
 
 
-def _meaning_constraints_preserved(source: str, candidate: str) -> bool:
+def _meaning_constraints_preserved(
+    source: str,
+    candidate: str,
+    *,
+    command: str = "",
+    check_word_losses: bool = False,
+) -> bool:
+    # Checked first because it is the only check here that is not tied to a
+    # phrase someone wrote down in advance. Everything below looks for a known
+    # shape - a negation flip, a perspective shift, a literal fixture sentence
+    # - and a plain swapped verb matches none of them. Two shipped in one live
+    # essay: "ENTERS the ROOM" came back "measures the room", and "grete a
+    # person" came back "get as much as". Both were accepted by every guard
+    # that existed.
+    #
+    # Proofread only. Every other command that reaches this guard is asking for
+    # a rewrite, where replacing a word with a better one is the requested
+    # work: an Empathetic pass is meant to turn "users cant tell" into "users
+    # find it difficult to tell". Applying a word-for-word rule there refused
+    # eighteen rewrites the suite already protects.
+    if check_word_losses and command == "Proofread":
+        losses = unexplained_losses(source, candidate)
+        if losses:
+            logger.info(
+                "Writing correction refused: candidate dropped %s",
+                ", ".join(sorted(set(losses))[:6]),
+            )
+            return False
     if _high_risk_meaning_change(source, candidate):
         return False
     source_force = _force_levels(source)

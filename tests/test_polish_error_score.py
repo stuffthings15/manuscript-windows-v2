@@ -78,6 +78,16 @@ def test_speller_prefers_the_shape_of_the_mistake_over_frequency() -> None:
     "esay" sat one edit from both "essay" and "ebay", and the brand won. A
     missing letter and a collapsed double are what people actually type, so
     those are preferred first and frequency only breaks the remaining ties.
+
+    "esay" no longer resolves here at all, and that is the fix rather than a
+    regression. Once transpositions were recognised as ordinary typing, "easy"
+    joined "essay" as an equally well-shaped repair, and frequency prefers
+    "easy" by ten times - so the speller would have picked the wrong one. It
+    now declines to guess between two equal candidates and leaves the word for
+    the model, which reads the sentence. Verified live: "i had to write a esay
+    about my pett dog ... poor cair" comes back "I had to write an essay about
+    my pet dog ... poor care", where the speller alone would have written
+    "easy" and "chair".
     """
     from echo_link_core.polish_spelling import PolishRuleEngine
 
@@ -87,7 +97,7 @@ def test_speller_prefers_the_shape_of_the_mistake_over_frequency() -> None:
         text[value.start : value.end]: value.replacement
         for value in engine.analyze_spelling(text)
     }
-    assert repairs.get("esay") == "essay"
+    assert "esay" not in repairs
     # A collapsed double, not the more frequent "petty".
     assert repairs.get("pett") == "pet"
     # The deleted letter must be half of a doubled pair: "adress" drops a
@@ -120,3 +130,77 @@ def test_capitalised_typos_repair_but_names_are_left_alone() -> None:
     assert repairs("Warrsaw is cold").get("Warrsaw") == "Warsaw"
     # A person is not a country. Plain deletion stays refused.
     assert "Malik" not in repairs("Malik went home")
+
+
+def test_speller_reads_a_transposition_as_a_typing_slip() -> None:
+    """Two swapped letters had no category, so they lost to worse candidates.
+
+    `_typo_shape_rank` knew a collapsed double and a dropped letter and nothing
+    else, so every transposition fell into the catch-all bucket beside a plain
+    substitution and frequency decided. "wehre" became "were" instead of
+    "where" and "chroes" became "chromes" instead of "chores" - both wrong
+    words, inserted before the model ever saw the sentence.
+    """
+    from echo_link_core.polish_spelling import EnglishDictionary
+
+    dictionary = EnglishDictionary()
+    dictionary.warm()
+    for word, expected in (
+        ("wehre", "where"),
+        ("chroes", "chores"),
+        ("recieve", "receive"),
+        ("rqeuirements", "requirements"),
+    ):
+        suggestion = dictionary.suggestion(word)
+        assert suggestion is not None, word
+        assert suggestion[0] == expected
+
+
+def test_speller_declines_to_guess_between_two_equal_repairs() -> None:
+    """A wrong substitution is unrecoverable, so an even choice is refused.
+
+    The model never sees the original word - it is handed the speller's answer
+    - so guessing "chair" for "cair" bakes the wrong word into the sentence.
+    Where two candidates share a distance and a shape and frequency does not
+    separate them decisively, no substitution is offered and the misspelling
+    reaches the model with its sentence intact.
+    """
+    from echo_link_core.polish_spelling import EnglishDictionary
+
+    dictionary = EnglishDictionary()
+    dictionary.warm()
+    assert dictionary.suggestion("cair") is None
+    assert dictionary.suggestion("esay") is None
+
+
+def test_a_dominant_word_still_wins_an_otherwise_even_choice() -> None:
+    """Refusing every tie would leave obvious typos on screen.
+
+    "the" outweighs "tech" by 250 times and "animal" outweighs "animus" by
+    300. Those are not guesses. Only near neighbours in frequency count as a
+    real tie.
+    """
+    from echo_link_core.polish_spelling import EnglishDictionary
+
+    dictionary = EnglishDictionary()
+    dictionary.warm()
+    for word, expected in (("teh", "the"), ("animul", "animal")):
+        suggestion = dictionary.suggestion(word)
+        assert suggestion is not None, word
+        assert suggestion[0] == expected
+
+
+def test_the_frequency_dictionary_is_read_without_its_byte_order_mark() -> None:
+    """The most common word in English was unreachable as a correction.
+
+    The bundled SymSpell frequency file opens with a UTF-8 byte order mark and
+    was loaded as plain utf-8, so its first entry was stored as "\ufeffthe".
+    Nothing could ever match it, and "teh" was corrected to "tech".
+    """
+    from echo_link_core.polish_spelling import EnglishDictionary
+
+    dictionary = EnglishDictionary()
+    dictionary.warm()
+    assert dictionary._symspell is not None
+    assert "the" in dictionary._symspell.words
+    assert "\ufeffthe" not in dictionary._symspell.words

@@ -138,15 +138,19 @@ class EnglishDictionary:
             return None
         if not values:
             return None
-        best = min(
+        folded = word.casefold()
+        ranked = sorted(
             values,
             key=lambda value: (
                 int(value.distance),
-                _typo_shape_rank(word.casefold(), str(value.term)),
+                _typo_shape_rank(folded, str(value.term)),
                 -max(0, int(value.count)),
                 str(value.term),
             ),
         )
+        best = ranked[0]
+        if _is_ambiguous(folded, ranked):
+            return None
         replacement = _match_case(word, str(best.term))
         return replacement, int(best.distance), max(0, int(best.count))
 
@@ -166,7 +170,12 @@ class EnglishDictionary:
                     term_index=0,
                     count_index=1,
                     separator=" ",
-                    encoding="utf-8",
+                    # utf-8-sig, not utf-8. The frequency file begins with a
+                    # byte order mark, and plain utf-8 kept it attached to the
+                    # first entry, so the most common word in English was
+                    # stored as "﻿the" and could never be offered as a
+                    # correction. "teh" came back as "tech".
+                    encoding="utf-8-sig",
                 )
                 if not loaded:
                     raise ValueError("SymSpell frequency dictionary did not load.")
@@ -182,6 +191,45 @@ class EnglishDictionary:
             self._load_error = ""
 
 
+def _is_ambiguous(source: str, ranked: list) -> bool:
+    """Whether two candidates are equally good repairs, so neither may be used.
+
+    When the best two share a distance and a typing shape, nothing left in the
+    dictionary can separate them and only raw frequency remains - which is
+    exactly the wrong tie-break, because the more common word is often not the
+    one the writer meant. "cair" is care or chair; "esay" is essay or easy;
+    "chroes" is chores or chromes. Frequency picked chair, easy and chromes.
+
+    Refusing here leaves the misspelling in place for the model, which reads
+    the whole sentence and can tell that a pet gets poor care, not poor chair.
+    Substituting first is unrecoverable: the model never sees the original
+    word, so a wrong guess is baked in before it is asked.
+
+    One escape: frequency is a weak signal between neighbours but a decisive
+    one across orders of magnitude. "the" outweighs "tech" by 250 times and
+    "animal" outweighs "animus" by 300, and refusing those would leave obvious
+    typos on screen. Only near-neighbours in frequency are treated as a real
+    tie - "chair" leads "cairo" by nine times, and that is a guess.
+    """
+    if len(ranked) < 2:
+        return False
+    first, second = ranked[0], ranked[1]
+    if int(first.distance) != int(second.distance):
+        return False
+    if _typo_shape_rank(source, str(first.term)) != _typo_shape_rank(
+        source, str(second.term)
+    ):
+        return False
+    return max(0, int(first.count)) < _DOMINANT_FREQUENCY_RATIO * max(
+        1, int(second.count)
+    )
+
+
+# How far ahead the best candidate must be before frequency alone is allowed
+# to break a tie between two equally well-shaped repairs.
+_DOMINANT_FREQUENCY_RATIO = 50
+
+
 def _typo_shape_rank(source: str, candidate: str) -> int:
     """Order equally close candidates by how people actually mistype.
 
@@ -190,8 +238,16 @@ def _typo_shape_rank(source: str, candidate: str) -> int:
     and it answered with the brand. Typing shape is the better signal.
 
     0 - a doubled letter collapsed to one ("pett" -> "pet")
-    1 - a letter left out ("esay" -> "essay")
+    1 - a letter left out ("esay" -> "essay"), or two letters swapped
+        ("wehre" -> "where"). Both are ordinary typing slips and neither is
+        more likely than the other, so they share a rank and are separated
+        below by frequency like any other tie. Ranking a transposition above a
+        dropped letter was tried and turned "esay" into "easy".
     2 - anything else, which is where a substitution like "ebay" lands
+
+    Before transpositions were recognised at all they fell into rank 2 and
+    lost to whatever was more frequent: "wehre" became "were" instead of
+    "where", and "chroes" became "chromes" instead of "chores".
     """
     removed = _deleted_index(source, candidate)
     if removed is not None:
@@ -207,7 +263,26 @@ def _typo_shape_rank(source: str, candidate: str) -> int:
         return 0 if doubled else 2
     if _deleted_index(candidate, source) is not None:
         return 1
+    if _is_transposition(source, candidate):
+        return 1
     return 2
+
+
+def _is_transposition(source: str, candidate: str) -> bool:
+    """Whether one adjacent swap turns `source` into `candidate`."""
+    if len(source) != len(candidate):
+        return False
+    differing = [
+        index
+        for index, (left, right) in enumerate(zip(source, candidate))
+        if left != right
+    ]
+    return (
+        len(differing) == 2
+        and differing[1] == differing[0] + 1
+        and source[differing[0]] == candidate[differing[1]]
+        and source[differing[1]] == candidate[differing[0]]
+    )
 
 
 def _deleted_index(longer: str, shorter: str) -> int | None:

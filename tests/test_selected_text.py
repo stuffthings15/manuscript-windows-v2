@@ -1815,13 +1815,20 @@ def test_written_number_guard_allows_safe_adjective_synonym(monkeypatch):
         )
 
     monkeypatch.setattr("echo_link_core.local_transport._open_request", fake_urlopen)
-    result = LocalWritingAssistant().run(
-        "Elena received three separate checklists.",
-        command="Proofread",
-        model="local-model",
-    )
 
-    assert result.text == "Elena received three distinct checklists."
+    # "separate" to "distinct" is a synonym swap, and Proofread no longer
+    # accepts one. The rule that catches it is the same rule that caught
+    # "ENTERS the ROOM" becoming "measures the room" in a live essay: a
+    # content word disappeared and nothing in the answer explains it as a
+    # respelling or an inflection. Nothing here distinguishes the two cases
+    # lexically, so the product takes the deliberate trade - offer a smaller
+    # correction, or none, rather than reword what the writer chose.
+    with pytest.raises(RuntimeError, match="meaning constraint"):
+        LocalWritingAssistant().run(
+            "Elena received three separate checklists.",
+            command="Proofread",
+            model="local-model",
+        )
 
 
 def test_written_number_guard_accepts_hyphenated_time_modifier():
@@ -3412,3 +3419,72 @@ def test_token_rule_is_still_stated_when_a_token_is_present(monkeypatch):
 
     assert prompts
     assert "ECHOLINKTOKEN" in prompts[0]
+
+
+def test_a_correction_may_not_swap_one_verb_for_another() -> None:
+    """The writer said the owner entered; the corrector said they measured.
+
+    This shipped. "when the oner ENTERS the ROOM" came back from a live essay
+    run as "when the owner measures the room", and every guard accepted it,
+    because none of them looked for a plain substituted verb. Repairing "oner"
+    to "owner" in the same sentence is the whole point of the feature, so the
+    guard has to separate the two.
+    """
+    assert not _meaning_constraints_preserved(
+        "when the oner ENTERS the ROOM",
+        "when the owner measures the room",
+        command="Proofread",
+        check_word_losses=True,
+    )
+    assert _meaning_constraints_preserved(
+        "when the oner ENTERS the ROOM",
+        "when the owner enters the room",
+        command="Proofread",
+        check_word_losses=True,
+    )
+
+
+def test_a_correction_may_not_drop_the_words_it_cannot_spell() -> None:
+    """Second live failure from the same essay.
+
+    "a cat may not grete a person exacly like a DOG wuld of" came back as
+    "a cat may not get as much as a dog would". "grete" is "greet", not "get",
+    and "a person" simply vanished.
+    """
+    assert not _meaning_constraints_preserved(
+        "a cat may not grete a person exacly like a DOG wuld of",
+        "a cat may not get as much as a dog would",
+        command="Proofread",
+        check_word_losses=True,
+    )
+    assert _meaning_constraints_preserved(
+        "a cat may not grete a person exacly like a DOG wuld of",
+        "a cat may not greet a person exactly like a dog would have",
+        command="Proofread",
+        check_word_losses=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "candidate"),
+    [
+        ("the oner of the pett", "the owner of the pet"),
+        ("it is diffrent somewwhere else", "it is different somewhere else"),
+        ("becuz peopes need structure", "because people need structure"),
+        ("Watching the cat moves and rests", "Watching the cat move and rest"),
+        ("Sumtimes the animul is happy", "Sometimes the animal is happy"),
+        ("the pet gets poor cair", "the pet gets poor care"),
+        ("Dogs Makes Grate Petts", "Dogs Make Great Pets"),
+        ("i really just very much like it", "I like it"),
+    ],
+)
+def test_ordinary_repairs_are_not_mistaken_for_meaning_changes(
+    source: str, candidate: str
+) -> None:
+    """The guard must not cost the corrections the product exists to make.
+
+    Every pair here is a repair a reader would want: a respelling, an
+    inflection, a non-standard contraction expanded, or filler cut. A guard
+    that refuses these is worse than no guard, because the user sees nothing.
+    """
+    assert _meaning_constraints_preserved(source, candidate)
