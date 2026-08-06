@@ -79,15 +79,37 @@ Reports per essay: meaning changes (must be 0), wrong speller substitutions
 (must be 0), typos left after (the counterweight - a guard that refuses
 everything shows up here), error score before and after, protected-token drops.
 
-**The baseline in `build/correction-quality-baseline.md` is not trustworthy.**
-It was taken while the AI reached 3 of 200 paragraphs, so it mostly measures
-the rule engine. Re-run it now that both shutoff faults are fixed, and treat
-that as the real baseline.
+**Measure on an idle machine.** The policy pauses the local AI below 4 GB free
+RAM, which is correct, but it means a run competing with a test suite or a
+second probe measures the machine rather than the product. Several runs here
+were wasted that way; the giveaway is essays completing in under a second.
+
+Current figures, `build/correction-quality-clean.md`, twenty essays, E2B:
+
+| | before the fixes | now |
+|---|---|---|
+| paragraphs that reached the model | 3 of 200 | **47 of 200** |
+| wrong speller substitutions | 70 | **8**, all scorer false positives |
+| protected tokens dropped | 0 | 0 |
+| essays where the error score rose | 0 | 0 |
+
+The remaining 153 paragraphs are refused on their merits by the validation
+guards, which is a quality question and no longer a shutoff. The "meaning
+changes" column is not yet trustworthy - `describe_losses` names the nearest
+new word, so on rules-only output it reports noise like `one -> pet`. Narrow it
+before quoting it.
 
 ## Still open, in priority order
 
-0. **A long-lived engine degrades permanently.** This is the top item and it is
-   reproducible. Run the scorer over the corpus: essays 1-3 use the model, then
+0. ~~A long-lived engine degrades permanently.~~ **Fixed** in `4eddb63` and
+   `ccc7015`. It was three separate faults stacked: the fallback cascade filled
+   the GPU with the app's own models and `_resource_reason` read that as a full
+   card; the loaded-model query timed out while the server was generating and a
+   lost answer was read as "nothing loaded"; and the validation-failure window
+   was longer than a rules-only paragraph, so one refusal covered the next ten
+   and one of those re-armed it. Kept here because the shape recurs.
+
+   Original symptom, for reference: Run the scorer over the corpus: essays 1-3 use the model, then
    essay 4 onward returns in 0.0 seconds on every paragraph with one identical
    stale message, `validation failed: modal meaning changed; obligation
    strength changed (added hard requirement, should)` - including paragraph 1,
