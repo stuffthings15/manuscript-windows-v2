@@ -133,21 +133,54 @@ def _runtime_status_matches_plan(
     expected_model: str,
     expected_backend: RuntimeBackend,
 ) -> bool:
+    # Every branch below turns into the same sentence for the reader - the
+    # local AI is off and the writing is being corrected by rules alone - so
+    # each one says which check refused. Without this the app reported "no
+    # room for the model" while the card was empty, and there was no way to
+    # tell a wrong model name from a model sitting in system memory.
+    actual_model = str(getattr(status, "model", "") or "").strip()
+    actual_backend = getattr(status, "backend", RuntimeBackend.RULES)
     if not bool(getattr(status, "loaded", False)):
+        logger.warning(
+            "Local AI verification failed: runtime reports nothing loaded "
+            "(wanted %s on %s)",
+            expected_model,
+            getattr(expected_backend, "value", expected_backend),
+        )
         return False
-    if str(getattr(status, "model", "") or "").strip() != expected_model:
+    if actual_model != expected_model:
+        logger.warning(
+            "Local AI verification failed: runtime loaded %r, plan wanted %r",
+            actual_model,
+            expected_model,
+        )
         return False
-    if getattr(status, "backend", RuntimeBackend.RULES) is not expected_backend:
+    if actual_backend is not expected_backend:
+        logger.warning(
+            "Local AI verification failed: %s loaded on %s, plan wanted %s",
+            expected_model,
+            getattr(actual_backend, "value", actual_backend),
+            getattr(expected_backend, "value", expected_backend),
+        )
         return False
     if not plan.require_full_gpu:
         return True
     model_bytes = max(0, int(getattr(status, "model_bytes", 0) or 0))
     gpu_bytes = max(0, int(getattr(status, "gpu_bytes", 0) or 0))
-    return bool(
+    if not (
         expected_backend in _GPU_RUNTIME_BACKENDS
         and model_bytes > 0
         and gpu_bytes >= model_bytes
-    )
+    ):
+        logger.warning(
+            "Local AI verification failed: %s wants the whole model on the "
+            "GPU but %.2f GB of %.2f GB is resident there",
+            expected_model,
+            gpu_bytes / (1024 ** 3),
+            model_bytes / (1024 ** 3),
+        )
+        return False
+    return True
 
 
 class _AcceptedPlanWritingAssistant:
