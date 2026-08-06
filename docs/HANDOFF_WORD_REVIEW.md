@@ -1,155 +1,138 @@
-# Handoff: Word review loop, Manuscript Windows Version 2
+# Handoff: correction quality, Manuscript Windows Version 2
 
-Written 2026-08-04. Everything below is about `Manuscript/Windows Version 2`,
+Rewritten 2026-08-06. Everything below is about `Manuscript/Windows Version 2`,
 which is its own git repository. The older `Manuscript/Windows` tree is
-superseded; work from an earlier session is parked there in
-`stash@{0}` of the outer `Echo-Link` repo and has **not** been ported.
+superseded.
 
-## The goal
+## The state in one paragraph
 
-Take one of the 20 animal-pet essays, open it in Microsoft Word, and get all
-the way through a page using the Writing HUD the way a writer would: badge
-appears, click it, review each section, accept, move to the next. Fix
-whatever breaks, confirm the fix, run the same essay again, then move to the
-next essay.
+The Word review loop works mechanically: badge, click, review each section,
+accept, next. Essays 1 and 2 were driven end to end in real Microsoft Word,
+8/8 and 7/7 sections, zero skips. What was wrong was the corrections
+themselves, and the largest cause turned out not to be the model at all - the
+local AI was barely running. Two separate faults were switching it off, both
+silently. Both are fixed. The corpus has not yet been re-measured with the AI
+actually working, and that measurement is the next thing anyone should do.
 
-Corpus: `test-corpus/animal-pet-20` (integrity-locked, `source.zip` must hash
-`C80A6FBA0978596A464E1E9FF3C17D17D6A928FA56445A97C8E045A0EB9FF771`). It is
-byte-identical to `Manuscript/20_Animal_Pet_Essays_800_Percent_More_Errors`,
-so either location holds the same essays.
+## Fixed and committed
 
-## How to run
+`8697fa4` - stop the corrector rewriting words the writer chose
+
+1. **The AI was not running at all.** An earlier session edited
+   `resources/polish/model-packs.json` without re-signing it, so every pack
+   failed with `ModelPackSecurityError: Polish model manifest signature
+   failed.` and the engine fell back to deterministic rules. The only surface
+   was `full AI correction did not run` inside a probe; the HUD said nothing.
+   Fixed by running `tools/sign_polish_manifest.ps1`.
+
+   **If corrections ever look suddenly worse, check this first:**
+
+   ```powershell
+   $env:PYTHONPATH = "src"
+   .\.venv\Scripts\python.exe -c "from echo_link_core.polish_model_packs import ModelPackManager; [print(p.pack_id, p.available) for p in ModelPackManager().catalog()]"
+   ```
+
+2. **The speller was inserting wrong words before the model saw the text.**
+   Three causes, all in `src/echo_link_core/polish_spelling.py`:
+   - The bundled SymSpell frequency file opens with a byte order mark and was
+     read as plain `utf-8`, so its first entry was stored as `\ufeffthe`. The
+     most common word in English could never be offered and `teh` became
+     `tech`. Now `utf-8-sig`.
+   - `_typo_shape_rank` had no transposition category, so every swapped pair
+     fell in beside a plain substitution and lost on frequency: `wehre` became
+     `were`, `chroes` became `chromes`.
+   - Where two candidates are equally good repairs, frequency decided, and the
+     commoner word is often not the meant one: `cair` became `chair` three
+     times in one essay. The speller now declines to guess and leaves the word
+     for the model, which reads the sentence. A 50x frequency margin still
+     resolves the obvious cases so `teh` and `animul` are not left on screen.
+
+3. **Corrections were changing meaning.** `ENTERS the ROOM` came back
+   `measures the room`; `grete a person` came back `get as much as`. New
+   `src/echo_link_core/meaning_diff.py` asks which content words vanished with
+   no respelling or inflection to explain them. Proofread refuses those.
+   Proofread only - every other command routed through that guard is asking
+   for a rewrite, where replacing a word is the requested work.
+
+`bc41bbd` - one refused correction no longer disables the AI for the rest
+
+A failed pack is held out of service for five minutes so a broken runtime is
+not retried on every section. That was applied to validation failures too, so
+one paragraph whose answer was refused blacklisted the pack and every later
+paragraph ran rules-only. **Across twenty essays the AI reached three
+paragraphs out of two hundred.** Validation failures now expire in five
+seconds; real runtime faults keep the full window.
+
+## The measurement harness
+
+`tools/correction_quality_scorer.py` scores the whole corpus headless, so a
+guard change is judged against twenty essays instead of one. It shares
+`meaning_diff` with the product, so the number it reports and the rule the
+product enforces cannot drift apart.
 
 ```powershell
-# app from source, no six-minute package build
-.\.venv\Scripts\python.exe .\tools\run_dev_app.py
-
-# drive the essay that is open in Word
-$env:PYTHONPATH = "<repo>\src"
-.\.venv\Scripts\python.exe .\tools\word_essay_probe.py --first-wait 180 --section-wait 150
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python.exe tools\correction_quality_scorer.py --label after-fixes
 ```
 
-`tools/word_essay_probe.py` is new. Every other probe drives Notepad, which
-is not where this app is used; several hours were lost to runs that looked
-healthy in Notepad while Word was broken.
+Reports per essay: meaning changes (must be 0), wrong speller substitutions
+(must be 0), typos left after (the counterweight - a guard that refuses
+everything shows up here), error score before and after, protected-token drops.
 
-Useful, fast, read-only:
+**The baseline in `build/correction-quality-baseline.md` is not trustworthy.**
+It was taken while the AI reached 3 of 200 paragraphs, so it mostly measures
+the rule engine. Re-run it now that both shutoff faults are fixed, and treat
+that as the real baseline.
 
-- `tools/word_capture_diff_probe.py` - compares the active document as COM
-  sees it against UI Automation. Prints the first differing character.
-- `tools/repair_probe.py` - runs text through the correction engine and
-  prints which check refused the model's answer. Seconds, no UI.
+## Still open, in priority order
 
-App log: `%LOCALAPPDATA%\ManuscriptWindowsV2\echo-link.log`.
+1. **Protected tokens are dropped by the model** through initial, retry and
+   final retry: `expected=('ECHOLINKTOKEN1X','ECHOLINKTOKEN0X')
+   actual=('ECHOLINKTOKEN0X',)`. This is what triggers most validation
+   failures. Prompting harder has failed three times; restore the token
+   deterministically after the final retry, or refuse only that section.
+   `_missing_immutable_tokens` in `selected_text.py` already identifies them.
 
-## Fixed and verified this session
+2. **Only one Word page is reviewed.** `windows_selection.py:134` expands the
+   selection to the UIA `TextUnit.Page`, and UIA cannot see Word's unrendered
+   pages. Paragraphs past page 1 are never offered - essays 1 and 2 both came
+   back with paragraphs 8-10 untouched. The apply path already reads the whole
+   document over COM (`insertion.py:210`), so only capture is page-bound.
 
-1. **Word COM and UI Automation disagreed about the non-breaking space.**
-   COM read the document as 5204 characters starting with U+00A0; UI
-   Automation read 5203 without it. `_WORD_UIA_OMITTED_CHARACTERS` in
-   `src/echo_link_core/insertion.py` existed for exactly this class but only
-   listed U+0001. Now lists U+00A0 as well. Verified live: both sides report
-   5203 characters and the same digest.
+3. **A failed manifest signature is invisible.** It disabled the product's
+   main feature with no UI signal at all. Surface it in the status line or
+   Settings and log it at WARNING.
 
-2. **Capture and replacement digested different text.**
-   `windows_selection._text_digest` hashed raw accessibility text, where Word
-   uses a bare carriage return per paragraph, while the replacement path
-   hashed COM text after normalising line endings and dropping COM-only
-   characters. They could never agree on any document with more than one
-   paragraph. `_text_digest` now canonicalises the same way. Regression test:
-   `tests/test_windows_selection.py::test_capture_and_replacement_agree_on_a_word_document_digest`.
+4. **`gemma4:e4b-it-qat` is installed but unmeasured.** All three packs verify.
+   Compare E2B and E4B on the corpus with the scorer before choosing a default,
+   and keep E2B as the small-machine path. 12B stays manual opt-in.
 
-3. **The fast model was never installed.** The catalog expects
-   `gemma4:e2b-it-qat` and `gemma4:e4b-it-qat`; neither was pulled, so the
-   only usable pack was the 12B, and when it did not fit the app logged
-   "No validated model pack fits" and did no AI at all. `e2b` has now been
-   pulled. Corrections that took 24+ seconds now take 1-5.
-   `gemma4:e4b-it-qat` is still missing and `PolishMode.AUTO` prefers it, so
-   pulling it is worth trying.
+5. **`selected_text.py` is overfitted to fixtures.** It carries rules keyed to
+   literal phrases - `ready to launch manuscript`, `three users who wrote
+   several pages`, `Reviewers need clear red marks`. Measure whether any of
+   them affect real text before deciding anything.
 
-4. **Probes crashed on Word's lock file.** A document open in Word leaves
-   `~$name.docx` beside it, and the corpus probe globbed `*.docx` and died
-   with `BadZipFile`. `_essay_files()` now skips `~$`.
+6. Feature sweep by hand, then installer lifecycle. Neither has started.
 
-5. **The probe clicked "Open Manuscript settings" instead of the badge.**
-   `_badge_button()` returned the first enabled button in the HUD, which is
-   the settings gear. The dialog it opened then held the foreground, so Word
-   could not be brought forward and every capture read the dialog instead of
-   the document - the app reported "no selected text" on a fully selected
-   essay. `_badge_button()` now looks for the review badge by name.
+## Rules that cost time when ignored
 
-6. **Word never came to the foreground** from a background caller.
-   `focus_word()` in the Word probe now attaches to the target thread's input
-   queue before calling `SetForegroundWindow`.
-
-7. **The HUD counter was never read.** The accessible name is "Current
-   writing suggestion position, 1 of 8", and `_counter_text()` required the
-   whole name to be "1 of 8", so every section looked like it had no counter
-   and runs stopped as out of order.
-
-## The open bug - this is where to start
-
-Accept still does not reach the document. The user sees:
-
-> This correction was not applied. The document may have been busy. Try
-> Replace Text again.
-
-and after clicking through, the next section shows the whole essay as one
-suggestion and the counter reads "0 of 0".
-
-The log shows the cause, repeatedly:
-
-```
-Writing HUD Replace Text invoked ... original_chars=37 replacement_chars=36
-Word COM range replacement refused changed document text
-Writing HUD immediate apply could not recheck the source text; retry 1 of 2
-Writing HUD immediate apply failed 2 times; asking for a fresh capture
-Writing HUD immediate Accept was not applied
-```
-
-`_replace_palette_step` in `src/echo_link_app/window.py` calls
-`replace_document_range`, which returns `None`, which produces the "busy"
-message. The refusal comes from one of the two guards in
-`insertion.replace_document_range` (around lines 336-360).
-
-**Diagnostics are already in place.** Both refusal branches now log which
-comparison failed, the character counts, and the first differing character.
-Reproduce once and read the log line - it will say directly whether the
-document digest disagrees or the captured range text disagrees, and where.
-That single log line should end the guessing.
-
-Two observations that likely matter:
-
-- The failing capture is `scope=selection chars=3523`, not the whole 5203
-  character document, because the reader expands to the current Word page.
-  So the range guard is the one being exercised, not the whole-document one.
-- After the second failure the app asks for a fresh capture. Word still has
-  everything selected, so the new capture is the entire essay as a single
-  section, which is exactly the "whole essay as one suggestion, 0 of 0"
-  behaviour being reported. Fixing the refusal should remove that symptom
-  too, but the collapse to one giant section on recapture is worth a look on
-  its own.
-
-Also seen and not yet investigated: the model repeatedly drops a protected
-token - `protected-token mismatch expected=('ECHOLINKTOKEN1X',
-'ECHOLINKTOKEN0X') actual=('ECHOLINKTOKEN0X',)` through initial, retry and
-final-retry - so some sections never produce a usable correction.
-
-## State of the tree
-
-Nothing has been committed this session. Changed files:
-
-- `src/echo_link_core/insertion.py` - NBSP fix, plus temporary diagnostic
-  logging in the two refusal branches. **Remove the diagnostics once the
-  cause is found**, or keep them if they read well.
-- `src/echo_link_core/windows_selection.py` - `_text_digest` canonicalisation
-  and the `_COM_ONLY_CHARACTERS` set.
-- `tools/full_page_user_journey_probe.py` - badge and counter fixes.
-- `tools/animal_essay_corpus_probe.py` - `~$` lock-file skip.
-- `tools/word_essay_probe.py` - new.
-- `tests/test_windows_selection.py` - updated digest assertion, new
-  regression test.
-- `docs/HANDOFF_WORD_REVIEW.md` - this file.
-
-`tests/test_insertion.py` and `tests/test_windows_selection.py` pass, 96
-tests. The full suite has not been run since these changes.
+- **Test in Word, not Notepad.** Notepad hid the Accept bug for hours.
+- **Read the log line, do not guess.** `%LOCALAPPDATA%\ManuscriptWindowsV2\echo-link.log`.
+  A latency-gate theory survived two rounds of reasoning here and was wrong;
+  the trace said so in one line.
+- **Show the corrected text, not test counts.** The suite was green through
+  every defect listed above.
+- **Commit with `git add -p`, never whole files.** The working tree carries
+  large uncommitted work from a parallel session in files you will also be
+  editing - `polish.py`, `polish_runtime.py`, `selected_text.py`,
+  `test_polish_engine.py`. Staging a whole file sweeps that work into your
+  commit, and `git checkout --` on one destroys it. Both happened here. A
+  destroyed file is recoverable from the dropped stash commit if you still
+  have its hash from the `git stash pop` output.
+- **The corpus is integrity-locked.** `test-corpus/animal-pet-20/source.zip`
+  must keep hashing
+  `C80A6FBA0978596A464E1E9FF3C17D17D6A928FA56445A97C8E045A0EB9FF771`.
+  Corrected output goes to `build/corrected/` as copies.
+- Run the suite with
+  `--basetemp=C:/Users/stuff/AppData/Local/Temp/mspt`; without it 31 tests fail
+  on a `PermissionError` that is environment, not code.
