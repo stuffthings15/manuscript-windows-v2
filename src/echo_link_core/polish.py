@@ -89,6 +89,27 @@ _STAGED_STYLE_COMMANDS = frozenset(
 # and _final_cleanup_candidate strips them first - this is the third layer.
 _ALWAYS_BLOCKING_RESIDUALS = frozenset({"em dash"})
 _FAILED_PACK_TTL_SECONDS = 300.0
+# A refused answer is a fact about one paragraph, not about the pack, so it
+# must not take the pack out of service the way a lost GPU does.
+#
+# It did, for five minutes. Measured on the essay corpus: paragraph 5 of essay
+# 1 dropped a protected token, the pack was blacklisted, and paragraphs 6
+# through 10 came back in a tenth of a second each with "full AI correction did
+# not run" - rules-only, with nothing said to the reader. Across twenty essays
+# the local AI reached three paragraphs out of two hundred. One refused
+# correction was costing every correction after it.
+#
+# The record still has to outlive the request that created it, because the
+# cascade to a smaller pack reads it moments later. A few seconds does that and
+# is long gone before the next paragraph is sent.
+_VALIDATION_FAILURE_TTL_SECONDS = 5.0
+
+
+def _failed_pack_ttl(kind: "RuntimeFailureKind") -> float:
+    """How long a pack stays out of service after a failure of this kind."""
+    if kind is RuntimeFailureKind.VALIDATION_FAILURE:
+        return _VALIDATION_FAILURE_TTL_SECONDS
+    return _FAILED_PACK_TTL_SECONDS
 _CRITICAL = re.compile(
     r"```[\s\S]*?```"
     r"|`[^`\r\n]*`"
@@ -2281,7 +2302,7 @@ class PolishEngine:
         expired = tuple(
             pack_id
             for pack_id, state in self._failed_pack_states.items()
-            if now - state.failed_at >= _FAILED_PACK_TTL_SECONDS
+            if now - state.failed_at >= _failed_pack_ttl(state.kind)
         )
         for pack_id in expired:
             self._failed_pack_states.pop(pack_id, None)

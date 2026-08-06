@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,6 +18,12 @@ from echo_link_core.polish import (
     _restore_source_phrase_casing,
 )
 from echo_link_core.polish_hardware import BenchmarkRecord, PolishBenchmarkCache
+from echo_link_core.polish_quality import TONE_CONTRACTS
+from echo_link_core.polish_model_packs import (
+    ModelPackConsentRequired,
+    ModelPackDownloadError,
+    ModelPackSecurityError,
+)
 from echo_link_core.polish_runtime import AdaptiveInferenceRuntime
 from echo_link_core.polish_spelling import DeterministicPolishResult
 from echo_link_core.polish_types import (
@@ -102,6 +109,221 @@ def test_safe_concise_reductions_compact_report_meta_language():
         "Another paragraph repeats the conclusion three times in slightly different words. "
         "Readers get confused about the sequence."
     )
+
+
+@pytest.mark.parametrize(
+    ("command", "source", "candidate", "expected"),
+    (
+        (
+            "Friendly",
+            "The report is ready.",
+            "The report is ready.",
+            "friendly rewrite is not visibly warm",
+        ),
+        (
+            "Diplomatic",
+            "The report needs revision.",
+            "You failed, and this ridiculous report is your fault.",
+            "diplomatic rewrite contains hostile wording",
+        ),
+        (
+            "Empathetic",
+            "The outage affected users.",
+            "The outage affected users.",
+            "empathetic rewrite does not make care visible",
+        ),
+        (
+            "Rephrase",
+            "The team completed the report.",
+            "The team completed the report.",
+            "rephrase did not change sentence construction",
+        ),
+        (
+            "Professional",
+            "The report is ready.",
+            "You guys got a bunch of work done.",
+            "professional rewrite contains casual wording",
+        ),
+    ),
+)
+def test_source_aware_tone_gate_rejects_obvious_style_misses(
+    command,
+    source,
+    candidate,
+    expected,
+):
+    value, _ = engine(classifier=FakeClassifier(), runtime=FakeRuntime(()))
+
+    quality = value._evaluate_quality(source, candidate, command=command)
+
+    assert not quality.complete
+    assert not quality.tone_verified
+    assert expected in quality.residual_errors
+
+
+_MECHANICAL_TONE_PROHIBITION_CASES = (
+    pytest.param(
+        "Clear",
+        "The report does not explain the result.",
+        "The report doesnt explain the result.",
+        id="clear-broken-grammar",
+    ),
+    pytest.param(
+        "Improve",
+        "The report does not explain the result.",
+        "The report doesnt explain the result.",
+        id="improve-broken-grammar",
+    ),
+    pytest.param(
+        "Rephrase",
+        "The team completed the report.",
+        "The team completed the report.",
+        id="rephrase-copied-source",
+    ),
+    pytest.param(
+        "Shorten",
+        "The team basically completed the report in a very careful way.",
+        "The team basically completed the report in a very careful way.",
+        id="shorten-kept-filler",
+    ),
+    pytest.param(
+        "Friendly",
+        "The report is ready.",
+        "You guys are gonna love this super easy report.",
+        id="friendly-slang",
+    ),
+    pytest.param(
+        "Formal",
+        "The report is not ready.",
+        "The report isn't ready.",
+        id="formal-contraction",
+    ),
+    pytest.param(
+        "Professional",
+        "The team completed the report.",
+        "You guys got a bunch of work done.",
+        id="professional-casual-chatter",
+    ),
+    pytest.param(
+        "Academic",
+        "The study is not complete.",
+        "The study isn't complete.",
+        id="academic-contraction",
+    ),
+    pytest.param(
+        "Conversational",
+        "The report explains the result.",
+        "Um, like, the report explains the result, you know.",
+        id="conversational-filler-overload",
+    ),
+    pytest.param(
+        "Concise",
+        "The service does not send private records.",
+        "Does not send records.",
+        id="concise-telegraphic-fragment",
+    ),
+    pytest.param(
+        "Detailed",
+        "The report is ready.",
+        "The report report is ready.",
+        id="detailed-needless-repetition",
+    ),
+    pytest.param(
+        "Persuasive",
+        "The report recommends another review.",
+        "You must accept the report now or else.",
+        id="persuasive-pressure-tactic",
+    ),
+    pytest.param(
+        "Confident",
+        "The report needs revision.",
+        "Only an idiot would question this report.",
+        id="confident-hostility",
+    ),
+    pytest.param(
+        "Casual",
+        "The report is ready.",
+        "The widdle report is ready.",
+        id="casual-baby-talk",
+    ),
+    pytest.param(
+        "Technical",
+        "The service processes records.",
+        "The revolutionary best-in-class service processes records.",
+        id="technical-marketing-language",
+    ),
+    pytest.param(
+        "Simplified",
+        "The report is ready.",
+        "The widdle report is ready.",
+        id="simplified-childish-wording",
+    ),
+    pytest.param(
+        "High-school level",
+        "The report is ready.",
+        "The widdle report is ready.",
+        id="high-school-childish-wording",
+    ),
+    pytest.param(
+        "College level",
+        "The report explains the result.",
+        "The aforementioned report elucidates the result.",
+        id="college-inflated-wording",
+    ),
+    pytest.param(
+        "Diplomatic",
+        "The report needs revision.",
+        "This is your fault because you failed.",
+        id="diplomatic-blame",
+    ),
+    pytest.param(
+        "Empathetic",
+        "The delay affected users.",
+        "I am sorry that the delay affected users.",
+        id="empathetic-invented-apology",
+    ),
+    pytest.param(
+        "Cooperative",
+        "The team will review the report.",
+        "The team will work together. We propose a new schedule.",
+        id="cooperative-invented-proposal",
+    ),
+    pytest.param(
+        "Assertive",
+        "The report needs revision.",
+        "Approve this report now or face consequences.",
+        id="assertive-threat",
+    ),
+    pytest.param(
+        "Caveman",
+        "The report is ready. The review starts next.",
+        "- Report ready.\n- Review starts next.",
+        id="caveman-list",
+    ),
+)
+
+
+def test_mechanical_tone_table_covers_every_visible_contract():
+    assert {
+        parameter.values[0] for parameter in _MECHANICAL_TONE_PROHIBITION_CASES
+    } == set(TONE_CONTRACTS)
+
+
+@pytest.mark.parametrize(
+    ("command", "source", "candidate"),
+    _MECHANICAL_TONE_PROHIBITION_CASES,
+)
+def test_visible_tone_rejects_mechanically_verifiable_prohibited_behavior(
+    command,
+    source,
+    candidate,
+):
+    value, _ = engine(classifier=FakeClassifier(), runtime=FakeRuntime(()))
+
+    quality = value._evaluate_quality(source, candidate, command=command)
+
+    assert not quality.complete
+    assert not quality.tone_verified
 
 
 def test_concise_allows_short_structured_fact_list_unchanged():
@@ -237,8 +459,10 @@ def test_concise_recovers_whole_tablet_section_after_ai_failure():
         )
     )
 
-    assert result.quality_complete
+    assert not result.quality_complete
     assert result.validation.accepted
+    assert not result.used_llm
+    assert not result.review_ready
     assert "can be used" in result.text
     assert "tablets lost their saved routes" in result.text
     assert "12 percent; the support team" in result.text
@@ -297,8 +521,10 @@ def test_proofread_recovers_whole_tablet_section_after_ai_failure():
         )
     )
 
-    assert result.quality_complete
+    assert not result.quality_complete
     assert result.validation.accepted
+    assert not result.used_llm
+    assert not result.review_ready
     assert "can be used" in result.text
     assert "tablets lost their saved routes" in result.text
     assert "12 percent; the support team" in result.text
@@ -1177,24 +1403,47 @@ def hardware():
 
 def model_pack():
     return PolishModelPack(
-        pack_id="qwen3-14b-q4-k-m-v1",
-        display_name="Qwen3 14B Q4_K_M",
-        model="qwen3:14b",
-        family="Qwen3",
-        parameters="14B",
-        quantization="Q4_K_M",
+        pack_id="gemma4-e4b-qat-v1",
+        display_name="Gemma 4 E4B QAT",
+        model="gemma4:e4b-it-qat",
+        family="Gemma 4",
+        parameters="4.5B effective",
+        quantization="Q4_0",
         runtime="ollama",
         manifest_digest="a" * 64,
-        size_bytes=9 * GIB,
-        min_ram_bytes=32 * GIB,
-        min_vram_bytes=12 * GIB,
+        size_bytes=6 * GIB,
+        min_ram_bytes=16 * GIB,
+        min_vram_bytes=8 * GIB,
         max_context_tokens=4096,
         supported_backends=(RuntimeBackend.CUDA,),
         license_id="Apache-2.0",
         source_url="https://example.test",
-        download_ref="ollama://qwen3:14b",
+        download_ref="ollama://gemma4:e4b-it-qat",
         installed=True,
         validated=True,
+    )
+
+
+def probe_plan(
+    pack,
+    *,
+    mode=PolishMode.BALANCED,
+    backend=RuntimeBackend.CUDA,
+    require_full_gpu=True,
+):
+    latency = 15.0 if mode is PolishMode.PROFESSIONAL else 5.0
+    if mode is PolishMode.INSTANT:
+        latency = 2.0
+    return ExecutionPlan(
+        policy_version=6,
+        mode=mode,
+        task=PolishTask.PROOFREAD,
+        use_llm=True,
+        pack_id=pack.pack_id,
+        model=pack.model,
+        backend=backend,
+        require_full_gpu=require_full_gpu,
+        warm_latency_limit_seconds=latency,
     )
 
 
@@ -1332,12 +1581,72 @@ def test_concise_accepts_safe_segment_recovery_after_ai_near_copy():
         )
     )
 
-    assert result.quality_complete
+    assert not result.quality_complete
     assert result.tone_verified
+    assert not result.used_llm
+    assert not result.review_ready
+    assert "local ai" not in result.message.casefold()
     assert "The preliminary report has several punctuation and structural problems." in result.text
     assert "soil testing, tool storage, compost training, and language access" in result.text
     assert "repeats the conclusion" in result.text
     assert "the sequence" in result.text
+
+
+def test_all_deterministic_concise_segment_recovery_keeps_ai_provenance_false(
+    monkeypatch,
+):
+    source = "First sentence. Second sentence."
+    runtime = FakeRuntime(
+        (
+            RuntimeError("changed protected content"),
+            RuntimeError("changed protected content"),
+        )
+    )
+    value, _ = engine(classifier=FakeClassifier(), runtime=runtime)
+    whole_calls = 0
+
+    def quality(source_text, candidate, *, command):
+        nonlocal whole_calls
+        if source_text == source and candidate == source:
+            whole_calls += 1
+            if whole_calls == 1:
+                return SimpleNamespace(
+                    complete=False,
+                    residual_errors=("structure",),
+                    tone_verified=True,
+                    score=0.8,
+                )
+        return SimpleNamespace(
+            complete=True,
+            residual_errors=(),
+            tone_verified=True,
+            score=1.0,
+        )
+
+    value._evaluate_quality = quality
+    monkeypatch.setattr(
+        "echo_link_core.polish._validate_rephrase_actions",
+        lambda validation, *_args, **_kwargs: validation,
+    )
+    recovery, calls, _, _ = value._recover_failed_generation(
+        request=CorrectionRequest(
+            source,
+            task=PolishTask.REWRITE,
+            mode=PolishMode.BALANCED,
+            command="Concise",
+            manual=True,
+        ),
+        normalized=source,
+        deterministic=source,
+        plan=probe_plan(model_pack()),
+        instruction="",
+        safe_candidates=[],
+    )
+
+    assert calls == 2
+    assert recovery is not None
+    assert recovery.text == source
+    assert not recovery.used_llm
 def test_concise_safely_shortens_interview_access_wording():
     source = (
         "Before any interview, participants received form LU-CG-12 and could decline "
@@ -1455,7 +1764,7 @@ def test_concise_near_copy_is_retried_until_word_count_is_reduced():
     assert "use no more than 17 words" in (
         runtime.generate_calls[1].instruction.casefold()
     )
-def test_cooperative_near_copy_uses_safe_fallback_without_ai_retry():
+def test_cooperative_safe_fallback_keeps_ai_provenance_false():
     source = "The team must compare the logs and report failures."
     cooperative = (
         "The team must work together to compare the logs and report failures."
@@ -1474,15 +1783,17 @@ def test_cooperative_near_copy_uses_safe_fallback_without_ai_retry():
     )
 
     assert result.text == cooperative
-    assert result.quality_complete
+    assert not result.quality_complete
     assert result.tone_verified
-    assert result.used_llm
+    assert not result.used_llm
     assert result.rejected_llm
+    assert not result.review_ready
     assert len(runtime.generate_calls) == 1
-    assert "safe Cooperative rewrite" in result.message
+    assert "not ready for review" in result.message
+    assert "local ai plus" not in result.message.casefold()
 
 
-def test_assertive_unsafe_action_change_keeps_direct_proofread_without_retry():
+def test_assertive_safe_fallback_keeps_ai_provenance_false():
     source = (
         "The researchers corrected the problem by adding translated forms and "
         "hiring Linh Tran and Mateo Silva."
@@ -1505,12 +1816,14 @@ def test_assertive_unsafe_action_change_keeps_direct_proofread_without_retry():
     )
 
     assert result.text == source
-    assert result.quality_complete
+    assert not result.quality_complete
     assert result.tone_verified
-    assert result.used_llm
+    assert not result.used_llm
     assert result.rejected_llm
+    assert not result.review_ready
     assert len(runtime.generate_calls) == 1
-    assert "safe Assertive rewrite" in result.message
+    assert "not ready for review" in result.message
+    assert "local ai plus" not in result.message.casefold()
 
 
 def test_cooperative_does_not_invent_collaboration_for_participant_counts():
@@ -1670,9 +1983,11 @@ def test_cooperative_replaces_dropped_hiring_with_safe_preserving_fallback():
         "translated forms and hiring Linh Tran and Mateo Silva."
     )
     assert result.text != dropped_hiring
-    assert result.quality_complete
+    assert not result.quality_complete
     assert result.tone_verified
+    assert not result.used_llm
     assert result.rejected_llm
+    assert not result.review_ready
     assert len(runtime.generate_calls) == 1
 
 
@@ -1856,7 +2171,7 @@ def test_safe_ai_output_is_returned_after_local_probe():
     assert "polish_benchmark_cache" in store.values
 
 
-def test_active_document_reuses_recent_accepted_probe_when_driver_snapshot_flickers():
+def test_active_document_reprobes_when_driver_identity_changes():
     runtime = FakeRuntime(
         (
             "The reports are not ready, and it fails.",
@@ -1884,7 +2199,7 @@ def test_active_document_reuses_recent_accepted_probe_when_driver_snapshot_flick
 
     assert first.quality_complete
     assert second.quality_complete
-    assert runtime.probe_calls == 1
+    assert runtime.probe_calls == 2
 
 
 def test_tone_generation_protects_negation_surface_during_rewrite():
@@ -1913,7 +2228,7 @@ def test_rephrase_generation_protects_negated_action_phrase():
     source = (
         "Approval of the trial does not authorize permanent hours after June 26."
     )
-    runtime = FakeRuntime((source,))
+    runtime = FakeRuntime((source,) * 10)
     value, _ = engine(classifier=FakeClassifier(), runtime=runtime)
 
     result = value.analyze(
@@ -1935,7 +2250,7 @@ def test_rephrase_generation_protects_complete_negated_claim():
         "It should not claim gardens eliminate food insecurity, prevent crime, "
         "or guarantee community unity."
     )
-    runtime = FakeRuntime((source,))
+    runtime = FakeRuntime((source,) * 10)
     value, _ = engine(classifier=FakeClassifier(), runtime=runtime)
 
     result = value.analyze(
@@ -2223,7 +2538,7 @@ def test_rephrase_generation_protects_ordering_calendar_date_phrase():
     source = (
         "Approval does not authorize permanent hours after June 26."
     )
-    runtime = FakeRuntime((source,))
+    runtime = FakeRuntime((source,) * 10)
     value, _ = engine(classifier=FakeClassifier(), runtime=runtime)
 
     result = value.analyze(
@@ -2311,7 +2626,7 @@ def test_runtime_error_on_retry_still_uses_sentence_recovery():
     assert len(runtime.generate_calls) == 4
 
 
-def test_sentence_recovery_keeps_clean_seed_when_one_style_sentence_is_unsafe():
+def test_sentence_recovery_refuses_mixed_ai_and_rules_provenance():
     source = "The report is clear. The wording is simple."
     runtime = FakeRuntime(
         (
@@ -2333,11 +2648,10 @@ def test_sentence_recovery_keeps_clean_seed_when_one_style_sentence_is_unsafe():
         )
     )
 
-    assert result.text == "The report reads clearly. The wording is simple."
-    assert result.validation.accepted, result.validation.failures
-    assert result.quality_complete
-    assert result.review_ready
-    assert result.used_llm
+    assert result.text == source
+    assert not result.quality_complete
+    assert not result.review_ready
+    assert not result.used_llm
 
 
 def test_initial_model_safety_error_uses_sentence_recovery():
@@ -2385,6 +2699,21 @@ def test_validator_allows_run_on_split_and_double_negative_repair():
     assert result.validation.accepted
 
 
+def test_validator_allows_multiple_spelling_repairs_in_a_title():
+    source = "Dogs Makes Grate Petts in Bakersfield"
+    corrected = "Dogs Make Great Pets in Bakersfield"
+    value, _ = engine(classifier=FakeClassifier(), runtime=FakeRuntime(()))
+
+    validation = value.validator.validate(
+        source,
+        corrected,
+        task=PolishTask.PROOFREAD,
+        grammar_mode=True,
+    )
+
+    assert validation.accepted
+
+
 def test_validator_rejects_dropped_modal_and_organizer_condition():
     source = (
         "The conclusion should state that gardens can support local learning when "
@@ -2403,14 +2732,9 @@ def test_validator_rejects_dropped_modal_and_organizer_condition():
         grammar_mode=False,
     )
 
-    # Both observations survive, with the severity they earn. Dropping "can"
-    # here weakens a claim without inverting it, and losing "organizers" drops
-    # an actor the sentence still anchors, so the candidate is reported rather
-    # than refused - and the retry prompt is told exactly what moved. Refusing
-    # this class outright rejected 159 of 200 measured sections.
-    assert "modal meaning changed" in validation.advisories
-    assert any(x.startswith("actor changed") for x in validation.advisories)
-    assert not validation.failures
+    assert "modal meaning changed" in validation.failures
+    assert any(x.startswith("actor changed") for x in validation.failures)
+    assert not validation.accepted
 
 
 def test_validator_allows_correction_that_preserves_modal_and_organizer():
@@ -2465,12 +2789,132 @@ def test_validator_rejects_modal_moved_between_program_and_city():
         grammar_mode=True,
     )
 
-    # "will" moving from the program to the city is reported, not refused. The
-    # prohibition in the middle sentence - "Visitors will not pay a fee" - is
-    # untouched, and that is the part a reader cannot afford to lose; it stays
-    # a hard failure and is covered by the prohibition tests.
-    assert "modal actor changed" in validation.advisories
-    assert not validation.failures
+    assert "modal actor changed" in validation.failures
+    assert not validation.accepted
+
+
+def test_validator_rejects_removed_obligation():
+    source = "Employees must submit the report before Friday."
+    unsafe = "Employees submit the report before Friday."
+    value, _ = engine(classifier=FakeClassifier(), runtime=FakeRuntime(()))
+
+    validation = value.validator.validate(
+        source,
+        unsafe,
+        task=PolishTask.PROOFREAD,
+        grammar_mode=True,
+    )
+
+    assert any(x.startswith("obligation strength changed") for x in validation.failures)
+    assert not validation.accepted
+
+
+def test_validator_rejects_changed_ordering_relationship():
+    source = "Technicians inspect the system before deployment."
+    unsafe = "Technicians inspect the system after deployment."
+    value, _ = engine(classifier=FakeClassifier(), runtime=FakeRuntime(()))
+
+    validation = value.validator.validate(
+        source,
+        unsafe,
+        task=PolishTask.PROOFREAD,
+        grammar_mode=True,
+    )
+
+    assert any(
+        x.startswith("date or ordering relationship changed")
+        for x in validation.failures
+    )
+    assert not validation.accepted
+
+
+def test_validator_rejects_changed_common_role_actor():
+    source = "The doctor reviewed the results."
+    unsafe = "The nurse reviewed the results."
+    value, _ = engine(classifier=FakeClassifier(), runtime=FakeRuntime(()))
+
+    validation = value.validator.validate(
+        source,
+        unsafe,
+        task=PolishTask.PROOFREAD,
+        grammar_mode=True,
+    )
+
+    assert any(x.startswith("actor changed") for x in validation.failures)
+    assert not validation.accepted
+
+
+@pytest.mark.parametrize(
+    ("source", "unsafe", "failure"),
+    (
+        (
+            "The team approved the request.",
+            "The team rejected the request.",
+            "approval state reversed",
+        ),
+        (
+            "The medicine increased the pain.",
+            "The medicine decreased the pain.",
+            "quantity direction reversed",
+        ),
+        (
+            "The door is open.",
+            "The door is closed.",
+            "open state reversed",
+        ),
+    ),
+)
+def test_validator_rejects_explicit_action_state_contradictions(
+    source,
+    unsafe,
+    failure,
+):
+    value, _ = engine(classifier=FakeClassifier(), runtime=FakeRuntime(()))
+
+    validation = value.validator.validate(
+        source,
+        unsafe,
+        task=PolishTask.PROOFREAD,
+        grammar_mode=True,
+    )
+
+    assert failure in validation.failures
+    assert not validation.accepted
+
+
+def test_validator_checks_semantics_after_first_encoder_window():
+    class WindowAwareClassifier(FakeClassifier):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        def semantic_similarity(self, source, candidate):
+            self.calls.append((source, candidate))
+            if len(source.split()) > 96:
+                return 0.99
+            if "oranges" in candidate:
+                return 0.20
+            return 0.99
+
+    prefix = " ".join(
+        f"Sentence {index} explains the same stable report."
+        for index in range(45)
+    )
+    source = f"{prefix} The final summary discusses apples."
+    unsafe = f"{prefix} The final summary discusses oranges."
+    classifier = WindowAwareClassifier()
+    value, _ = engine(classifier=classifier, runtime=FakeRuntime(()))
+
+    validation = value.validator.validate(
+        source,
+        unsafe,
+        task=PolishTask.PROOFREAD,
+        grammar_mode=True,
+    )
+
+    assert any("semantic similarity window" in x for x in validation.failures)
+    assert any("oranges" in candidate for _, candidate in classifier.calls[1:])
+    assert not validation.accepted
 
 
 def test_validator_rejects_a_dropped_prohibition():
@@ -2802,14 +3246,12 @@ def test_failed_section_recovers_by_correcting_each_sentence_separately():
     assert len(runtime.generate_calls) == 4
 
 
-def test_best_fact_safe_ai_correction_is_accepted_once_retries_are_spent():
-    """An imperfect but fact-safe correction is a correction.
+def test_incomplete_fact_safe_ai_correction_is_not_review_ready():
+    """Residual grammar keeps an otherwise safe AI answer out of review.
 
     The model never improves on its first answer here: it repairs the spelling
     and leaves the agreement error. Every retry is still spent trying for
-    better, and the answer is then accepted because it is no worse than the
-    rules-only repair. Demanding a flawless answer at this point refused 159 of
-    200 measured sections and showed the reader unrepaired writing.
+    better, but an incomplete answer is not presented as ready for replacement.
     """
     runtime = FakeRuntime(
         (
@@ -2823,13 +3265,13 @@ def test_best_fact_safe_ai_correction_is_accepted_once_retries_are_spent():
     result = value.analyze(request("Teh reports is ready."))
 
     assert result.text == "The reports is ready."
-    # Still not flawless, and still reported as such to the review card.
+    # Still not flawless, so the review card must not offer it for replacement.
     assert not result.quality_complete
     assert result.residual_errors
     assert result.validation.accepted
-    assert result.review_ready
+    assert not result.review_ready
     assert result.used_llm
-    assert "correction ready" in result.message.casefold()
+    assert "not ready for review" in result.message.casefold()
     assert len(runtime.generate_calls) == 3
 
 
@@ -2846,9 +3288,9 @@ def test_rules_only_fallback_is_never_exposed_as_manual_correction():
     result = value.analyze(request("Teh build 47 is not ready."))
 
     assert result.text == "The build 47 is not ready."
-    assert result.used_llm
+    assert not result.used_llm
     assert result.rejected_llm
-    assert result.review_ready
+    assert not result.review_ready
 
 
 def test_sentence_recovery_requires_ai_for_every_sentence():
@@ -2928,16 +3370,17 @@ def test_safety_retry_includes_exact_negation_inventory():
 
 
 def test_sentence_recovery_repeats_actor_and_negation_inventories():
-    source = "These numbers do not explain the result."
-    unsafe = "These numbers are useful. They explain the result."
-    runtime = FakeRuntime((unsafe, unsafe, source))
+    source = "These reports is not ready."
+    corrected = "These reports are not ready."
+    unsafe = "These reports are useful. They are ready."
+    runtime = FakeRuntime((unsafe, unsafe, corrected))
     value, _ = engine(classifier=FakeClassifier(), runtime=runtime)
 
     result = value.analyze(request(source))
 
     assert result.used_llm
-    assert result.rejected_llm
-    assert result.text == source
+    assert not result.rejected_llm
+    assert result.text == corrected
 
 
 def test_safety_retry_includes_exact_name_inventory():
@@ -3079,6 +3522,18 @@ def test_generation_does_not_tokenize_common_sentence_starters_as_names():
 def test_instant_does_not_retry_unsafe_ai_output():
     runtime = FakeRuntime(("Build 48 is not ready.",))
     value, _ = engine(classifier=FakeClassifier(), runtime=runtime)
+    value.packs = FakePacks(
+        replace(
+            model_pack(),
+            pack_id="gemma4-e2b-qat-v1",
+            display_name="Gemma 4 E2B QAT",
+            model="gemma4:e2b-it-qat",
+            parameters="2.3B effective",
+            size_bytes=5 * GIB,
+            min_ram_bytes=8 * GIB,
+            min_vram_bytes=6 * GIB,
+        )
+    )
     result = value.analyze(request("Build 47 is not ready.", mode=PolishMode.INSTANT))
     assert result.text == "Build 47 is not ready."
     assert result.rejected_llm
@@ -3095,6 +3550,35 @@ def test_runtime_failure_keeps_original_text_and_marks_quality_incomplete():
     assert not result.review_ready
     assert result.runtime_failure_kind is RuntimeFailureKind.GPU_FAILURE
     assert "GPU was lost" in result.message
+
+
+def test_missing_download_consent_does_not_poison_the_signed_pack():
+    pack = replace(model_pack(), installed=False, validated=False)
+
+    class ConsentPacks(FakePacks):
+        def ensure(self, plan, *, consent, progress=None):
+            self.ensure_calls += 1
+            assert not consent
+            raise ModelPackConsentRequired(self.pack)
+
+    packs = ConsentPacks(pack)
+    value = PolishEngine(
+        rules=FakeRules(),
+        classifier=FakeClassifier(),
+        packs=packs,
+        runtime=FakeRuntime(()),
+        hardware_provider=hardware,
+        benchmark_cache=PolishBenchmarkCache(MemoryStore()),
+    )
+
+    first = value.analyze(request("Teh reports is not ready."))
+    second = value.analyze(request("Teh reports is not ready."))
+
+    assert packs.ensure_calls == 2
+    assert value._failed_pack_ids() == set()
+    assert first.runtime_failure_kind is RuntimeFailureKind.MODEL_UNAVAILABLE
+    assert second.runtime_failure_kind is RuntimeFailureKind.MODEL_UNAVAILABLE
+    assert "download approval" in second.message.casefold()
 
 
 def test_successful_ai_result_exposes_quality_fields():
@@ -3138,6 +3622,45 @@ def test_failed_acceptance_probe_does_not_run_the_rejected_model():
     assert result.plan.backend is RuntimeBackend.RULES
     assert not result.review_ready
     assert "failed its local acceptance probe" in result.plan.downgrade_reason
+    assert "gemma" not in result.plan.downgrade_reason.casefold()
+
+
+def test_verified_warm_plan_is_reused_without_reprobing_later_sections():
+    pack = model_pack()
+    runtime = FakeRuntime((), probe=False)
+    runtime.is_current = lambda pack_id, model, policy_version, **_kwargs: (
+        pack_id == pack.pack_id
+        and model == pack.model
+        and policy_version == probe_plan(pack).policy_version
+    )
+    value, _ = engine(classifier=FakeClassifier(), runtime=runtime)
+    plan = probe_plan(pack)
+
+    accepted = value._accept_plan(plan, hardware(), pack)
+
+    assert accepted.use_llm
+    assert not accepted.requires_probe
+    assert runtime.probe_calls == 0
+
+
+def test_failed_section_does_not_blacklist_current_verified_pack():
+    pack = model_pack()
+    runtime = FakeRuntime(("The reports are ready.",))
+    plan = probe_plan(pack)
+    runtime.lease = lambda: SimpleNamespace(plan=plan)
+    runtime.is_current = lambda *_args, **_kwargs: True
+    value, _ = engine(classifier=FakeClassifier(), runtime=runtime)
+    value._remember_failed_pack(
+        pack.pack_id,
+        "validation failed for one section",
+        kind=RuntimeFailureKind.VALIDATION_FAILURE,
+    )
+
+    result = value.analyze(request("The reports is ready."))
+
+    assert result.plan.pack_id == pack.pack_id
+    assert result.used_llm
+    assert len(runtime.generate_calls) == 1
 
 
 def test_slow_only_pack_is_rejected_for_manual_correction():
@@ -3147,7 +3670,12 @@ def test_slow_only_pack_is_rejected_for_manual_correction():
     snapshot = hardware()
     runtime = FakeRuntime(())
     cache.put(
-        cache.key(snapshot, runtime_id=runtime.runtime_id, pack=pack),
+        cache.key(
+            snapshot,
+            runtime_id=runtime.runtime_id,
+            pack=pack,
+            plan=probe_plan(pack),
+        ),
         BenchmarkRecord(
             accepted=False,
             correctness_passed=True,
@@ -3166,15 +3694,7 @@ def test_slow_only_pack_is_rejected_for_manual_correction():
         hardware_provider=lambda: snapshot,
         benchmark_cache=cache,
     )
-    plan = ExecutionPlan(
-        policy_version=1,
-        mode=PolishMode.BALANCED,
-        task=PolishTask.PROOFREAD,
-        use_llm=True,
-        pack_id=pack.pack_id,
-        model=pack.model,
-        backend=RuntimeBackend.CUDA,
-    )
+    plan = probe_plan(pack)
 
     accepted = value._accept_plan(plan, snapshot, pack)
 
@@ -3189,19 +3709,20 @@ def test_manual_engine_without_download_consent_rejects_failed_installed_pack():
         model_pack(),
         pack_id="gemma4-12b-q4-k-m-v1",
         display_name="Gemma 4 12B Q4_K_M",
-        model="gemma4:12b",
+        model="gemma4:12b-it-q4_K_M",
         family="Gemma 4",
         parameters="12B",
         size_bytes=8 * GIB,
         installed=True,
     )
-    uninstalled_qwen = replace(
+    uninstalled_small = replace(
         model_pack(),
-        pack_id="qwen3-1.7b-q4-k-m-v1",
-        display_name="Qwen3 1.7B Q4_K_M",
-        model="qwen3:1.7b",
-        parameters="1.7B",
-        size_bytes=2 * GIB,
+        pack_id="gemma4-e2b-qat-v1",
+        display_name="Gemma 4 E2B QAT",
+        model="gemma4:e2b-it-qat",
+        parameters="2.3B effective",
+        quantization="Q4_0",
+        size_bytes=5 * GIB,
         min_ram_bytes=8 * GIB,
         min_vram_bytes=0,
         supported_backends=(RuntimeBackend.CUDA, RuntimeBackend.CPU),
@@ -3213,11 +3734,11 @@ def test_manual_engine_without_download_consent_rejects_failed_installed_pack():
             self.ensure_ids = []
 
         def catalog(self, *, refresh_installed=True):
-            return (installed_gemma, uninstalled_qwen)
+            return (installed_gemma, uninstalled_small)
 
         def ensure(self, plan, *, consent, progress=None):
             self.ensure_ids.append(plan.pack_id)
-            if plan.pack_id == uninstalled_qwen.pack_id and not consent:
+            if plan.pack_id == uninstalled_small.pack_id and not consent:
                 raise AssertionError("uninstalled pack must not be selected without consent")
             return installed_gemma
 
@@ -3227,7 +3748,12 @@ def test_manual_engine_without_download_consent_rejects_failed_installed_pack():
     snapshot = hardware()
     runtime = FakeRuntime(("The reports are not ready.",))
     cache.put(
-        cache.key(snapshot, runtime_id=runtime.runtime_id, pack=installed_gemma),
+        cache.key(
+            snapshot,
+            runtime_id=runtime.runtime_id,
+            pack=installed_gemma,
+            plan=probe_plan(installed_gemma),
+        ),
         BenchmarkRecord(
             accepted=False,
             correctness_passed=True,
@@ -3254,29 +3780,1088 @@ def test_manual_engine_without_download_consent_rejects_failed_installed_pack():
     assert packs.ensure_ids == []
 
 
-def test_all_failed_installed_packs_leave_ai_disabled():
-    pack_8b = replace(
+def test_failed_larger_pack_prepares_and_uses_installed_smaller_pack():
+    larger_pack = replace(
         model_pack(),
-        pack_id="qwen3-8b-q4-k-m-v1",
-        display_name="Qwen3 8B Q4_K_M",
-        model="qwen3:8b",
-        parameters="8B",
+        pack_id="gemma4-e4b-qat-v1",
+        display_name="Gemma 4 E4B QAT",
+        model="gemma4:e4b-it-qat",
+        parameters="4.5B effective",
+        size_bytes=6 * GIB,
+        installed=True,
+    )
+    smaller_pack = replace(
+        model_pack(),
+        pack_id="gemma4-e2b-qat-v1",
+        display_name="Gemma 4 E2B QAT",
+        model="gemma4:e2b-it-qat",
+        parameters="2.3B effective",
+        size_bytes=5 * GIB,
+        min_ram_bytes=8 * GIB,
+        min_vram_bytes=6 * GIB,
+        installed=True,
+    )
+
+    class DownloadingPacks:
+        def __init__(self):
+            self.ensure_ids = []
+
+        def catalog(self, *, refresh_installed=True):
+            return (larger_pack, smaller_pack)
+
+        def ensure(self, plan, *, consent, progress=None):
+            self.ensure_ids.append(plan.pack_id)
+            if plan.pack_id == smaller_pack.pack_id:
+                assert not consent
+                return smaller_pack
+            return larger_pack
+
+    class RecordingRuntime(FakeRuntime):
+        def __init__(self):
+            super().__init__(("The reports are not ready.",))
+            self.prepare_ids = []
+            self.probe_ids = []
+
+        def prepare(self, plan, *, consent=False):
+            self.prepare_ids.append(plan.pack_id)
+            return True
+
+        def acceptance_probe(self, plan):
+            self.probe_ids.append(plan.pack_id)
+            accepted = plan.pack_id == smaller_pack.pack_id
+            return AcceptanceProbeResult(
+                accepted=accepted,
+                elapsed_seconds=0.5 if accepted else 6.3,
+                correctness_passed=True,
+                protected_passed=True,
+                backend=RuntimeBackend.CUDA,
+                reason="" if accepted else "warm latency exceeded 5 seconds",
+            )
+
+    packs = DownloadingPacks()
+    runtime = RecordingRuntime()
+    value = PolishEngine(
+        rules=FakeRules(),
+        classifier=FakeClassifier(),
+        packs=packs,
+        runtime=runtime,
+        hardware_provider=hardware,
+        benchmark_cache=PolishBenchmarkCache(MemoryStore()),
+    )
+
+    result = value.analyze(
+        replace(
+            request("The reports is not ready."),
+            download_consent=True,
+        )
+    )
+
+    assert result.used_llm
+    assert result.review_ready
+    assert result.text == "The reports are not ready."
+    assert result.plan.pack_id == smaller_pack.pack_id
+    assert packs.ensure_ids == [larger_pack.pack_id, smaller_pack.pack_id]
+    assert runtime.prepare_ids == [larger_pack.pack_id, smaller_pack.pack_id]
+    assert runtime.probe_ids == [larger_pack.pack_id, smaller_pack.pack_id]
+    assert [call.plan.pack_id for call in runtime.generate_calls] == [
+        smaller_pack.pack_id
+    ]
+    assert result.plan.backend is RuntimeBackend.CUDA
+    assert result.plan.require_full_gpu
+
+
+def test_failed_installed_fallback_stops_after_one_attempt_per_pack():
+    larger_pack = model_pack()
+    smaller_pack = replace(
+        model_pack(),
+        pack_id="gemma4-e2b-qat-v1",
+        display_name="Gemma 4 E2B QAT",
+        model="gemma4:e2b-it-qat",
+        parameters="2.3B effective",
+        size_bytes=5 * GIB,
+        min_ram_bytes=8 * GIB,
+        min_vram_bytes=6 * GIB,
+        installed=True,
+    )
+
+    class DownloadingPacks:
+        def __init__(self):
+            self.ensure_ids = []
+
+        def catalog(self, *, refresh_installed=True):
+            return (larger_pack, smaller_pack)
+
+        def ensure(self, plan, *, consent, progress=None):
+            self.ensure_ids.append(plan.pack_id)
+            if plan.pack_id == smaller_pack.pack_id:
+                assert not consent
+            selected = next(
+                pack for pack in self.catalog() if pack.pack_id == plan.pack_id
+            )
+            return selected
+
+    class RejectingRuntime(FakeRuntime):
+        def __init__(self):
+            super().__init__(())
+            self.prepare_ids = []
+            self.probe_ids = []
+
+        def prepare(self, plan, *, consent=False):
+            self.prepare_ids.append(plan.pack_id)
+            return True
+
+        def acceptance_probe(self, plan):
+            self.probe_ids.append(plan.pack_id)
+            return AcceptanceProbeResult(
+                accepted=False,
+                elapsed_seconds=6.3,
+                correctness_passed=True,
+                protected_passed=True,
+                backend=RuntimeBackend.CUDA,
+                reason="warm latency exceeded 5 seconds",
+            )
+
+    packs = DownloadingPacks()
+    runtime = RejectingRuntime()
+    value = PolishEngine(
+        rules=FakeRules(),
+        classifier=FakeClassifier(),
+        packs=packs,
+        runtime=runtime,
+        hardware_provider=hardware,
+        benchmark_cache=PolishBenchmarkCache(MemoryStore()),
+    )
+
+    result = value.analyze(
+        replace(
+            request("The reports is not ready."),
+            download_consent=True,
+        )
+    )
+
+    assert not result.used_llm
+    assert not result.review_ready
+    assert packs.ensure_ids == [larger_pack.pack_id, smaller_pack.pack_id]
+    assert runtime.prepare_ids == [larger_pack.pack_id, smaller_pack.pack_id]
+    assert runtime.probe_ids == [larger_pack.pack_id, smaller_pack.pack_id]
+    assert runtime.generate_calls == []
+
+
+def test_primary_consent_never_downloads_an_uninstalled_fallback_pack():
+    larger_pack = model_pack()
+    smaller_pack = replace(
+        model_pack(),
+        pack_id="gemma4-e2b-qat-v1",
+        display_name="Gemma 4 E2B QAT",
+        model="gemma4:e2b-it-qat",
+        parameters="2.3B effective",
+        size_bytes=5 * GIB,
+        min_ram_bytes=8 * GIB,
+        min_vram_bytes=6 * GIB,
+        installed=False,
+    )
+
+    class Packs:
+        def __init__(self):
+            self.ensure_ids = []
+
+        def catalog(self, *, refresh_installed=True):
+            return (larger_pack, smaller_pack)
+
+        def ensure(self, plan, *, consent, progress=None):
+            self.ensure_ids.append(plan.pack_id)
+            return larger_pack if plan.pack_id == larger_pack.pack_id else smaller_pack
+
+    class Runtime(FakeRuntime):
+        def __init__(self):
+            super().__init__(())
+            self.probe_ids = []
+
+        def acceptance_probe(self, plan):
+            self.probe_ids.append(plan.pack_id)
+            accepted = plan.pack_id == smaller_pack.pack_id
+            return AcceptanceProbeResult(
+                accepted=accepted,
+                elapsed_seconds=0.5,
+                correctness_passed=accepted,
+                protected_passed=accepted,
+                backend=RuntimeBackend.CUDA,
+                reason="primary probe failed" if not accepted else "",
+            )
+
+    packs = Packs()
+    runtime = Runtime()
+    value = PolishEngine(
+        rules=FakeRules(),
+        classifier=FakeClassifier(),
+        packs=packs,
+        runtime=runtime,
+        hardware_provider=hardware,
+        benchmark_cache=PolishBenchmarkCache(MemoryStore()),
+    )
+
+    result = value.analyze(
+        replace(request("The reports is not ready."), download_consent=True)
+    )
+
+    assert not result.used_llm
+    assert not result.review_ready
+    assert packs.ensure_ids == [larger_pack.pack_id]
+    assert runtime.probe_ids == [larger_pack.pack_id]
+
+
+@pytest.mark.parametrize(
+    ("failure_stage", "failure"),
+    (
+        ("ensure", ModelPackDownloadError("primary download failed")),
+        ("ensure", ModelPackSecurityError("primary signature failed")),
+        ("prepare", RuntimeError("primary runtime preparation failed")),
+    ),
+)
+def test_primary_activation_failure_uses_next_smaller_pack(
+    failure_stage,
+    failure,
+):
+    larger_pack = model_pack()
+    smaller_pack = replace(
+        model_pack(),
+        pack_id="gemma4-e2b-qat-v1",
+        display_name="Gemma 4 E2B QAT",
+        model="gemma4:e2b-it-qat",
+        parameters="2.3B effective",
+        size_bytes=5 * GIB,
+        min_ram_bytes=8 * GIB,
+        min_vram_bytes=6 * GIB,
+        installed=True,
+    )
+
+    class ActivatingPacks:
+        def __init__(self):
+            self.ensure_ids = []
+
+        def catalog(self, *, refresh_installed=True):
+            return (larger_pack, smaller_pack)
+
+        def ensure(self, plan, *, consent, progress=None):
+            self.ensure_ids.append(plan.pack_id)
+            if plan.pack_id == larger_pack.pack_id and failure_stage == "ensure":
+                raise failure
+            if plan.pack_id == smaller_pack.pack_id:
+                assert not consent
+                return smaller_pack
+            return larger_pack
+
+    class ActivatingRuntime(FakeRuntime):
+        def __init__(self):
+            super().__init__(("The reports are not ready.",))
+            self.prepare_ids = []
+            self.probe_ids = []
+
+        def prepare(self, plan, *, consent=False):
+            self.prepare_ids.append(plan.pack_id)
+            if plan.pack_id == larger_pack.pack_id and failure_stage == "prepare":
+                raise failure
+            return True
+
+        def acceptance_probe(self, plan):
+            self.probe_ids.append(plan.pack_id)
+            return AcceptanceProbeResult(
+                accepted=True,
+                elapsed_seconds=0.5,
+                correctness_passed=True,
+                protected_passed=True,
+                backend=RuntimeBackend.CUDA,
+            )
+
+    packs = ActivatingPacks()
+    runtime = ActivatingRuntime()
+    value = PolishEngine(
+        rules=FakeRules(),
+        classifier=FakeClassifier(),
+        packs=packs,
+        runtime=runtime,
+        hardware_provider=hardware,
+        benchmark_cache=PolishBenchmarkCache(MemoryStore()),
+    )
+
+    result = value.analyze(
+        replace(
+            request("The reports is not ready."),
+            download_consent=True,
+        )
+    )
+
+    assert result.used_llm
+    assert result.review_ready
+    assert result.plan.pack_id == smaller_pack.pack_id
+    assert packs.ensure_ids == [larger_pack.pack_id, smaller_pack.pack_id]
+    expected_prepare = (
+        [larger_pack.pack_id, smaller_pack.pack_id]
+        if failure_stage == "prepare"
+        else [smaller_pack.pack_id]
+    )
+    assert runtime.prepare_ids == expected_prepare
+    assert runtime.probe_ids == [smaller_pack.pack_id]
+    assert [call.plan.pack_id for call in runtime.generate_calls] == [
+        smaller_pack.pack_id
+    ]
+
+
+def test_terminal_activation_failure_kind_matches_final_failure_message():
+    larger_pack = model_pack()
+    smaller_pack = replace(
+        model_pack(),
+        pack_id="gemma4-e2b-qat-v1",
+        display_name="Gemma 4 E2B QAT",
+        model="gemma4:e2b-it-qat",
+        parameters="2.3B effective",
+        size_bytes=5 * GIB,
+        min_ram_bytes=8 * GIB,
+        min_vram_bytes=6 * GIB,
+        installed=True,
+    )
+
+    class FailingPacks:
+        def catalog(self, *, refresh_installed=True):
+            return (larger_pack, smaller_pack)
+
+        def ensure(self, plan, *, consent, progress=None):
+            if plan.pack_id == larger_pack.pack_id:
+                raise RuntimeError("primary GPU failed")
+            raise RuntimeError("final model load timed out")
+
+    value = PolishEngine(
+        rules=FakeRules(),
+        classifier=FakeClassifier(),
+        packs=FailingPacks(),
+        runtime=FakeRuntime(()),
+        hardware_provider=hardware,
+        benchmark_cache=PolishBenchmarkCache(MemoryStore()),
+    )
+
+    result = value.analyze(
+        replace(request("The reports is not ready."), download_consent=True)
+    )
+
+    assert not result.used_llm
+    assert "final model load timed out" in result.message
+    assert "final model load timed out" in result.plan.downgrade_reason
+    assert result.runtime_failure_kind is RuntimeFailureKind.LOAD_TIMEOUT
+
+
+@pytest.mark.parametrize(
+    "failure_message",
+    (
+        "GPU lost full residency",
+        "generation timed out",
+        "model load timed out",
+        "Local writing model returned invalid text",
+        "Local writing model returned incomplete text",
+        "Local writing model changed protected content",
+        "Local writing model changed a meaning constraint",
+    ),
+)
+def test_generation_runtime_failure_uses_next_smaller_accepted_pack(
+    failure_message,
+):
+    larger_pack = model_pack()
+    smaller_pack = replace(
+        model_pack(),
+        pack_id="gemma4-e2b-qat-v1",
+        display_name="Gemma 4 E2B QAT",
+        model="gemma4:e2b-it-qat",
+        parameters="2.3B effective",
+        size_bytes=5 * GIB,
+        min_ram_bytes=8 * GIB,
+        min_vram_bytes=6 * GIB,
+        installed=True,
+    )
+
+    class DownloadingPacks:
+        def __init__(self):
+            self.ensure_ids = []
+
+        def catalog(self, *, refresh_installed=True):
+            return (larger_pack, smaller_pack)
+
+        def ensure(self, plan, *, consent, progress=None):
+            self.ensure_ids.append(plan.pack_id)
+            if plan.pack_id == smaller_pack.pack_id:
+                assert not consent
+                return smaller_pack
+            return larger_pack
+
+    class FailingPrimaryRuntime(FakeRuntime):
+        def __init__(self):
+            super().__init__(())
+            self.prepare_ids = []
+            self.prepare_consents = []
+            self.probe_ids = []
+            self.generate_ids = []
+
+        def prepare(self, plan, *, consent=False):
+            self.prepare_ids.append(plan.pack_id)
+            self.prepare_consents.append(consent)
+            return True
+
+        def acceptance_probe(self, plan):
+            self.probe_ids.append(plan.pack_id)
+            return AcceptanceProbeResult(
+                accepted=True,
+                elapsed_seconds=0.5,
+                correctness_passed=True,
+                protected_passed=True,
+                backend=RuntimeBackend.CUDA,
+            )
+
+        def generate(self, generation_request):
+            self.generate_calls.append(generation_request)
+            self.generate_ids.append(generation_request.plan.pack_id)
+            if generation_request.plan.pack_id == larger_pack.pack_id:
+                raise RuntimeError(failure_message)
+            return GenerationResult(
+                "The reports are not ready.",
+                generation_request.plan.model,
+                RuntimeBackend.CUDA,
+                0.25,
+            )
+
+    packs = DownloadingPacks()
+    runtime = FailingPrimaryRuntime()
+    value = PolishEngine(
+        rules=FakeRules(),
+        classifier=FakeClassifier(),
+        packs=packs,
+        runtime=runtime,
+        hardware_provider=hardware,
+        benchmark_cache=PolishBenchmarkCache(MemoryStore()),
+    )
+
+    result = value.analyze(
+        replace(
+            request("The reports is not ready."),
+            download_consent=True,
+        )
+    )
+    second = value.analyze(
+        replace(
+            request("The reports is not ready."),
+            download_consent=True,
+        )
+    )
+
+    assert result.used_llm
+    assert result.review_ready
+    assert result.text == "The reports are not ready."
+    assert result.plan.pack_id == smaller_pack.pack_id
+    assert failure_message in result.plan.downgrade_reason
+    assert second.used_llm
+    assert second.plan.pack_id == smaller_pack.pack_id
+    assert failure_message in second.plan.downgrade_reason
+    assert packs.ensure_ids == [
+        larger_pack.pack_id,
+        smaller_pack.pack_id,
+        smaller_pack.pack_id,
+    ]
+    assert runtime.prepare_ids == [
+        larger_pack.pack_id,
+        smaller_pack.pack_id,
+        smaller_pack.pack_id,
+    ]
+    assert runtime.prepare_consents == [False, False, False]
+    assert runtime.probe_ids == [larger_pack.pack_id, smaller_pack.pack_id]
+    assert runtime.generate_ids == [
+        larger_pack.pack_id,
+        smaller_pack.pack_id,
+        smaller_pack.pack_id,
+    ]
+
+
+def test_failed_pack_poison_expires_after_five_minutes():
+    larger_pack = model_pack()
+    smaller_pack = replace(
+        model_pack(),
+        pack_id="gemma4-e2b-qat-v1",
+        display_name="Gemma 4 E2B QAT",
+        model="gemma4:e2b-it-qat",
+        parameters="2.3B effective",
+        size_bytes=5 * GIB,
+        min_ram_bytes=8 * GIB,
+        min_vram_bytes=6 * GIB,
+        installed=True,
+    )
+    clock = [1000.0]
+
+    class Packs:
+        def __init__(self):
+            self.ensure_ids = []
+
+        def catalog(self, *, refresh_installed=True):
+            return (larger_pack, smaller_pack)
+
+        def ensure(self, plan, *, consent, progress=None):
+            self.ensure_ids.append(plan.pack_id)
+            return larger_pack if plan.pack_id == larger_pack.pack_id else smaller_pack
+
+    class Runtime(FakeRuntime):
+        def __init__(self):
+            super().__init__(())
+            self.generate_ids = []
+
+        def generate(self, generation_request):
+            self.generate_calls.append(generation_request)
+            self.generate_ids.append(generation_request.plan.pack_id)
+            if generation_request.plan.pack_id == larger_pack.pack_id:
+                raise RuntimeError("generation timed out")
+            return GenerationResult(
+                "The reports are not ready.",
+                generation_request.plan.model,
+                RuntimeBackend.CUDA,
+                0.25,
+            )
+
+    packs = Packs()
+    runtime = Runtime()
+    value = PolishEngine(
+        rules=FakeRules(),
+        classifier=FakeClassifier(),
+        packs=packs,
+        runtime=runtime,
+        hardware_provider=hardware,
+        benchmark_cache=PolishBenchmarkCache(MemoryStore()),
+        monotonic=lambda: clock[0],
+    )
+
+    first = value.analyze(request("The reports is not ready."))
+    clock[0] = 1299.9
+    second = value.analyze(request("The reports is not ready."))
+    clock[0] = 1300.1
+    third = value.analyze(request("The reports is not ready."))
+
+    assert first.plan.pack_id == smaller_pack.pack_id
+    assert second.plan.pack_id == smaller_pack.pack_id
+    assert third.plan.pack_id == smaller_pack.pack_id
+    assert runtime.generate_ids == [
+        larger_pack.pack_id,
+        smaller_pack.pack_id,
+        smaller_pack.pack_id,
+        larger_pack.pack_id,
+        smaller_pack.pack_id,
+    ]
+
+
+def test_protected_validation_failure_uses_installed_smaller_pack():
+    larger_pack = model_pack()
+    smaller_pack = replace(
+        model_pack(),
+        pack_id="gemma4-e2b-qat-v1",
+        display_name="Gemma 4 E2B QAT",
+        model="gemma4:e2b-it-qat",
+        parameters="2.3B effective",
+        size_bytes=5 * GIB,
+        min_ram_bytes=8 * GIB,
+        min_vram_bytes=6 * GIB,
+        installed=True,
+    )
+
+    class Packs:
+        def catalog(self, *, refresh_installed=True):
+            return (larger_pack, smaller_pack)
+
+        def ensure(self, plan, *, consent, progress=None):
+            if plan.pack_id == smaller_pack.pack_id:
+                assert not consent
+                return smaller_pack
+            return larger_pack
+
+    class Runtime(FakeRuntime):
+        def __init__(self):
+            super().__init__(())
+            self.generate_ids = []
+
+        def prepare(self, plan, *, consent=False):
+            if plan.pack_id == smaller_pack.pack_id:
+                assert not consent
+            return True
+
+        def generate(self, generation_request):
+            self.generate_calls.append(generation_request)
+            self.generate_ids.append(generation_request.plan.pack_id)
+            output = (
+                "Build 48 is ready."
+                if generation_request.plan.pack_id == larger_pack.pack_id
+                else "Build 47 is not ready."
+            )
+            return GenerationResult(
+                output,
+                generation_request.plan.model,
+                RuntimeBackend.CUDA,
+                0.25,
+            )
+
+    runtime = Runtime()
+    value = PolishEngine(
+        rules=FakeRules(),
+        classifier=FakeClassifier(),
+        packs=Packs(),
+        runtime=runtime,
+        hardware_provider=hardware,
+        benchmark_cache=PolishBenchmarkCache(MemoryStore()),
+    )
+
+    result = value.analyze(request("Build 47 is not ready."))
+
+    assert result.used_llm
+    assert result.review_ready
+    assert result.text == "Build 47 is not ready."
+    assert result.plan.pack_id == smaller_pack.pack_id
+    assert smaller_pack.pack_id in runtime.generate_ids
+
+
+@pytest.mark.parametrize("failure_stage", ("ensure", "prepare", "probe"))
+def test_activation_cancellation_propagates_without_poisoning_or_fallback(
+    failure_stage,
+):
+    larger_pack = model_pack()
+    smaller_pack = replace(
+        model_pack(),
+        pack_id="gemma4-e2b-qat-v1",
+        display_name="Gemma 4 E2B QAT",
+        model="gemma4:e2b-it-qat",
+        parameters="2.3B effective",
+        size_bytes=5 * GIB,
+        min_ram_bytes=8 * GIB,
+        min_vram_bytes=6 * GIB,
+        installed=True,
+    )
+
+    class Packs:
+        def __init__(self):
+            self.ensure_ids = []
+
+        def catalog(self, *, refresh_installed=True):
+            return (larger_pack, smaller_pack)
+
+        def ensure(self, plan, *, consent, progress=None):
+            self.ensure_ids.append(plan.pack_id)
+            if failure_stage == "ensure":
+                raise RuntimeError("operation cancelled by user")
+            return larger_pack
+
+    class Runtime(FakeRuntime):
+        def prepare(self, plan, *, consent=False):
+            if failure_stage == "prepare":
+                raise RuntimeError("operation cancelled by user")
+            return True
+
+        def acceptance_probe(self, plan):
+            if failure_stage == "probe":
+                raise RuntimeError("operation cancelled by user")
+            return super().acceptance_probe(plan)
+
+    packs = Packs()
+    value = PolishEngine(
+        rules=FakeRules(),
+        classifier=FakeClassifier(),
+        packs=packs,
+        runtime=Runtime(()),
+        hardware_provider=hardware,
+        benchmark_cache=PolishBenchmarkCache(MemoryStore()),
+    )
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        value.analyze(request("The reports is not ready."))
+
+    assert packs.ensure_ids == [larger_pack.pack_id]
+    assert smaller_pack.pack_id not in packs.ensure_ids
+    assert value._failed_pack_ids() == set()
+
+
+def test_fallback_activation_cancellation_does_not_poison_smaller_pack():
+    larger_pack = model_pack()
+    smaller_pack = replace(
+        model_pack(),
+        pack_id="gemma4-e2b-qat-v1",
+        display_name="Gemma 4 E2B QAT",
+        model="gemma4:e2b-it-qat",
+        parameters="2.3B effective",
+        size_bytes=5 * GIB,
+        min_ram_bytes=8 * GIB,
+        min_vram_bytes=6 * GIB,
+        installed=True,
+    )
+
+    class Packs:
+        def __init__(self):
+            self.ensure_ids = []
+
+        def catalog(self, *, refresh_installed=True):
+            return (larger_pack, smaller_pack)
+
+        def ensure(self, plan, *, consent, progress=None):
+            self.ensure_ids.append(plan.pack_id)
+            return next(
+                pack for pack in self.catalog() if pack.pack_id == plan.pack_id
+            )
+
+    class Runtime(FakeRuntime):
+        def prepare(self, plan, *, consent=False):
+            if plan.pack_id == smaller_pack.pack_id:
+                raise RuntimeError("operation cancelled by user")
+            return True
+
+        def acceptance_probe(self, plan):
+            accepted = plan.pack_id == smaller_pack.pack_id
+            return AcceptanceProbeResult(
+                accepted=accepted,
+                elapsed_seconds=0.5,
+                correctness_passed=accepted,
+                protected_passed=accepted,
+                backend=RuntimeBackend.CUDA,
+                reason="primary probe failed" if not accepted else "",
+            )
+
+    packs = Packs()
+    value = PolishEngine(
+        rules=FakeRules(),
+        classifier=FakeClassifier(),
+        packs=packs,
+        runtime=Runtime(()),
+        hardware_provider=hardware,
+        benchmark_cache=PolishBenchmarkCache(MemoryStore()),
+    )
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        value.analyze(request("The reports is not ready."))
+
+    assert packs.ensure_ids == [larger_pack.pack_id, smaller_pack.pack_id]
+    assert larger_pack.pack_id in value._failed_pack_ids()
+    assert smaller_pack.pack_id not in value._failed_pack_ids()
+
+
+def test_runtime_fallback_never_moves_to_a_larger_pack():
+    smaller_pack = replace(
+        model_pack(),
+        pack_id="gemma4-e2b-qat-v1",
+        display_name="Gemma 4 E2B QAT",
+        model="gemma4:e2b-it-qat",
+        parameters="2.3B effective",
+        size_bytes=5 * GIB,
+        min_ram_bytes=8 * GIB,
+        min_vram_bytes=6 * GIB,
+        installed=True,
+    )
+    larger_pack = model_pack()
+
+    class Packs:
+        def __init__(self):
+            self.ensure_ids = []
+
+        def catalog(self, *, refresh_installed=True):
+            return (smaller_pack, larger_pack)
+
+        def ensure(self, plan, *, consent, progress=None):
+            self.ensure_ids.append(plan.pack_id)
+            return next(
+                pack for pack in self.catalog() if pack.pack_id == plan.pack_id
+            )
+
+    packs = Packs()
+    classifier = FakeClassifier()
+    value = PolishEngine(
+        rules=FakeRules(),
+        classifier=classifier,
+        packs=packs,
+        runtime=FakeRuntime(()),
+        hardware_provider=hardware,
+        benchmark_cache=PolishBenchmarkCache(MemoryStore()),
+    )
+    decision = classifier.classify(
+        "The reports is not ready.",
+        "The reports is not ready.",
+        task=PolishTask.PROOFREAD,
+    )
+
+    fallback = value._accept_smaller_plan(
+        request=request("The reports is not ready."),
+        classifier=decision,
+        snapshot=hardware(),
+        rejected_plan=probe_plan(smaller_pack),
+        attempted_pack_ids={smaller_pack.pack_id},
+    )
+
+    assert not fallback.use_llm
+    assert fallback.backend is RuntimeBackend.RULES
+    assert packs.ensure_ids == []
+
+
+def test_gpu_runtime_fallback_never_degrades_to_cpu_placement():
+    gpu_pack = model_pack()
+    cpu_pack = replace(
+        model_pack(),
+        pack_id="gemma4-e2b-qat-v1",
+        display_name="Gemma 4 E2B QAT",
+        model="gemma4:e2b-it-qat",
+        parameters="2.3B effective",
+        size_bytes=5 * GIB,
+        min_ram_bytes=8 * GIB,
+        min_vram_bytes=0,
+        supported_backends=(RuntimeBackend.CPU,),
+        installed=True,
+    )
+
+    class Packs:
+        def __init__(self):
+            self.ensure_ids = []
+
+        def catalog(self, *, refresh_installed=True):
+            return (gpu_pack, cpu_pack)
+
+        def ensure(self, plan, *, consent, progress=None):
+            self.ensure_ids.append(plan.pack_id)
+            return cpu_pack
+
+    packs = Packs()
+    classifier = FakeClassifier()
+    value = PolishEngine(
+        rules=FakeRules(),
+        classifier=classifier,
+        packs=packs,
+        runtime=FakeRuntime(()),
+        hardware_provider=hardware,
+        benchmark_cache=PolishBenchmarkCache(MemoryStore()),
+    )
+    decision = classifier.classify(
+        "The reports is not ready.",
+        "The reports is not ready.",
+        task=PolishTask.PROOFREAD,
+    )
+
+    fallback = value._accept_smaller_plan(
+        request=request("The reports is not ready."),
+        classifier=decision,
+        snapshot=hardware(),
+        rejected_plan=probe_plan(gpu_pack),
+        attempted_pack_ids={gpu_pack.pack_id},
+    )
+
+    assert not fallback.use_llm
+    assert fallback.backend is RuntimeBackend.RULES
+    assert packs.ensure_ids == []
+
+
+def test_true_cancellation_does_not_activate_a_fallback_pack():
+    larger_pack = model_pack()
+    smaller_pack = replace(
+        model_pack(),
+        pack_id="gemma4-e2b-qat-v1",
+        display_name="Gemma 4 E2B QAT",
+        model="gemma4:e2b-it-qat",
+        parameters="2.3B effective",
+        size_bytes=5 * GIB,
+        min_ram_bytes=8 * GIB,
+        min_vram_bytes=6 * GIB,
+        installed=True,
+    )
+
+    class Packs:
+        def __init__(self):
+            self.ensure_ids = []
+
+        def catalog(self, *, refresh_installed=True):
+            return (larger_pack, smaller_pack)
+
+        def ensure(self, plan, *, consent, progress=None):
+            self.ensure_ids.append(plan.pack_id)
+            return larger_pack if plan.pack_id == larger_pack.pack_id else smaller_pack
+
+    class Runtime(FakeRuntime):
+        def generate(self, generation_request):
+            self.generate_calls.append(generation_request)
+            raise RuntimeError("operation cancelled by user")
+
+    packs = Packs()
+    value = PolishEngine(
+        rules=FakeRules(),
+        classifier=FakeClassifier(),
+        packs=packs,
+        runtime=Runtime(()),
+        hardware_provider=hardware,
+        benchmark_cache=PolishBenchmarkCache(MemoryStore()),
+    )
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        value.analyze(request("The reports is not ready."))
+
+    assert packs.ensure_ids == [larger_pack.pack_id]
+
+
+def test_all_poisoned_next_request_preserves_latest_failure_kind_and_message():
+    larger_pack = model_pack()
+    smaller_pack = replace(
+        model_pack(),
+        pack_id="gemma4-e2b-qat-v1",
+        display_name="Gemma 4 E2B QAT",
+        model="gemma4:e2b-it-qat",
+        parameters="2.3B effective",
+        size_bytes=5 * GIB,
+        min_ram_bytes=8 * GIB,
+        min_vram_bytes=6 * GIB,
+        installed=True,
+    )
+
+    class Packs:
+        def catalog(self, *, refresh_installed=True):
+            return (larger_pack, smaller_pack)
+
+        def ensure(self, plan, *, consent, progress=None):
+            return larger_pack if plan.pack_id == larger_pack.pack_id else smaller_pack
+
+    class Runtime(FakeRuntime):
+        def generate(self, generation_request):
+            self.generate_calls.append(generation_request)
+            if generation_request.plan.pack_id == larger_pack.pack_id:
+                raise RuntimeError("primary GPU failed")
+            raise RuntimeError("final generation timed out")
+
+    value = PolishEngine(
+        rules=FakeRules(),
+        classifier=FakeClassifier(),
+        packs=Packs(),
+        runtime=Runtime(()),
+        hardware_provider=hardware,
+        benchmark_cache=PolishBenchmarkCache(MemoryStore()),
+    )
+
+    first = value.analyze(request("The reports is not ready."))
+    second = value.analyze(request("The reports is not ready."))
+
+    assert first.runtime_failure_kind is RuntimeFailureKind.GENERATION_TIMEOUT
+    assert "final generation timed out" in first.message
+    assert second.runtime_failure_kind is RuntimeFailureKind.GENERATION_TIMEOUT
+    assert "final generation timed out" in second.message
+
+
+def test_recovery_generation_failure_uses_installed_smaller_pack():
+    larger_pack = model_pack()
+    smaller_pack = replace(
+        model_pack(),
+        pack_id="gemma4-e2b-qat-v1",
+        display_name="Gemma 4 E2B QAT",
+        model="gemma4:e2b-it-qat",
+        parameters="2.3B effective",
+        size_bytes=5 * GIB,
+        min_ram_bytes=8 * GIB,
+        min_vram_bytes=6 * GIB,
+        installed=True,
+    )
+
+    class Packs:
+        def __init__(self):
+            self.ensure_ids = []
+
+        def catalog(self, *, refresh_installed=True):
+            return (larger_pack, smaller_pack)
+
+        def ensure(self, plan, *, consent, progress=None):
+            self.ensure_ids.append(plan.pack_id)
+            if plan.pack_id == smaller_pack.pack_id:
+                assert not consent
+                return smaller_pack
+            return larger_pack
+
+    class RecoveryRuntime(FakeRuntime):
+        def __init__(self):
+            super().__init__(())
+            self.primary_calls = 0
+            self.generate_ids = []
+            self.probe_ids = []
+
+        def acceptance_probe(self, plan):
+            self.probe_ids.append(plan.pack_id)
+            return AcceptanceProbeResult(
+                accepted=True,
+                elapsed_seconds=0.5,
+                correctness_passed=True,
+                protected_passed=True,
+                backend=RuntimeBackend.CUDA,
+            )
+
+        def generate(self, generation_request):
+            self.generate_calls.append(generation_request)
+            self.generate_ids.append(generation_request.plan.pack_id)
+            if generation_request.plan.pack_id == larger_pack.pack_id:
+                self.primary_calls += 1
+                if self.primary_calls <= 2:
+                    return GenerationResult(
+                        "The build 48 is ready.",
+                        generation_request.plan.model,
+                        RuntimeBackend.CUDA,
+                        0.25,
+                    )
+                raise RuntimeError("GPU failed during recovery")
+            return GenerationResult(
+                "The reports are not ready.",
+                generation_request.plan.model,
+                RuntimeBackend.CUDA,
+                0.25,
+            )
+
+    packs = Packs()
+    runtime = RecoveryRuntime()
+    value = PolishEngine(
+        rules=FakeRules(),
+        classifier=FakeClassifier(),
+        packs=packs,
+        runtime=runtime,
+        hardware_provider=hardware,
+        benchmark_cache=PolishBenchmarkCache(MemoryStore()),
+    )
+
+    result = value.analyze(
+        replace(request("Teh reports is not ready."), download_consent=True)
+    )
+
+    assert result.used_llm
+    assert result.review_ready
+    assert result.text == "The reports are not ready."
+    assert result.plan.pack_id == smaller_pack.pack_id
+    assert "GPU failed during recovery" in result.plan.downgrade_reason
+    assert packs.ensure_ids == [larger_pack.pack_id, smaller_pack.pack_id]
+    assert runtime.probe_ids == [larger_pack.pack_id, smaller_pack.pack_id]
+    assert runtime.generate_ids == [
+        larger_pack.pack_id,
+        larger_pack.pack_id,
+        larger_pack.pack_id,
+        smaller_pack.pack_id,
+    ]
+
+
+def test_all_failed_installed_packs_leave_ai_disabled():
+    pack_e4b = replace(
+        model_pack(),
+        pack_id="gemma4-e4b-qat-v1",
+        display_name="Gemma 4 E4B QAT",
+        model="gemma4:e4b-it-qat",
+        parameters="4.5B effective",
+        quantization="Q4_0",
         size_bytes=6 * GIB,
         min_vram_bytes=8 * GIB,
     )
-    pack_4b = replace(
+    pack_e2b = replace(
         model_pack(),
-        pack_id="qwen3-4b-q4-k-m-v1",
-        display_name="Qwen3 4B Q4_K_M",
-        model="qwen3:4b",
-        parameters="4B",
-        size_bytes=3 * GIB,
-        min_vram_bytes=4 * GIB,
+        pack_id="gemma4-e2b-qat-v1",
+        display_name="Gemma 4 E2B QAT",
+        model="gemma4:e2b-it-qat",
+        parameters="2.3B effective",
+        quantization="Q4_0",
+        size_bytes=5 * GIB,
+        min_vram_bytes=6 * GIB,
     )
 
     class CatalogPacks:
         def catalog(self, *, refresh_installed=True):
-            return (pack_8b, pack_4b)
+            return (pack_e4b, pack_e2b)
 
     store = MemoryStore()
     cache = PolishBenchmarkCache(store)
@@ -3284,7 +4869,7 @@ def test_all_failed_installed_packs_leave_ai_disabled():
     runtime = FakeRuntime(())
     for pack, record in (
         (
-            pack_8b,
+            pack_e4b,
             BenchmarkRecord(
                 accepted=False,
                 correctness_passed=True,
@@ -3296,7 +4881,7 @@ def test_all_failed_installed_packs_leave_ai_disabled():
             ),
         ),
         (
-            pack_4b,
+            pack_e2b,
             BenchmarkRecord(
                 accepted=False,
                 correctness_passed=False,
@@ -3309,7 +4894,12 @@ def test_all_failed_installed_packs_leave_ai_disabled():
         ),
     ):
         cache.put(
-            cache.key(snapshot, runtime_id=runtime.runtime_id, pack=pack),
+            cache.key(
+                snapshot,
+                runtime_id=runtime.runtime_id,
+                pack=pack,
+                plan=probe_plan(pack),
+            ),
             record,
         )
 
@@ -3321,17 +4911,9 @@ def test_all_failed_installed_packs_leave_ai_disabled():
         hardware_provider=lambda: snapshot,
         benchmark_cache=cache,
     )
-    plan = ExecutionPlan(
-        policy_version=1,
-        mode=PolishMode.BALANCED,
-        task=PolishTask.PROOFREAD,
-        use_llm=True,
-        pack_id=pack_4b.pack_id,
-        model=pack_4b.model,
-        backend=RuntimeBackend.CUDA,
-    )
+    plan = probe_plan(pack_e2b)
 
-    accepted = value._accept_plan(plan, snapshot, pack_4b)
+    accepted = value._accept_plan(plan, snapshot, pack_e2b)
 
     assert not accepted.use_llm
     assert accepted.pack_id == ""
@@ -3344,18 +4926,19 @@ def test_failed_acceptance_gate_falls_back_to_next_installed_pack():
         model_pack(),
         pack_id="gemma4-12b-q4-k-m-v1",
         display_name="Gemma 4 12B Q4_K_M",
-        model="gemma4:12b",
+        model="gemma4:12b-it-q4_K_M",
         family="Gemma 4",
         parameters="12B",
         size_bytes=8 * GIB,
     )
     next_pack = replace(
         model_pack(),
-        pack_id="gemma4-8b-q4-k-m-v1",
-        display_name="Gemma 4 8B Q4_K_M",
-        model="gemma4:8b",
+        pack_id="gemma4-e4b-qat-v1",
+        display_name="Gemma 4 E4B QAT",
+        model="gemma4:e4b-it-qat",
         family="Gemma 4",
-        parameters="8B",
+        parameters="4.5B effective",
+        quantization="Q4_0",
         size_bytes=6 * GIB,
         min_vram_bytes=8 * GIB,
     )
@@ -3373,6 +4956,7 @@ def test_failed_acceptance_gate_falls_back_to_next_installed_pack():
                 correctness_passed=correctness_passed,
                 protected_passed=True,
                 backend=RuntimeBackend.CUDA,
+                model_identity=plan.model,
             )
 
     runtime = AdaptiveInferenceRuntime(fallback=FalsePositiveProbeRuntime())
@@ -3556,3 +5140,54 @@ def test_persuasive_adapter_restructures_verified_factual_ai_proofread():
     assert correction.rejected_llm
     assert correction.residual_errors == ()
     assert "safe Persuasive restructure" in correction.message
+
+
+def test_a_refused_correction_does_not_take_the_pack_out_of_service() -> None:
+    """One rejected paragraph was disabling the AI for every paragraph after it.
+
+    A failed pack is held out of service for five minutes so a genuinely broken
+    runtime is not retried on every section. That was applied to validation
+    failures too - cases where the model answered and the answer was refused
+    for this particular text. Measured on the essay corpus: paragraph 5 of
+    essay 1 dropped a protected token, the pack was blacklisted, and paragraphs
+    6 through 10 returned in a tenth of a second each with "full AI correction
+    did not run". Across twenty essays the local AI reached three paragraphs
+    out of two hundred, and nothing told the reader.
+
+    The record still has to outlive the request that made it, because the
+    cascade to a smaller pack reads it moments later, so it expires in seconds
+    rather than never being written.
+    """
+    from echo_link_core.polish import (
+        PolishEngine,
+        _FAILED_PACK_TTL_SECONDS,
+        _VALIDATION_FAILURE_TTL_SECONDS,
+    )
+    from echo_link_core.polish_types import RuntimeFailureKind
+
+    engine = PolishEngine()
+    clock = [1000.0]
+    engine._monotonic = lambda: clock[0]
+
+    engine._remember_failed_pack(
+        "gemma4-e2b-qat-v1",
+        "The result changed protected content.",
+        kind=RuntimeFailureKind.VALIDATION_FAILURE,
+    )
+    # Still recorded, so this request can cascade to a smaller pack.
+    assert "gemma4-e2b-qat-v1" in engine._failed_pack_ids()
+
+    # Gone well before the next paragraph is sent.
+    clock[0] += _VALIDATION_FAILURE_TTL_SECONDS + 1.0
+    assert engine._failed_pack_ids() == set()
+
+    # A real runtime fault still holds the pack out for the full window.
+    engine._remember_failed_pack(
+        "gemma4-e2b-qat-v1",
+        "CUDA device was lost.",
+        kind=RuntimeFailureKind.GPU_FAILURE,
+    )
+    clock[0] += _VALIDATION_FAILURE_TTL_SECONDS + 1.0
+    assert "gemma4-e2b-qat-v1" in engine._failed_pack_ids()
+    clock[0] += _FAILED_PACK_TTL_SECONDS
+    assert engine._failed_pack_ids() == set()
