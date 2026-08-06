@@ -259,6 +259,7 @@ def score_essay(
                 "changed": bool(report["changed"]),
                 "seconds": report["seconds"],
                 "failures": report["failures"],
+                "message": report["message"],
                 "source": paragraph,
                 "output": output,
                 "losses": list(losses),

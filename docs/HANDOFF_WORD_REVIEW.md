@@ -86,6 +86,28 @@ that as the real baseline.
 
 ## Still open, in priority order
 
+0. **A long-lived engine degrades permanently.** This is the top item and it is
+   reproducible. Run the scorer over the corpus: essays 1-3 use the model, then
+   essay 4 onward returns in 0.0 seconds on every paragraph with one identical
+   stale message, `validation failed: modal meaning changed; obligation
+   strength changed (added hard requirement, should)` - including paragraph 1,
+   which the engine never saw. Zero seconds means no model call was made.
+
+   A fresh `PolishEngine` corrects the same essay 4 paragraphs normally:
+
+   ```powershell
+   $env:PYTHONPATH = "src"
+   .\.venv\Scripts\python.exe -c "import sys; sys.path[:0]=['src','tools']; from echo_link_core.polish import PolishEngine; from echo_link_core.polish_types import CorrectionRequest, PolishMode, PolishTask; from animal_essay_corpus_probe import CORPUS, load_essays; paras=[p for p in str(load_essays(CORPUS)[3]['text']).split(chr(10)) if p.strip()]; eng=PolishEngine(); print([eng.analyze(CorrectionRequest(text=p, task=PolishTask.PROOFREAD, mode=PolishMode('balanced'), command='Proofread', download_consent=True, manual=True)).used_llm for p in paras[:2]])"
+   ```
+
+   `_failed_pack_ids()` is empty at the time of failure, so this is not the
+   blacklist fixed in `bc41bbd`. Something else on the engine caches a
+   downgraded plan across requests and never recovers. The app holds one
+   long-lived engine, so this is exactly the "corrections get worse the longer
+   I use it" symptom, and it will hide the result of any other quality work
+   until it is fixed. Start from `_RuntimeCascadeState`, `_notify_plan`, and
+   anything that memoises a plan on the engine rather than the request.
+
 1. **Protected tokens are dropped by the model** through initial, retry and
    final retry: `expected=('ECHOLINKTOKEN1X','ECHOLINKTOKEN0X')
    actual=('ECHOLINKTOKEN0X',)`. This is what triggers most validation
