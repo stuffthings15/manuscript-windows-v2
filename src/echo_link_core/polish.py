@@ -698,6 +698,20 @@ class PolishValidator:
         if grammar_mode is None:
             grammar_mode = task is PolishTask.PROOFREAD
         wording_reference = prepared if prepared is not None else source
+        # The lexical meaning counters below match exact words, so a
+        # misspelled one is invisible to them. Judged against the raw source,
+        # every typo the rules layer had already repaired looked like a word
+        # the model invented: "befor" is not an ordering word but "before" is,
+        # so fixing it read as "date or ordering relationship changed (added
+        # before)", and "thaey" -> "they" read as "actor changed (added they)".
+        # Across the twenty-essay corpus that was 197 of about 250 refusals -
+        # the model being turned down for doing exactly its job.
+        #
+        # `prepared` is the deterministic repair the model was handed, and it
+        # differs from the source only by spelling, so comparing against it is
+        # strictly more accurate rather than more permissive: a word the model
+        # genuinely adds is still absent from `prepared` and still fails.
+        meaning_reference = prepared if prepared is not None else source
         failures: list[str] = []
         advisories: list[str] = []
         if not candidate.strip():
@@ -721,7 +735,7 @@ class PolishValidator:
         # Normalize missing-apostrophe contractions first so that fixing
         # "cant" -> "can't" or "dont" -> "don't" is never read as a modal or
         # negation change. The counters below then compare like with like.
-        normalized_source = _normalize_contractions(source)
+        normalized_source = _normalize_contractions(meaning_reference)
         normalized_candidate = _normalize_contractions(candidate)
         if not _negation_preserved(normalized_source, normalized_candidate):
             failures.append(
@@ -755,19 +769,19 @@ class PolishValidator:
                 source_obligation, candidate_obligation
             )
             failures.append(label)
-        if _modal_subject_counter(source) != _modal_subject_counter(candidate):
+        if _modal_subject_counter(meaning_reference) != _modal_subject_counter(candidate):
             failures.append("modal actor changed")
         if not _ordering_preserved(
-            source,
+            meaning_reference,
             candidate,
             grammar_mode=grammar_mode,
         ):
             relative_diff = _counter_diff_label(
-                _relative_time_counter(source),
+                _relative_time_counter(meaning_reference),
                 _relative_time_counter(candidate),
             )
             ordering_diff = _counter_diff_label(
-                _ordering_counter(source), _ordering_counter(candidate)
+                _ordering_counter(meaning_reference), _ordering_counter(candidate)
             )
             label = "date or ordering relationship changed" + (
                 relative_diff or ordering_diff
@@ -782,13 +796,13 @@ class PolishValidator:
         # reader asked for. What still refuses a candidate is a genuine swap -
         # one third-person actor replaced by a different one - checked below.
         if not _actors_preserved(
-            source,
+            meaning_reference,
             candidate,
             allow_redundant_pronoun=task
             in {PolishTask.TONE, PolishTask.REWRITE, PolishTask.PROOFREAD},
-        ) and not _added_actors_are_safe_subjects(source, candidate):
+        ) and not _added_actors_are_safe_subjects(meaning_reference, candidate):
             label = "actor changed" + _counter_diff_label(
-                _actor_counter(_normalize_actor_homophones(source)),
+                _actor_counter(_normalize_actor_homophones(meaning_reference)),
                 _actor_counter(_normalize_actor_homophones(candidate)),
             )
             failures.append(label)

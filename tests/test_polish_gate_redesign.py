@@ -223,3 +223,64 @@ def test_failed_record_with_invalid_timestamp_expires():
     cache = PolishBenchmarkCache(_DictStore())
     cache.put("key", _record(accepted=False, measured_at="not-a-date"))
     assert cache.get("key") is None
+
+
+def test_repairing_a_typo_is_not_read_as_changing_the_meaning() -> None:
+    """The meaning guards were reading the source before the rules fixed it.
+
+    They count exact words, so a misspelled one is invisible to them. "befor"
+    is not an ordering word but "before" is, and "thaey" is not an actor but
+    "they" is - so the deterministic layer repairing those spellings, before
+    the model ever saw the text, registered as the model inventing an ordering
+    relationship and an actor. Across the twenty-essay corpus that accounted
+    for 197 of about 250 refusals: the corrector turned down for doing its job.
+
+    `prepared` is what the model was actually handed. It differs from the
+    source by spelling only, so judging against it is more accurate rather than
+    more permissive - a word the model genuinely adds is still absent from
+    `prepared` and still fails, as the second half of this test shows.
+    """
+    from echo_link_core.polish import MiniLMPolishClassifier, PolishValidator
+    from echo_link_core.polish_types import PolishTask
+
+    validator = PolishValidator(MiniLMPolishClassifier())
+    source = (
+        "wen somebody says a certain animul cant be a pett thaey usualy is "
+        "speaking befor anyways THEY lernt much bout it."
+    )
+    prepared = (
+        "When somebody says a certain animal cant be a pet thaey usually is "
+        "speaking before anyways THEY learnt much about it."
+    )
+    candidate = (
+        "When somebody says a certain animal cannot be a pet, they usually are "
+        "speaking before they learnt much about it."
+    )
+
+    result = validator.validate(
+        source,
+        candidate,
+        task=PolishTask.PROOFREAD,
+        grammar_mode=True,
+        prepared=prepared,
+    )
+    joined = " ".join(result.failures)
+    assert "ordering relationship changed" not in joined, joined
+    assert "actor changed" not in joined, joined
+
+    # An ordering word the model really does invent is still refused, because
+    # it is absent from the prepared text too.
+    invented = (
+        "When somebody says a certain animal cannot be a pet, they usually are "
+        "speaking before they learnt much about it, and after that they agree."
+    )
+    invented_result = validator.validate(
+        source,
+        invented,
+        task=PolishTask.PROOFREAD,
+        grammar_mode=True,
+        prepared=prepared,
+    )
+    assert any(
+        "ordering relationship changed" in value for value in invented_result.failures
+    ), invented_result.failures
