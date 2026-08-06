@@ -84,20 +84,26 @@ RAM, which is correct, but it means a run competing with a test suite or a
 second probe measures the machine rather than the product. Several runs here
 were wasted that way; the giveaway is essays completing in under a second.
 
-Current figures, `build/correction-quality-clean.md`, twenty essays, E2B:
+Current figures, twenty essays, E2B, `build/correction-quality-final.md`:
 
-| | before the fixes | now |
+| | baseline | after all fixes |
 |---|---|---|
-| paragraphs that reached the model | 3 of 200 | **47 of 200** |
+| paragraphs the model corrected | 3 of 200 | **91 of 200** |
+| grammar error score after | 185 | **122** |
 | wrong speller substitutions | 70 | **8**, all scorer false positives |
 | protected tokens dropped | 0 | 0 |
 | essays where the error score rose | 0 | 0 |
 
-The remaining 153 paragraphs are refused on their merits by the validation
-guards, which is a quality question and no longer a shutoff. The "meaning
-changes" column is not yet trustworthy - `describe_losses` names the nearest
-new word, so on rules-only output it reports noise like `one -> pet`. Narrow it
-before quoting it.
+The error score before correction is 555, so the corrector now removes about
+78 percent of the measurable grammar errors, against 67 percent at baseline -
+while making the model reach thirty times as many paragraphs.
+
+The "swaps" column, 99, is still not trustworthy enough to quote. It counts
+content words missing from the final text, so on a paragraph the model did not
+correct it reports losses made by the deterministic rules, and
+`describe_losses` names the nearest new word, which produces noise like
+`one -> pet`. The guard it shares code with is tested directly and in both
+directions; the corpus-wide number is not yet a clean measure of it.
 
 ## Still open, in priority order
 
