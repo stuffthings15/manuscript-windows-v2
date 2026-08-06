@@ -237,3 +237,35 @@ total=11)`, so it captured the whole essay and offered every section.
    location is read-only, and the app reports "No selected text was found"
    rather than saying the document needs Enable Editing. A writer opening an
    emailed or downloaded draft hits this immediately.
+
+## "esay" -> "is easy": why the obvious guard is the wrong fix
+
+Paragraph 2 of essay 1 came back as `practice is easy 1?` where the writer
+wrote `practice esay 1??`. The word meant is `essay`.
+
+The meaning guard let it through because `unexplained_losses` asks whether
+any word the candidate introduced explains a word that vanished, and
+`_explains("esay", "easy")` is true - they are one edit apart. From a bag of
+words it looks exactly like a respelling.
+
+The tempting fix is to refuse a substitution whenever the bundled dictionary
+declined to repair the source word, on the grounds that the model is then
+guessing. **Do not do this.** The dictionary declines exactly two kinds of
+word in this corpus:
+
+| source | dictionary | model | verdict |
+|---|---|---|---|
+| `esay` | declines | `is easy` | wrong |
+| `oner` | declines | `owner` | right |
+
+`oner` -> `owner` is one of the better corrections in the whole essay, and it
+is right because the model read the sentence. Refusing model substitutions on
+declined words would throw that away, and it would undo the deliberate
+decision recorded above: the speller stops guessing so that the model, which
+has the context, can decide.
+
+So this is a model-quality miss, not a guard defect, and it costs more to
+guard than it costs to leave. Worth revisiting only with a rule that
+distinguishes a respelling from a restructure - `esay` became *two* words,
+`is easy`, which is not a spelling repair at all. A bag-of-words comparison
+cannot see that; a positional diff could.

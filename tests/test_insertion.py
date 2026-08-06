@@ -1285,3 +1285,26 @@ def test_foreground_detaches_even_when_the_call_raises():
 
     detached = [call for call in user32.attach_calls if not call[2]]
     assert {call[1] for call in detached} == {11, 22}
+
+
+def test_protected_view_is_named_instead_of_asking_for_a_selection():
+    """A read-only document needs Enable Editing, not "highlight text".
+
+    A draft opened from a download, an email attachment or a network share
+    opens in Word's Protected View, where nothing can be selected at all.
+    Telling the writer to highlight text is advice they have already
+    followed, and it sends them round the same loop.
+    """
+    from echo_link_core.insertion import _no_selection_message, WindowSnapshot
+
+    protected = WindowSnapshot(
+        1, 2, "01_Dogs_in_Bakersfield_USA  -  Protected View  -  Word"
+    )
+    message = _no_selection_message(protected)
+    assert "Protected View" in message
+    assert "Enable Editing" in message
+
+    ordinary = WindowSnapshot(1, 2, "01_Dogs_in_Bakersfield_USA - Word")
+    assert _no_selection_message(ordinary) == (
+        "No selected text was found. Highlight text and try again."
+    )

@@ -197,6 +197,24 @@ def last_input_tick() -> int:
     return 0
 
 
+def _no_selection_message(window: WindowSnapshot) -> str:
+    """Why nothing could be captured, in the words that let a writer act.
+
+    A document opened from a download, an email attachment or a network
+    share opens in Word's Protected View. Nothing in it can be selected or
+    changed, so the honest answer is not "highlight some text" - the writer
+    already did - it is that the document is still read only.
+    """
+    title = str(window.title or "")
+    if "protected view" in title.casefold():
+        return (
+            "This document is open in Protected View, so it cannot be "
+            "selected or changed yet. Click Enable Editing in Word, then "
+            "try again."
+        )
+    return "No selected text was found. Highlight text and try again."
+
+
 def _is_word_document(window: WindowSnapshot) -> bool:
     return bool(
         window.class_name.casefold() == "opusapp"
@@ -724,7 +742,7 @@ class WindowsTextInserter:
                 "clipboard content alone. Highlight the text and try again."
             )
         if selected == marker or not str(selected).strip():
-            raise RuntimeError("No selected text was found. Highlight text and try again.")
+            raise RuntimeError(_no_selection_message(window))
         return SelectionRecord(str(selected), window, "selection")
 
     def replace_selection(self, record: SelectionRecord, new_text: str) -> InsertionRecord | None:
