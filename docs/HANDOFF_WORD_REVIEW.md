@@ -38,7 +38,8 @@ minute spent on guards is a minute in the wrong file.
 | what the HUD captured over UI Automation | 5203 |
 
 Thirteen characters between the UIA text the suggestions are computed on and the
-COM text everything else uses. The document has ten `` and no `
+COM text everything else uses. The document has ten `
+` and no `
 `, which is
 also why the review logs `paragraphs=1` for a ten-paragraph essay. Check whether
 a grouped section's span is being sliced against a different string from the one
@@ -47,6 +48,68 @@ it was measured on.
 **Next step:** log `suggestion.original` length and span for each grouped section
 in `_analyze_suggestions`, run one Word review, and find the section whose span
 is non-empty but whose slice is not.
+
+## Plan for the errors that survive correction (2026-08-07)
+
+Essays 1 and 2 now run end to end in Word: 10 sections, 10 accepted, 0 skipped,
+about a minute each, and the **grammar error score goes 27 -> 0 and 32 -> 0**.
+What is left is a short, specific list. In priority order, with the evidence.
+
+### 1. The bundled dictionary has no inflected forms. Fix this first.
+
+`en_US.dic` holds 49,568 entries and ships beside an `en_US.aff` with **73
+affix rules**, and the loader reads only the word list, stripping the `/flags`
+that point at those rules. So the dictionary knows `cat` but not `cats`,
+`change` but not `changes`, `answer` but not `answering`, and does not know
+`after` at all - 48,262 base forms and nothing else.
+
+    .venv/Scripts/python.exe -c "import sys; sys.path.insert(0,'src'); from echo_link_core.polish_spelling import EnglishDictionary; d=EnglishDictionary(); d.warm(); print([(w, d.contains(w)) for w in ('cat','cats','change','changes','after')])"
+
+Everything downstream inherits it. The speller cannot tell a correct word from
+a misspelled one across most of ordinary English, which is the same machinery
+that produced `esay` -> `ebay` and `cair` -> `chair`. It also makes the
+"typos left" column in `correction_quality_scorer.py` meaningless - the ~2200
+it reports across the corpus is mostly plurals, and that is why the number
+never moved no matter what was fixed.
+
+Expand the affix rules at load. Seventy-three rules is a contained job, and it
+is the single largest lever left. Re-run the scorer afterwards; treat every
+"typos left" figure recorded before it as void.
+
+### 2. `cair` is still not repaired
+
+Both essays end with "Cair routines". The speller now declines to guess between
+`care` and `chair` rather than picking the commoner word, which is the right
+trade, but the model does not fix it either, so a wrong word became an
+uncorrected one. Revisit once (1) lands, because a dictionary that knows real
+words changes what the ambiguity gate sees.
+
+### 3. A lowercase place name can be turned into a common noun
+
+`why cats is good pets in bath` came back `Why cats are good pets in **a**
+bath`. The essay is about Bath, England, and says so with a capital B in a
+later paragraph. Nothing flags it: `_named_entities` finds no entity in either
+side, and the validator returns no failures.
+
+    entities in source : []   entities in candidate : []   failures: ()
+
+The guard cannot see it because a section is validated on its own while the
+evidence is elsewhere in the document. The capture is now `scope="document"`,
+so the whole text *is* available - the work is plumbing it to the validator as
+context, then refusing an article inserted before a token that appears
+capitalised elsewhere. **Do not fix this with a word list**; that is the
+fixture-overfitting this file already warns about.
+
+### 4. Sentence-initial words the model leaves alone
+
+Essay 1 still opens a sentence with `Wen somebody says`. Low severity, and
+likely to move on its own once (1) lands.
+
+### How to measure any of it
+
+`tools/model_coverage_probe.py` for how many paragraphs the model reached, and
+the grammar error score, which is trustworthy. Not "typos left", until (1) is
+done.
 
 ## The state in one paragraph
 
