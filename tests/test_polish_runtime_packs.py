@@ -88,6 +88,7 @@ def test_runtime_download_requires_explicit_consent(tmp_path):
     with pytest.raises(RuntimePackConsentRequired) as error:
         value.ensure(RuntimeBackend.CPU, consent=False)
     assert error.value.pack.download_size_bytes > 0
+    assert error.value.pack.display_name not in str(error.value)
 
 
 def test_zip_traversal_and_links_are_rejected(tmp_path):
@@ -188,6 +189,8 @@ def test_native_host_source_enforces_pipe_auth_and_private_llama_server():
     assert "MANUSCRIPT_POLISH_PIPE_SECRET" in source
     assert 'start.Environment["LLAMA_API_KEY"]' in source
     assert '"--api-key"' not in source
+    assert '["model"] = configuration.ModelName' in source
+    assert '["full_gpu_resident"] = state.FullGpuResident' in source
     assert '"--no-ui"' in source
     assert '"--sleep-idle-seconds"' in source
     assert "full GPU residency" in source

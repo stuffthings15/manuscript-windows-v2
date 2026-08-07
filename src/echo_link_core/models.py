@@ -57,7 +57,8 @@ class DictationSettings:
     whisper_mode: bool = False
     append_trailing_space: bool = True
     local_refinement_enabled: bool = True
-    ollama_model: str = "gemma4:12b"
+    # Empty means the hardware policy must choose an accepted local AI pack.
+    ollama_model: str = ""
     polish_mode: PolishMode = PolishMode.AUTO
     polish_model_pack_id: str = ""
     polish_policy_version: int = 1
@@ -117,7 +118,7 @@ class DictationSettings:
             "qwen3:8b",
             "qwen3:14b",
         }:
-            values["ollama_model"] = "gemma4:12b"
+            values["ollama_model"] = ""
         if str(values.get("polish_model_pack_id") or "").casefold() in {
             "qwen3-1.7b-q4-k-m-v1",
             "qwen3-4b-q4-k-m-v1",
@@ -126,7 +127,7 @@ class DictationSettings:
             "qwen3-14b-q5-v1",
             "qwen3-14b-q6-v1",
         }:
-            values["polish_model_pack_id"] = "gemma4-12b-q4-k-m-v1"
+            values["polish_model_pack_id"] = ""
         if str(values.get("start_sound") or "").casefold() == "built-in activation tone":
             values["start_sound"] = "Speech On.wav"
         try:
@@ -172,3 +173,7 @@ class SessionEvent:
     insertion_uncertain: bool = False
     possibly_inserted_utf16_units: int = 0
     total_insertion_utf16_units: int = 0
+    capture_id: int = 0
+    job_sequence: int = 0
+    capture_started: bool = False
+    capture_stopped: bool = False

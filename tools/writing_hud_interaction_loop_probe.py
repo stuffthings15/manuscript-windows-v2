@@ -154,7 +154,7 @@ def _run_cycle(index: int, *, ai_timeout: float) -> dict[str, object]:
             time.sleep(0.05)
         result["ai_wait_seconds"] = round(time.monotonic() - ai_started, 3)
         if not result["ai_ready"]:
-            result["error"] = "Qwen correction did not become ready"
+            result["error"] = "AI correction did not become ready"
             return result
         if not _click(accept):
             result["error"] = "Replace Text click failed"

@@ -63,7 +63,7 @@ def format_punctuation_analysis(analysis: dict[str, Any]) -> str:
     for issue in analysis.get("issues") or ():
         status = "kept" if issue.get("kept_in_final") else "removed"
         lines.append(
-            f"• After “{issue.get('after', '')}” — {issue.get('origin', 'unknown')} "
+            f"• After “{issue.get('after', '')}”: {issue.get('origin', 'unknown')} "
             f"({status}); context: {issue.get('context', '')}"
         )
     return "\n".join(lines)

@@ -168,7 +168,7 @@ def test_empty_and_oversized_inputs_fail_before_transport(monkeypatch):
             model="local",
             instruction="x" * (MAX_INSTRUCTION_CHARS + 1),
         )
-    with pytest.raises(ValueError, match="valid local writing model"):
+    with pytest.raises(ValueError, match="valid local writing AI"):
         assistant.generate(DraftTemplate.EMAIL, facts="Project fact.", model="bad model")
     assert calls == []
 

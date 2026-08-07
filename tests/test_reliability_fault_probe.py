@@ -56,6 +56,23 @@ def test_process_crash_matrix_relaunches_without_audio_or_automatic_retry(tmp_pa
     assert stages["post_insert_refinement"]["recovery_count"] == 0
 
 
+def test_crash_probe_never_opens_child_dpapi_key_in_pytest_process(
+    tmp_path,
+    monkeypatch,
+):
+    class ParentStoreMustNotOpen:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("The pytest process must not open a child DPAPI key.")
+
+    monkeypatch.setattr(CRASH_PROBE, "EchoLinkStore", ParentStoreMustNotOpen)
+
+    result = CRASH_PROBE._run_stage("recording", tmp_path / "recording")
+
+    assert result["passed"], result
+    assert result["first_relaunch_exit"] == 0
+    assert result["second_relaunch_exit"] == 0
+
+
 class StartFailingStream:
     instances = []
 

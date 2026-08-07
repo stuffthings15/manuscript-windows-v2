@@ -23,7 +23,7 @@ residency, or acceptance probe falls back without bypassing output validation.
 3. Run existing Manuscript rules, bundled Hunspell English, and SymSpell.
 4. Run the bundled INT8 MiniLM ONNX encoder on the CPU with deterministic
    routing heads.
-5. Select rules-only or one signed Qwen3 pack from measured hardware.
+5. Select rules-only or one signed Gemma 4 pack from measured hardware.
 6. Verify and probe one signed CPU, CUDA, Vulkan, HIP, or SYCL llama.cpp pack.
 7. Run a fixed correctness, latency, protected-token, and full-GPU acceptance
    probe before first use on a hardware/runtime/model combination.
@@ -42,21 +42,23 @@ and the installed Ollama version. It reserves 1.5 to 4 GB of VRAM by tier and
 caps model RAM at the lower of half of total RAM or 70 percent of available
 RAM.
 
-The model and runtime catalogs are signed allowlists. Candidate model tiers are Qwen3 1.7B Q4,
-4B Q4, 8B Q4, and 14B Q4. The largest resource-safe candidate still has to
-pass its local probe. Failed candidates fall back to an already installed
-smaller validated pack or to rules and MiniLM. Low RAM, VRAM pressure, an
-unhealthy driver, or a low battery causes a visible downgrade; recovery
-restores the largest safe tier.
+The model and runtime catalogs are signed allowlists. Candidate model tiers are
+Gemma 4 E2B QAT, E4B QAT, and 12B Q4_K_M. Instant uses E2B when AI is required.
+Auto and Balanced prefer E4B for interactive speed. Professional may use 12B
+when RAM, VRAM, correctness, protected-fact, latency, and full-GPU gates pass.
+Failed candidates fall back to a smaller accepted Gemma pack or stop AI rather
+than running an unaccepted model. Low RAM, VRAM pressure, an unhealthy driver,
+or a low battery causes a visible downgrade.
 
-The current 64 GB RAM and RTX 4090 Laptop profile selects the pinned Qwen3 14B
-Q4_K_M pack when enough VRAM remains available. The installed b10103 CUDA 13.3
-pack reported the actual CUDA device, loaded all 41 of 41 layers on GPU, and
-reported 9.31 GB of active GPU buffers. CPU/GPU layer spill is rejected.
+The current 64 GB RAM and RTX 4090 Laptop profile is eligible for E4B in Auto
+and Balanced and 12B in Professional. Actual selection still depends on the
+measured local acceptance probe. CPU/GPU layer spill is rejected for GPU
+profiles.
 
 ## Consent and model integrity
 
-The settings page shows the hardware-selected model and runtime download size.
+The settings page shows the hardware-selected local AI and runtime download size
+without exposing model identifiers.
 Download consent is off by default. Model and runtime entries contain pinned
 sources, byte sizes, and SHA-256 digests. Both bundled catalogs use the same
 RSA-3072 trust root and pinned public-key fingerprint. HTTPS packages use
@@ -78,9 +80,10 @@ source or generated text.
 ## Runtime control and UI
 
 The llama.cpp server uses five-minute idle sleep and reloads only on demand.
-The Ollama rollback retains its five-minute unload. The HUD reports the
-selected model, measured backend, measured VRAM when available, loading state,
-and a measured ETA when a comparable local sample exists. Instant, Balanced,
+The Ollama rollback retains its five-minute unload. The HUD refers to the model
+only as local AI. It reports the measured backend, measured VRAM when
+available, loading state, and a measured ETA when a comparable local sample
+exists. Model identifiers remain internal diagnostics. Instant, Balanced,
 Professional, and Auto use the policy budgets defined in `polish_hardware.py`;
 all generation requests have a 30-second absolute ceiling.
 
@@ -138,7 +141,7 @@ Chrome, and Edge acceptance passes.
 ## Remaining release gates
 
 The Phase 2 source, self-contained host build, signed package delivery, secure
-pipe, CUDA device probe, full-residency check, and local Qwen3 acceptance test
+pipe, CUDA device probe, full-residency check, and local Gemma 4 acceptance test
 exist. The standalone host is still unsigned. Windows Code Integrity correctly
 blocked the freshly rebuilt development EXE. Local development proof therefore
 used the same managed host DLL through the trusted installed .NET launcher.

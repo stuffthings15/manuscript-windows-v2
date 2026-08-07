@@ -10,6 +10,10 @@ from typing import Callable
 import numpy as np
 
 from .audio import MicrophoneRecorder
+from .accepted_inference import (
+    AcceptedInferenceCoordinator,
+    AcceptedInferenceLease,
+)
 from .correction import CorrectionPipeline
 from .insertion import (
     InsertionRecord,
@@ -28,6 +32,7 @@ from .transcription import LocalWhisperTranscriber
 
 
 logger = logging.getLogger(__name__)
+_LEASE_UNSET = object()
 
 _INSERTION_UNCERTAIN_MESSAGE = (
     "Manuscript stopped while insertion was in progress. Text may already be in the target. "
@@ -95,7 +100,17 @@ class DictationEngine:
         level_callback: Callable[[float], None] | None = None,
     ):
         self.store = store
-        self.settings = store.get_settings()
+        loaded_settings = DictationSettings.from_dict(store.get_settings().to_dict())
+        # Persisted model names are preferences from an earlier run. Each app
+        # start must re-accept a model for the current hardware and runtime.
+        self._accepted_ai_model = ""
+        self._accepted_ai_pack_id = ""
+        self._accepted_ai_policy_version = 0
+        self._accepted_ai_plan = None
+        self._ai_coordinator: AcceptedInferenceCoordinator | None = None
+        loaded_settings.ollama_model = ""
+        loaded_settings.polish_model_pack_id = ""
+        self.settings = loaded_settings
         self.recorder = recorder or MicrophoneRecorder()
         self.transcriber = transcriber or LocalWhisperTranscriber(self.settings)
         self.correction = correction or CorrectionPipeline(
@@ -104,6 +119,10 @@ class DictationEngine:
             snippet_provider=store.snippet_map,
             learned_correction_provider=store.learned_correction_map,
         )
+        self.correction.update_settings(self.settings)
+        clear_accepted = getattr(self.correction, "clear_accepted_model", None)
+        if callable(clear_accepted):
+            clear_accepted()
         self.inserter = inserter or WindowsTextInserter(self.settings.insertion_mode)
         self.event_callback = event_callback
         self.level_callback = level_callback
@@ -127,8 +146,9 @@ class DictationEngine:
         self._silence_stop = threading.Event()
         self._silence_thread: threading.Thread | None = None
         self._transcription_lock = threading.Lock()
-        self._correction_lock = threading.Lock()
+        self._correction_lock = threading.RLock()
         self._correction_warm_thread: threading.Thread | None = None
+        self._ai_plan_validator: Callable[[str, str, int, bool], bool] | None = None
         self._insertion_in_progress = False
         self._worker = _ProcessingWorkerView(self)
 
@@ -221,14 +241,218 @@ class DictationEngine:
             return bool(capture is not None and capture.hands_free)
 
     def update_settings(self, settings: DictationSettings) -> None:
-        self.store.save_settings(settings)
-        self.settings = settings
-        self.transcriber.update_settings(settings)
+        safe_settings = DictationSettings.from_dict(settings.to_dict())
         with self._correction_lock:
-            self.correction.update_settings(settings)
+            with self._lock:
+                safe_settings.ollama_model = self._accepted_ai_model
+                if self._accepted_ai_model:
+                    safe_settings.polish_model_pack_id = self._accepted_ai_pack_id
+                    safe_settings.polish_policy_version = (
+                        self._accepted_ai_policy_version
+                    )
+                else:
+                    safe_settings.polish_model_pack_id = ""
+            self.store.save_settings(safe_settings)
+            self.transcriber.update_settings(safe_settings)
+            self.correction.update_settings(safe_settings)
+            with self._lock:
+                self.settings = safe_settings
         if hasattr(self.inserter, "set_mode"):
-            self.inserter.set_mode(settings.insertion_mode)
+            self.inserter.set_mode(safe_settings.insertion_mode)
         self.arm_microphone()
+
+    def accept_ai_plan(
+        self,
+        *,
+        pack_id: str,
+        model: str,
+        policy_version: int,
+    ) -> None:
+        accepted_pack = str(pack_id or "").strip()
+        accepted_model = str(model or "").strip()
+        if bool(accepted_pack) != bool(accepted_model):
+            raise ValueError("An accepted AI plan requires both pack and model identifiers.")
+        coordinator = self._ai_coordinator
+        if coordinator is not None:
+            if not accepted_model:
+                coordinator.clear()
+                self.sync_ai_plan_from_coordinator(None)
+                return
+            lease = coordinator.lease()
+            if lease is None or not coordinator.is_current(
+                accepted_pack,
+                accepted_model,
+                policy_version,
+            ):
+                raise ValueError(
+                    "A full accepted execution plan is required before sharing its model."
+                )
+            self.sync_ai_plan_from_coordinator(lease)
+            return
+        if accepted_model and isinstance(self.correction, CorrectionPipeline):
+            raise ValueError(
+                "Dictation AI requires a verified plan from the shared coordinator."
+            )
+        self._apply_accepted_ai_plan(
+            accepted_pack,
+            accepted_model,
+            policy_version,
+            plan=None,
+        )
+
+    def _apply_accepted_ai_plan(
+        self,
+        accepted_pack: str,
+        accepted_model: str,
+        policy_version: int,
+        *,
+        plan,
+    ) -> None:
+        with self._correction_lock:
+            with self._lock:
+                accepted_settings = DictationSettings.from_dict(
+                    self.settings.to_dict()
+                )
+            accepted_settings.polish_model_pack_id = accepted_pack
+            accepted_settings.ollama_model = accepted_model
+            accepted_settings.polish_policy_version = max(1, int(policy_version))
+            self.store.save_settings(accepted_settings)
+            self.correction.update_settings(accepted_settings)
+            if accepted_model:
+                accept_model = getattr(self.correction, "accept_model", None)
+                if callable(accept_model):
+                    accept_model(accepted_model)
+            else:
+                clear_model = getattr(self.correction, "clear_accepted_model", None)
+                if callable(clear_model):
+                    clear_model()
+            with self._lock:
+                self._accepted_ai_model = accepted_model
+                self._accepted_ai_pack_id = accepted_pack
+                self._accepted_ai_policy_version = (
+                    accepted_settings.polish_policy_version
+                    if accepted_model
+                    else 0
+                )
+                self._accepted_ai_plan = plan if accepted_model else None
+                self.settings = accepted_settings
+
+    def set_ai_coordinator(
+        self,
+        coordinator: AcceptedInferenceCoordinator,
+    ) -> None:
+        if not isinstance(coordinator, AcceptedInferenceCoordinator):
+            raise TypeError("An accepted inference coordinator is required.")
+        with self._correction_lock:
+            self._ai_coordinator = coordinator
+            set_refiner = getattr(self.correction, "set_refiner", None)
+            if not callable(set_refiner):
+                raise TypeError("The correction pipeline cannot use shared local AI.")
+            set_refiner(coordinator)
+        coordinator.add_listener(self.sync_ai_plan_from_coordinator)
+        self.sync_ai_plan_from_coordinator(coordinator.lease())
+
+    def sync_ai_plan_from_coordinator(
+        self,
+        lease: AcceptedInferenceLease | None | object = _LEASE_UNSET,
+    ) -> None:
+        coordinator = self._ai_coordinator
+        if lease is _LEASE_UNSET:
+            lease = coordinator.lease() if coordinator is not None else None
+        if isinstance(lease, AcceptedInferenceLease):
+            plan = lease.plan
+            self._apply_accepted_ai_plan(
+                plan.pack_id,
+                plan.model,
+                plan.policy_version,
+                plan=plan,
+            )
+        else:
+            self._apply_accepted_ai_plan("", "", 1, plan=None)
+
+    def set_ai_plan_validator(
+        self,
+        validator: Callable[[str, str, int, bool], bool] | None,
+    ) -> None:
+        with self._lock:
+            self._ai_plan_validator = validator
+
+    def _validate_accepted_ai_plan(self, *, require_loaded: bool = False) -> bool:
+        with self._correction_lock:
+            with self._lock:
+                model = self._accepted_ai_model
+                pack_id = self._accepted_ai_pack_id
+                policy_version = self._accepted_ai_policy_version
+                validator = self._ai_plan_validator
+                coordinator = self._ai_coordinator
+            if not model or not pack_id:
+                return False
+            if coordinator is None and isinstance(
+                self.correction,
+                CorrectionPipeline,
+            ):
+                self._apply_accepted_ai_plan("", "", 1, plan=None)
+                return False
+            if coordinator is not None and not coordinator.is_current(
+                pack_id,
+                model,
+                policy_version,
+                require_loaded=require_loaded,
+            ):
+                self.accept_ai_plan(
+                    pack_id="",
+                    model="",
+                    policy_version=max(1, policy_version),
+                )
+                return False
+            if validator is None:
+                return True
+            try:
+                valid = bool(
+                    validator(pack_id, model, policy_version, require_loaded)
+                )
+            except Exception:
+                logger.warning("Accepted AI plan revalidation failed", exc_info=True)
+                valid = False
+            if valid:
+                return True
+            self.accept_ai_plan(
+                pack_id="",
+                model="",
+                policy_version=max(1, policy_version),
+            )
+            return False
+
+    def prepare_ai_for_execution(
+        self,
+        *,
+        settings: DictationSettings | None = None,
+        timeout: float | None = None,
+    ) -> bool:
+        if not self._validate_accepted_ai_plan():
+            return False
+        active_settings = settings or self.settings
+        preload = getattr(self.correction, "preload", None)
+        if not callable(preload):
+            return False
+        try:
+            with self._correction_lock:
+                self.correction.update_settings(active_settings)
+                preload(
+                    timeout=max(
+                        30.0,
+                        float(timeout or active_settings.correction_timeout_seconds),
+                    )
+                )
+        except Exception:
+            logger.warning("Accepted AI model preload failed", exc_info=True)
+            self.accept_ai_plan(
+                pack_id="",
+                model="",
+                policy_version=max(1, self.settings.polish_policy_version),
+            )
+            return False
+        return self._validate_accepted_ai_plan(require_loaded=True)
 
     def arm_microphone(self) -> bool:
         if not hasattr(self.recorder, "arm"):
@@ -298,7 +522,12 @@ class DictationEngine:
                 timer.start()
             self._start_silence_watchdog_locked(session_id)
         message = "Hands-free listening... Press Esc to cancel." if hands_free else "Listening..."
-        self._emit(SessionState.LISTENING, message)
+        self._emit(
+            SessionState.LISTENING,
+            message,
+            capture_id=session_id,
+            capture_started=True,
+        )
         self._start_correction_preload(settings_snapshot)
         self._start_streaming_preview(session_id)
         return True
@@ -328,11 +557,8 @@ class DictationEngine:
     def _run_correction_preload(self, settings: DictationSettings) -> None:
         started = time.monotonic()
         try:
-            with self._correction_lock:
-                self.correction.update_settings(settings)
-                self.correction.preload(
-                    timeout=max(30.0, float(settings.correction_timeout_seconds))
-                )
+            if not self.prepare_ai_for_execution(settings=settings):
+                return
             logger.info(
                 "Dictation AI preload completed in %.3f seconds",
                 time.monotonic() - started,
@@ -364,7 +590,12 @@ class DictationEngine:
                     except Exception:
                         logger.warning("Could not mark local recovery text as failed", exc_info=True)
                 self._emit_level(0.0)
-                self._emit(SessionState.ERROR, message)
+                self._emit(
+                    SessionState.ERROR,
+                    message,
+                    capture_id=capture.session_id,
+                    capture_stopped=True,
+                )
                 return False
             self._job_sequence += 1
             job = _DictationJob(
@@ -383,6 +614,9 @@ class DictationEngine:
                 job.sequence,
                 current_is_queued=True,
             ),
+            capture_id=capture.session_id,
+            job_sequence=job.sequence,
+            capture_stopped=True,
         )
         with self._queue_condition:
             self._ensure_processing_thread_locked()
@@ -412,7 +646,12 @@ class DictationEngine:
                     except Exception:
                         logger.warning("Canceled recovery checkpoint cleanup failed", exc_info=True)
                 self._emit_level(0.0)
-                self._emit(SessionState.ERROR, f"Microphone cancel failed: {exc}")
+                self._emit(
+                    SessionState.ERROR,
+                    f"Microphone cancel failed: {exc}",
+                    capture_id=capture.session_id,
+                    capture_stopped=True,
+                )
                 return False
             self._active_capture = None
             self._last_state = SessionState.READY
@@ -421,7 +660,12 @@ class DictationEngine:
         except Exception:
             logger.debug("Canceled recovery checkpoint cleanup failed", exc_info=True)
         self._emit_level(0.0)
-        self._emit(SessionState.READY, "Hands-free recording canceled.")
+        self._emit(
+            SessionState.READY,
+            "Hands-free recording canceled.",
+            capture_id=capture.session_id,
+            capture_stopped=True,
+        )
         return True
 
     def _stop_at_recording_limit(self) -> None:
@@ -650,6 +894,9 @@ class DictationEngine:
             if not deterministic.text.strip():
                 raise RuntimeError("No usable text was produced.")
             warning = deterministic.warning
+            ai_ready = True
+            if settings.mode not in (DictationMode.FAST, DictationMode.DEVELOPER):
+                ai_ready = self.prepare_ai_for_execution(settings=settings)
             if settings.keep_recovery_text:
                 try:
                     self.store.checkpoint_recovery(
@@ -673,6 +920,8 @@ class DictationEngine:
                     final_text=deterministic.text,
                 )
                 try:
+                    if not ai_ready:
+                        raise RuntimeError("Accepted local AI is not ready.")
                     with self._correction_lock:
                         self.correction.update_settings(settings)
                         result = self.correction.correct(raw_text, DictationMode.ACCURACY)
@@ -721,6 +970,8 @@ class DictationEngine:
             )
             final_text = deterministic.text
             try:
+                if not ai_ready:
+                    raise RuntimeError("Accepted local AI is not ready.")
                 with self._correction_lock:
                     self.correction.update_settings(settings)
                     refined = self.correction.correct(raw_text, DictationMode.REFINE)
@@ -1119,6 +1370,13 @@ class DictationEngine:
     def _emit(self, state: SessionState, message: str, **values) -> None:
         if not self.event_callback:
             return
+        with self._lock:
+            capture = self._active_capture
+            job = self._active_job
+        if capture is not None and not values.get("capture_id"):
+            values["capture_id"] = capture.session_id
+        if job is not None and not values.get("job_sequence"):
+            values["job_sequence"] = job.sequence
         event = SessionEvent(state=state, message=message, **values)
         try:
             self.event_callback(event)

@@ -3,12 +3,70 @@ from __future__ import annotations
 import time
 
 import numpy as np
+import pytest
 
-from echo_link_core.correction import CorrectionPipeline
+from echo_link_core.accepted_inference import AcceptedInferenceCoordinator
+from echo_link_core.correction import CorrectionPipeline, CorrectionResult
 from echo_link_core.engine import DictationEngine
 from echo_link_core.insertion import PartialTextInsertionError
-from echo_link_core.models import DictationMode, InsertionMode, SessionState
+from echo_link_core.models import DictationMode, DictationSettings, InsertionMode, SessionState
 from echo_link_core.storage import EchoLinkStore
+from echo_link_core.polish_types import (
+    ExecutionPlan,
+    GenerationResult,
+    PolishMode,
+    PolishTask,
+    RuntimeBackend,
+    RuntimeStatus,
+)
+
+
+class SharedAIRuntime:
+    runtime_id = "test:engine-shared-ai"
+
+    def __init__(self):
+        self.calls = []
+
+    def generate(self, request):
+        self.calls.append(request)
+        return GenerationResult(
+            "Hello there.",
+            request.plan.model,
+            RuntimeBackend.CUDA,
+            0.01,
+        )
+
+    def status(self, model, *, timeout=1.0):
+        return RuntimeStatus(
+            model=model,
+            loaded=True,
+            backend=RuntimeBackend.CUDA,
+            model_bytes=4_000,
+            gpu_bytes=4_000,
+        )
+
+    def close(self):
+        pass
+
+
+def connect_accepted_ai(engine):
+    runtime = SharedAIRuntime()
+    coordinator = AcceptedInferenceCoordinator(runtime)
+    plan = ExecutionPlan(
+        policy_version=8,
+        mode=PolishMode.AUTO,
+        task=PolishTask.PROOFREAD,
+        use_llm=True,
+        pack_id="gemma4-e4b-qat-v1",
+        model="gemma4:e4b-it-qat",
+        backend=RuntimeBackend.CUDA,
+        context_window=2048,
+        max_output_tokens=512,
+        require_full_gpu=True,
+    )
+    assert coordinator.accept_verified(plan)
+    engine.set_ai_coordinator(coordinator)
+    return coordinator, runtime, plan
 
 
 class FakeRecorder:
@@ -126,6 +184,176 @@ def test_engine_applies_persisted_insertion_mode_and_live_updates(tmp_path):
     settings.insertion_mode = InsertionMode.CLIPBOARD
     engine.update_settings(settings)
     assert engine.inserter.mode is InsertionMode.CLIPBOARD
+
+
+def test_engine_keeps_ai_empty_until_a_hardware_plan_is_accepted(tmp_path):
+    store = EchoLinkStore(tmp_path / "echo-link.db")
+    persisted = store.get_settings()
+    persisted.ollama_model = "gemma4:e2b-it-qat"
+    persisted.polish_model_pack_id = "gemma4-e2b-qat-v1"
+    store.save_settings(persisted)
+    pipeline = CorrectionPipeline(store.vocabulary_map, persisted)
+
+    engine = DictationEngine(
+        store,
+        recorder=FakeRecorder(),
+        transcriber=FakeTranscriber(),
+        correction=pipeline,
+    )
+
+    assert engine.settings.ollama_model == ""
+    assert engine.settings.polish_model_pack_id == ""
+    assert pipeline.accepted_model == ""
+    assert pipeline.preload(timeout=1.0) is False
+
+    attempted_restore = DictationSettings.from_dict(store.get_settings().to_dict())
+    engine.update_settings(attempted_restore)
+    assert engine.settings.ollama_model == ""
+    assert engine.settings.polish_model_pack_id == ""
+
+
+def test_engine_rejects_a_model_without_the_shared_coordinator(tmp_path):
+    store = EchoLinkStore(tmp_path / "echo-link.db")
+    pipeline = CorrectionPipeline(store.vocabulary_map, store.get_settings())
+    engine = DictationEngine(
+        store,
+        recorder=FakeRecorder(),
+        transcriber=FakeTranscriber(),
+        correction=pipeline,
+    )
+
+    with pytest.raises(ValueError, match="shared coordinator"):
+        engine.accept_ai_plan(
+            pack_id="gemma4-e4b-qat-v1",
+            model="gemma4:e4b-it-qat",
+            policy_version=8,
+        )
+
+    assert pipeline.accepted_model == ""
+    assert engine.settings.ollama_model == ""
+
+
+def test_accuracy_never_calls_ai_when_shared_plan_is_not_ready(tmp_path):
+    class GuardedCorrection:
+        def __init__(self):
+            self.correct_calls = 0
+
+        def update_settings(self, _settings):
+            pass
+
+        def deterministic(self, raw_text, *_args):
+            return CorrectionResult("Deterministic text.", "deterministic")
+
+        def correct(self, *_args, **_kwargs):
+            self.correct_calls += 1
+            raise AssertionError("Accuracy called AI without an accepted plan")
+
+        def preload(self, **_kwargs):
+            raise AssertionError("Accuracy preloaded AI without an accepted plan")
+
+    store = EchoLinkStore(tmp_path / "echo-link.db")
+    settings = store.get_settings()
+    settings.mode = DictationMode.ACCURACY
+    settings.streaming_enabled = False
+    settings.append_trailing_space = False
+    store.save_settings(settings)
+    correction = GuardedCorrection()
+    events = []
+    engine = DictationEngine(
+        store,
+        recorder=FakeRecorder(),
+        transcriber=FakeTranscriber("raw text"),
+        correction=correction,
+        inserter=FakeInserter(),
+        event_callback=events.append,
+    )
+
+    assert engine.start_recording()
+    assert engine.stop_recording()
+    _wait(engine)
+
+    assert correction.correct_calls == 0
+    assert events[-1].final_text == "Deterministic text."
+
+
+def test_engine_persists_and_shares_only_the_accepted_ai_plan(tmp_path):
+    store = EchoLinkStore(tmp_path / "echo-link.db")
+    pipeline = CorrectionPipeline(store.vocabulary_map, store.get_settings())
+    engine = DictationEngine(
+        store,
+        recorder=FakeRecorder(),
+        transcriber=FakeTranscriber(),
+        correction=pipeline,
+    )
+
+    _coordinator, _runtime, plan = connect_accepted_ai(engine)
+
+    persisted = store.get_settings()
+    assert engine.settings.ollama_model == plan.model
+    assert engine.settings.polish_model_pack_id == plan.pack_id
+    assert engine.settings.polish_policy_version == 8
+    assert pipeline.accepted_model == plan.model
+    assert persisted.ollama_model == plan.model
+    assert persisted.polish_model_pack_id == plan.pack_id
+
+    attempted_override = DictationSettings.from_dict(engine.settings.to_dict())
+    attempted_override.ollama_model = "gemma4:e2b-it-qat"
+    attempted_override.polish_model_pack_id = "gemma4-e2b-qat-v1"
+    attempted_override.polish_policy_version = 1
+    engine.update_settings(attempted_override)
+    assert engine.settings.ollama_model == plan.model
+    assert engine.settings.polish_model_pack_id == plan.pack_id
+    assert engine.settings.polish_policy_version == 8
+    assert pipeline.accepted_model == plan.model
+
+
+def test_ai_plan_acceptance_merges_with_the_latest_user_settings(tmp_path):
+    store = EchoLinkStore(tmp_path / "echo-link.db")
+    pipeline = CorrectionPipeline(store.vocabulary_map, store.get_settings())
+    engine = DictationEngine(
+        store,
+        recorder=FakeRecorder(),
+        transcriber=FakeTranscriber(),
+        correction=pipeline,
+    )
+    changed = DictationSettings.from_dict(engine.settings.to_dict())
+    changed.keep_history = False
+    engine.update_settings(changed)
+
+    connect_accepted_ai(engine)
+
+    assert engine.settings.keep_history is False
+    assert store.get_settings().keep_history is False
+
+
+def test_dictation_revalidates_and_clears_a_stale_ai_plan_before_use(tmp_path):
+    store = EchoLinkStore(tmp_path / "echo-link.db")
+    settings = store.get_settings()
+    settings.mode = DictationMode.ACCURACY
+    settings.streaming_enabled = False
+    settings.append_trailing_space = False
+    pipeline = CorrectionPipeline(store.vocabulary_map, settings)
+    events = []
+    engine = DictationEngine(
+        store,
+        recorder=FakeRecorder(),
+        transcriber=FakeTranscriber("hello there"),
+        correction=pipeline,
+        inserter=FakeInserter(),
+        event_callback=events.append,
+    )
+    _coordinator, runtime, _plan = connect_accepted_ai(engine)
+    engine.set_ai_plan_validator(lambda *_args: False)
+    engine.update_settings(settings)
+
+    assert engine.start_recording()
+    assert engine.stop_recording()
+    _wait(engine)
+
+    assert runtime.calls == []
+    assert events[-1].final_text == "Hello there."
+    assert engine.settings.ollama_model == ""
+    assert pipeline.accepted_model == ""
 
 
 def test_manual_recording_returns_text_without_inserting(tmp_path):

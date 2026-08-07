@@ -141,10 +141,16 @@ class LocalDraftResult:
 
 
 class LocalDraftAssistant:
-    """Generate fact-grounded drafts through a numeric-loopback Ollama service."""
+    """Generate fact-grounded drafts through an accepted local AI runtime."""
 
-    def __init__(self, endpoint: str = "http://127.0.0.1:11434") -> None:
+    def __init__(
+        self,
+        endpoint: str = "http://127.0.0.1:11434",
+        *,
+        inference=None,
+    ) -> None:
         self._transport = LoopbackJSONTransport(endpoint)
+        self._inference = inference
 
     @property
     def endpoint(self) -> str:
@@ -178,46 +184,90 @@ class LocalDraftAssistant:
         if len(prompt) > MAX_PROMPT_CHARS:
             raise ValueError("Local draft prompt is too large.")
 
-        try:
-            payload = self._transport.post_json(
-                "/api/generate",
-                {
-                    "model": local_model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "keep_alive": OLLAMA_KEEP_ALIVE,
-                    "options": {
-                        "temperature": 0.0,
-                        "num_ctx": 8192,
-                        "num_predict": 2048,
+        if self._inference is not None:
+            try:
+                generation = self._inference.generate_task(
+                    protected,
+                    command="Rewrite",
+                    profile=_runtime_profile(selected_template),
+                    instruction=_runtime_draft_instruction(
+                        selected_template,
+                        direction,
+                    ),
+                    protected_terms=tuple(replacements),
+                    timeout=bounded_timeout,
+                    max_output_tokens=2048,
+                    model=local_model,
+                )
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                raise DraftGenerationError(f"Local draft AI unavailable: {exc}") from exc
+            raw_candidate = generation.text
+            result_model = str(generation.model or local_model).strip()
+        else:
+            try:
+                payload = self._transport.post_json(
+                    "/api/generate",
+                    {
+                        "model": local_model,
+                        "prompt": prompt,
+                        "stream": False,
+                        "keep_alive": OLLAMA_KEEP_ALIVE,
+                        "options": {
+                            "temperature": 0.0,
+                            "num_ctx": 8192,
+                            "num_predict": 2048,
+                        },
                     },
-                },
-                timeout=bounded_timeout,
-            )
-        except LocalTransportError as exc:
-            raise DraftGenerationError(f"Local draft model unavailable: {exc}") from exc
+                    timeout=bounded_timeout,
+                )
+            except LocalTransportError as exc:
+                raise DraftGenerationError(f"Local draft AI unavailable: {exc}") from exc
 
-        if payload.get("error"):
-            raise DraftGenerationError("Local draft model returned an error.")
-        raw_candidate = payload.get("response")
-        if not isinstance(raw_candidate, str):
-            raise DraftGenerationError("Local draft model returned invalid text.")
+            if payload.get("error"):
+                raise DraftGenerationError("Local draft AI returned an error.")
+            raw_candidate = payload.get("response")
+            if not isinstance(raw_candidate, str):
+                raise DraftGenerationError("Local draft AI returned invalid text.")
+            result_model = local_model
         candidate = raw_candidate.strip()
         if not candidate:
-            raise DraftGenerationError("Local draft model returned empty text.")
+            raise DraftGenerationError("Local draft AI returned empty text.")
         if len(candidate) > MAX_OUTPUT_CHARS:
-            raise DraftGenerationError("Local draft model output is too large.")
+            raise DraftGenerationError("Local draft AI output is too large.")
         if _protected_tokens_changed(protected, candidate, replacements):
-            raise DraftGenerationError("Local draft model changed protected content.")
+            raise DraftGenerationError("Local draft AI changed protected content.")
         if _NUMBER.search(candidate):
-            raise DraftGenerationError("Local draft model added an unsupported number.")
+            raise DraftGenerationError("Local draft AI added an unsupported number.")
 
         restored = candidate
         for token, value in replacements.items():
             restored = restored.replace(token, value)
         if not _claims_are_grounded(source, restored):
-            raise DraftGenerationError("Local draft model added an unsupported claim.")
-        return LocalDraftResult(restored, selected_template, local_model)
+            raise DraftGenerationError("Local draft AI added an unsupported claim.")
+        return LocalDraftResult(restored, selected_template, result_model)
+
+
+def _runtime_profile(template: DraftTemplate) -> str:
+    return {
+        DraftTemplate.EMAIL: "Email",
+        DraftTemplate.MEETING_SUMMARY: "Meeting",
+        DraftTemplate.MARKETING_COPY: "Marketing",
+        DraftTemplate.TECHNICAL_DOCUMENTATION: "Technical",
+        DraftTemplate.CODE_EXPLANATION: "Code-safe",
+    }[template]
+
+
+def _runtime_draft_instruction(
+    template: DraftTemplate,
+    direction: str,
+) -> str:
+    guidance = _TEMPLATE_GUIDANCE[template]
+    extra = f" User direction: {direction}" if direction else ""
+    return (
+        f"Create a {template.value} from only the supplied user facts. "
+        f"{guidance} Add no unsupported fact or number. Return only the draft."
+        f"{extra}"
+    )
 
 
 def _normalize_template(template: DraftTemplate | str) -> DraftTemplate:
@@ -249,14 +299,14 @@ def _bounded_text(value: str, label: str, limit: int, *, required: bool) -> str:
 
 def _validate_model(model: str) -> str:
     if not isinstance(model, str):
-        raise TypeError("Local model name must be text.")
+        raise TypeError("Local AI selection must be text.")
     value = model.strip()
     if (
         not value
         or len(value) > MAX_MODEL_NAME_CHARS
         or _MODEL_NAME.fullmatch(value) is None
     ):
-        raise ValueError("Choose a valid local writing model.")
+        raise ValueError("Choose a valid local writing AI.")
     return value
 
 

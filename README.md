@@ -6,7 +6,7 @@ Manuscript is a local-only voice-to-text and writing project. The complete curre
 
 - Local faster-whisper speech recognition.
 - Fast deterministic punctuation, capitalization, repetition/filler removal, natural backtracking, numbered/bullet lists, and custom vocabulary.
-- Optional local Ollama grammar refinement.
+- Hardware-adaptive local AI grammar and style correction.
 - Fast, Developer, Refine, and Accuracy dictation modes.
 - Deterministic Developer mode for spoken case, filenames, `@file` tags, syntax, indentation, and CLI text. It never executes commands or calls a writing model.
 - Push-to-talk global hotkey.
@@ -23,22 +23,22 @@ Manuscript is a local-only voice-to-text and writing project. The complete curre
 - Optional packaged Chrome/Edge extension and local Native Messaging host. It appears only beside editable text fields, never in password fields, and requires red-delete/green-insert review before replacement.
 - Local readability scoring with grade estimate, sentence/word counts, and concrete writing flags.
 - Session-only local source search with path-and-line citations and local corpus similarity checks.
-- Session-only chat over approved local `.txt` and `.md` sources, using the current loopback Ollama model with exact path-and-line excerpts shown for review.
+- Session-only local AI chat over approved `.txt` and `.md` sources, with exact path-and-line excerpts shown for review.
 - Local document editor with explicit text import/export, guarded unsaved work, and SQLite-backed immutable revision history and restore.
 - Writing profiles for general, email, meeting, marketing, technical, and code-safe work.
 - Guided offline faster-whisper model-pack import and safe user-pack removal.
-- Loopback-only writing-model manager with local GGUF import, exact tag/digest details, SHA256 evidence, model selection, removal confirmation, and a bounded local speed check.
+- Signed local AI packs with hardware selection, integrity checks, safe removal, and a bounded local speed check.
 - Optional private learning from explicitly approved short Review edits, with enable, disable, delete, and reset controls.
 - Human review plus selection re-check before any selected text is replaced.
 - Local snippets and selectable local speech model packs.
-- Optional local history. History is off by default.
-- CPU mode by default. GPU use is optional and released while idle.
+- Encrypted local history kept for three days by default, with configurable retention.
+- Hardware-adaptive CPU or GPU use. AI memory is released after five idle minutes.
 - Local hardware/model recommendation considers only installed models and exposes GPU only when its required runtime libraries load.
 - A frozen local-core v1 JSON contract with strict privacy flags, exact golden fixtures, a Python reference adapter, and strict Android and Swift wire bindings that reject unknown fields, missing fields, shape changes, and privacy downgrades.
 - A compile-tested Android containing app and input method with strict Android 12+ on-device speech, editable review, encrypted one-use approval, and tap-only keyboard insertion. Physical-device proof remains open.
 - Structurally validated macOS and iPhone source foundations: app-owned capture boundaries, a focus-safe macOS status/insertion flow, strict on-device iPhone speech with editable review, a short-lived App Group payload, a no-Open-Access keyboard, and a share extension. Xcode compilation and Apple-device proof remain open.
 
-No cloud service, account, API key, or paid call is required.
+Writing and dictation stay local. Production access uses the user's Manuscript account and active subscription. No cloud AI key or paid inference call is required.
 
 ## Writing HUD
 
@@ -52,15 +52,15 @@ Automatic appearance can be disabled in Settings. The manual shortcuts are confi
 
 ## Developer dictation
 
-Choose **Developer** under Writing mode. Speak explicit commands such as `camel case user name`, `tag file app slash routes dot ts`, `open paren`, `new line`, and `indent`. Manuscript formats the text locally and inserts it once without Ollama. See `docs\DEVELOPER_MODE.md` for the command reference.
+Choose **Developer** under Writing mode. Speak explicit commands such as `camel case user name`, `tag file app slash routes dot ts`, `open paren`, `new line`, and `indent`. Manuscript formats the text locally and inserts it once without generative AI. See `docs\DEVELOPER_MODE.md` for the command reference.
 
 ## Documents and approved sources
 
 - Use **Documents** to create or import local `.txt`/`.md` work, edit it, and save explicit revisions. Restoring an old revision creates a new revision; it never rewrites history.
-- Use **Sources > Ask sources** to approve local `.txt`/`.md` files for the current session and ask the configured local Ollama model questions. Answers are read-only and show the exact excerpts used.
+- Use **Sources > Ask sources** to approve local `.txt`/`.md` files for the current session and ask the accepted local AI questions. Answers are read-only and show the exact excerpts used.
 - Source questions, excerpts, and answers are not saved. Nothing is applied to a document automatically.
 
-See `docs\LOCAL_MODEL_PACKS.md` for adding an English or multilingual speech pack. See `docs\LOCAL_WRITING_MODELS.md` for local Ollama writing-model import and verification, and `docs\WRITING_QUALITY_ACCEPTANCE.md` for the honest fixed-case quality gate. None of these workflows gives Manuscript cloud access.
+See `docs\LOCAL_MODEL_PACKS.md` for adding an English or multilingual speech pack. See `docs\ADAPTIVE_POLISH.md` for local writing AI selection and verification, and `docs\WRITING_QUALITY_ACCEPTANCE.md` for the honest fixed-case quality gate. None of these workflows gives Manuscript cloud writing access.
 
 ## Run from source
 
@@ -135,9 +135,9 @@ Run `tools\external_insertion_acceptance_probe.py` for isolated external textbox
 ## Privacy and power
 
 - Audio is processed locally. It is retained only when the user explicitly enables encrypted speech improvement logs.
-- History is stored only when enabled.
+- Encrypted history is enabled for three days by default and can be disabled or assigned a different retention period.
 - Encrypted speech improvement logs keep actual PCM audio plus raw, cleanup, suggested, and final transcript stages in the SQLCipher database. They are off by default, visible and reviewable in History, and automatically deleted after 1–15 days.
-- Ollama requests use only numeric loopback (`127.0.0.1` or `::1`) on port 11434, bypass proxies, reject redirects, and enforce bounded request/response/time limits. The model unloads after each refinement request.
+- Local AI uses an authenticated current-user pipe when available. Its compatibility runtime uses numeric loopback only, bypasses proxies, rejects redirects, and enforces bounded request, response, and time limits. AI memory unloads after five idle minutes.
 - The speech model is released while idle.
 - First-word protection keeps only the latest 500 ms in memory while the microphone is ready; set it to `0 ms` in Settings to close the idle microphone stream. It reaches disk only as part of an explicitly enabled encrypted speech log.
 - Windows media control uses local System Media Transport Control sessions. It does not send playback data anywhere.

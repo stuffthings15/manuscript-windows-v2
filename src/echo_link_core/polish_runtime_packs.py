@@ -59,7 +59,7 @@ class RuntimePackConsentRequired(RuntimePackError):
         self.pack = pack
         size_mib = pack.download_size_bytes / (1024**2)
         super().__init__(
-            f"{pack.display_name} needs explicit local runtime download approval "
+            "Local AI support files need explicit download approval "
             f"({size_mib:.0f} MB)."
         )
 

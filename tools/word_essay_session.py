@@ -343,9 +343,39 @@ def run_session(
     # in front and the app answered "No selected text was found" about a
     # document that was fully selected.
     focus_named_word_window(working.stem)
-    select_whole_story(word)
-    press_hud_hotkey(hotkey)
-    hud = _hud_window(25.0)
+    # Put the caret in the document and let the badge appear by itself. The
+    # badge covers only the page around the caret, so the whole document is
+    # then requested through the HUD's own button rather than by selecting
+    # everything and pressing a hotkey - that selection never survived the
+    # foreground change and the app kept being asked to review nothing.
+    try:
+        word.Selection.HomeKey(6)  # wdStory
+    except Exception:  # noqa: BLE001 - Word raises assorted COM errors here
+        select_whole_story(word)
+    time.sleep(1.5)
+    hud = _hud_window(20.0)
+    if hud is None:
+        press_hud_hotkey(hotkey)
+        hud = _hud_window(20.0)
+    # "Check entire document" only exists once the badge has been opened, so
+    # clicking for it first found nothing and the review silently stayed on
+    # page one: 3522 characters of a 5203 character essay, with paragraphs 9
+    # and 10 never offered. Open the badge, then widen.
+    if hud is not None:
+        opening_badge = _badge_button(hud)
+        if opening_badge is not None:
+            report["badge"] = str(opening_badge.Name)
+            _click(opening_badge)
+            time.sleep(2.0)
+            hud = _hud_window(20.0) or hud
+        whole = whole_document_button(hud)
+        if whole is not None:
+            report["used_whole_document_button"] = True
+            _click(whole)
+            time.sleep(4.0)
+            hud = _hud_window(25.0) or hud
+        else:
+            report["whole_document_button_missing"] = True
     if hud is None:
         report["error"] = "the Writing HUD never appeared for the selection"
     else:

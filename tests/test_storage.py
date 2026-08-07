@@ -9,13 +9,13 @@ from echo_link_core.models import DictationMode, DictationSettings, InsertionMod
 from echo_link_core.storage import EchoLinkStore
 
 
-def test_settings_migrate_older_writing_models_to_gemma4():
+def test_settings_migrate_older_writing_models_to_automatic_hardware_choice():
     for old_model in ("qwen2.5:14b", "qwen3:8b", "qwen3:14b"):
         settings = DictationSettings.from_dict({"ollama_model": old_model})
-        assert settings.ollama_model == "gemma4:12b"
+        assert settings.ollama_model == ""
 
 
-def test_settings_migrate_older_polish_packs_to_gemma4():
+def test_settings_migrate_older_polish_packs_to_automatic_hardware_choice():
     for old_pack in (
         "qwen3-1.7b-q4-k-m-v1",
         "qwen3-4b-q4-k-m-v1",
@@ -23,7 +23,7 @@ def test_settings_migrate_older_polish_packs_to_gemma4():
         "qwen3-14b-q4-k-m-v1",
     ):
         settings = DictationSettings.from_dict({"polish_model_pack_id": old_pack})
-        assert settings.polish_model_pack_id == "gemma4-12b-q4-k-m-v1"
+        assert settings.polish_model_pack_id == ""
 
 def test_settings_vocabulary_and_history_round_trip(tmp_path):
     store = EchoLinkStore(tmp_path / "echo-link.db")
@@ -50,6 +50,8 @@ def test_settings_vocabulary_and_history_round_trip(tmp_path):
     assert settings.private_paste_hotkey == "ctrl+alt+v"
     assert settings.silence_auto_stop_enabled is True
     assert settings.silence_timeout_seconds == 2.5
+    assert settings.ollama_model == ""
+    assert settings.polish_model_pack_id == ""
     assert store.get_meta("first_run_setup_pending") is True
     assert store.list_vocabulary() == []
 
@@ -250,7 +252,7 @@ def test_legacy_import_is_selective_and_one_time(tmp_path):
     assert result == {"settings": 3, "vocabulary": 1}
     assert store.get_settings().hotkey == "ctrl+f9"
     assert store.get_settings().language == "en"
-    assert store.get_settings().ollama_model == "gemma4:12b"
+    assert store.get_settings().ollama_model == ""
     assert store.vocabulary_map()["curtis"] == "Curtis"
     assert store.import_legacy_dictation(legacy) == {"settings": 0, "vocabulary": 0}
 

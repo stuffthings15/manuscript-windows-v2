@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Iterable
 
+from .accepted_inference import AcceptedInferenceCoordinator
 from .developer_text import format_developer_text
 from .learning import apply_learned_corrections
 from .local_transport import LocalTransportError, LoopbackJSONTransport
@@ -393,24 +394,88 @@ class CorrectionPipeline:
         self,
         vocabulary_provider,
         settings: DictationSettings | None = None,
-        refiner: OllamaRefiner | None = None,
+        refiner=None,
         snippet_provider=None,
         learned_correction_provider=None,
     ):
         self._vocabulary_provider = vocabulary_provider
         self._settings = settings or DictationSettings()
-        self._refiner = refiner or OllamaRefiner()
+        # Fast and Developer tests may inject a sentinel refiner, but an AI
+        # path can execute only through the exact accepted coordinator type.
+        self._refiner = refiner
+        self._ai_coordinator = (
+            refiner if isinstance(refiner, AcceptedInferenceCoordinator) else None
+        )
         self._snippet_provider = snippet_provider or (lambda: {})
         self._learned_correction_provider = learned_correction_provider or (lambda: {})
+        # A configured model name is only a preference. It must not execute
+        # until the hardware policy and runtime acceptance probe approve it.
+        self._accepted_model = ""
+
+    @property
+    def accepted_model(self) -> str:
+        return self._accepted_model
+
+    def accept_model(self, model: str) -> None:
+        accepted = str(model or "").strip()
+        if not accepted:
+            raise ValueError("An accepted AI model is required.")
+        coordinator = self._ai_coordinator
+        lease = coordinator.lease() if coordinator is not None else None
+        if (
+            lease is None
+            or lease.plan.model != accepted
+            or not coordinator.is_current(
+                lease.plan.pack_id,
+                accepted,
+                lease.plan.policy_version,
+            )
+        ):
+            raise ValueError(
+                "Dictation AI requires the current accepted shared coordinator plan."
+            )
+        self._accepted_model = accepted
+
+    def clear_accepted_model(self) -> None:
+        self._accepted_model = ""
+
+    def set_refiner(self, refiner) -> None:
+        if not isinstance(refiner, AcceptedInferenceCoordinator):
+            raise TypeError("The accepted shared AI coordinator is required.")
+        self._refiner = refiner
+        self._ai_coordinator = refiner
+        self._accepted_model = ""
+
+    def _accepted_coordinator(self) -> AcceptedInferenceCoordinator | None:
+        coordinator = self._ai_coordinator
+        model = self._accepted_model
+        lease = coordinator.lease() if coordinator is not None else None
+        if (
+            not model
+            or lease is None
+            or lease.plan.model != model
+            or not coordinator.is_current(
+                lease.plan.pack_id,
+                model,
+                lease.plan.policy_version,
+            )
+        ):
+            return None
+        return coordinator
 
     def update_settings(self, settings: DictationSettings) -> None:
         self._settings = settings
 
-    def preload(self, *, timeout: float) -> None:
-        self._refiner.preload(
-            model=self._settings.ollama_model,
+    def preload(self, *, timeout: float) -> bool:
+        model = self._accepted_model
+        coordinator = self._accepted_coordinator()
+        if not model or coordinator is None:
+            return False
+        coordinator.preload(
+            model=model,
             timeout=float(timeout),
         )
+        return True
 
     def deterministic(
         self,
@@ -444,22 +509,30 @@ class CorrectionPipeline:
             return base
         if not self._settings.local_refinement_enabled:
             return base
+        model = self._accepted_model
+        coordinator = self._accepted_coordinator()
+        if not model or coordinator is None:
+            return CorrectionResult(
+                base.text,
+                base.source,
+                "Local AI is not ready. Deterministic correction was kept.",
+            )
 
         vocabulary = dict(self._vocabulary_provider() or {})
         learned = dict(self._learned_correction_provider() or {})
-        refined = self._refiner.refine(
+        refined = coordinator.refine(
             base.text.strip(),
-            model=self._settings.ollama_model,
+            model=model,
             protected_terms=tuple(vocabulary.values()) + tuple(learned.values()),
             timeout=self._settings.correction_timeout_seconds,
         )
-        if refined.source != "ollama":
+        if refined.source not in {"ollama", "ai"}:
             return CorrectionResult(base.text, base.source, refined.warning)
         final = deterministic_cleanup(refined.text, vocabulary)
         final = self._apply_learning(final, vocabulary)
         if self._settings.append_trailing_space and final and not final.endswith(" "):
             final += " "
-        return CorrectionResult(final, "ollama", refined.warning)
+        return CorrectionResult(final, refined.source, refined.warning)
 
     def _apply_learning(self, text: str, vocabulary: dict[str, str]) -> str:
         if not self._settings.personal_learning_enabled:
@@ -482,8 +555,13 @@ class CorrectionPipeline:
         configured: str | None = None,
         timeout: float = 1.5,
     ) -> dict[str, object]:
-        models = self._refiner.available_models(timeout=timeout)
-        configured = configured or self._settings.ollama_model
+        coordinator = self._accepted_coordinator()
+        models = (
+            coordinator.available_models(timeout=timeout)
+            if coordinator is not None
+            else set()
+        )
+        configured = configured or self._accepted_model
         configured_base = configured.split(":", 1)[0]
         available = configured in models or configured_base in {
             item.split(":", 1)[0] for item in models

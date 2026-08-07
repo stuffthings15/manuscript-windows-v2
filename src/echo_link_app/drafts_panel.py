@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from echo_link_app.accessibility import set_accessible, update_status_label
+from echo_link_app.ai_status import user_ai_status
 from echo_link_core.documents import DocumentWorkspace
 from echo_link_core.drafting import DraftGenerationError, DraftTemplate, LocalDraftAssistant
 
@@ -37,6 +38,7 @@ class DraftsPanel(QWidget):
         protected_terms_provider: Callable[[], Sequence[str]],
         timeout_provider: Callable[[], float] | None = None,
         assistant: LocalDraftAssistant | None = None,
+        inference=None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -44,7 +46,7 @@ class DraftsPanel(QWidget):
         self._model_provider = model_provider
         self._protected_terms_provider = protected_terms_provider
         self._timeout_provider = timeout_provider or (lambda: 60.0)
-        self.assistant = assistant or LocalDraftAssistant()
+        self.assistant = assistant or LocalDraftAssistant(inference=inference)
         self._request_id = 0
         self._busy_request: int | None = None
         self._saved_text = ""
@@ -234,6 +236,7 @@ class DraftsPanel(QWidget):
             return
         self._busy_request = None
         self.generate_button.setEnabled(True)
+        message = user_ai_status(message)
         update_status_label(self.status, message, assertive=not ok)
         if not ok:
             self.result_edit.clear()

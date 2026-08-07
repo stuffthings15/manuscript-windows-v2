@@ -40,7 +40,6 @@ from echo_link_app.sound_cues import (
     list_sound_choices,
     play_cue,
 )
-from echo_link_app.writing_models_dialog import WritingModelsDialog
 from echo_link_core.audio import list_microphones
 from echo_link_core.data_folder_acl import DataFolderProtectionError, harden_windows_data_folder
 from echo_link_core.hotkeys import hotkeys_overlap, parse_hotkey
@@ -452,7 +451,11 @@ class SettingsDialog(QDialog):
         self.refine_check = QCheckBox("Allow local grammar and punctuation refinement")
         self.refine_check.setChecked(self.settings.local_refinement_enabled)
         refinement_form.addRow("", self.refine_check)
-        self.ollama_model_edit = QLineEdit(self.settings.ollama_model, self)
+        accepted_writing_model = (
+            self.settings.ollama_model if self.settings.polish_model_pack_id else ""
+        )
+        self.ollama_model_edit = QLineEdit(accepted_writing_model, self)
+        self.ollama_model_edit.setReadOnly(True)
         self.ollama_model_edit.hide()
         self.gpu_release_spin = QSpinBox()
         self.gpu_release_spin.setRange(
@@ -643,11 +646,10 @@ class SettingsDialog(QDialog):
             return
         self.check_button.setEnabled(False)
         self.model_status.setText("Checking local AI...")
-        configured = self.ollama_model_edit.text().strip() or "gemma4:12b"
         speech_model = str(self.model_combo.currentData() or self.settings.model_name)
         threading.Thread(
             target=self._collect_model_status,
-            args=(configured, speech_model),
+            args=(speech_model,),
             daemon=True,
             name="echo-link-model-status",
         ).start()
@@ -755,24 +757,23 @@ class SettingsDialog(QDialog):
         ):
             QMessageBox.warning(self, "Sound cue", "That local WAV cue could not be played.")
 
-    def _collect_model_status(self, configured: str, speech_model: str) -> None:
+    def _collect_model_status(self, speech_model: str) -> None:
         speech = self.engine.transcriber.status()
         speech["model"] = speech_model
         speech["path"] = str(local_model_path(speech_model) or "")
         speech["available"] = bool(speech["path"])
-        refine = self.engine.correction.local_model_status(configured=configured)
         speech_text = (
             f"Speech AI ready on {str(speech['device']).upper()}."
             if speech["available"]
             else "Speech AI is unavailable. Repair or reinstall Manuscript."
         )
-        refine_text = (
-            "Writing AI is ready."
-            if refine["available"]
-            else "Writing AI is optional and not currently available."
+        writing_text = (
+            "Writing AI is managed by the automatic hardware plan."
+            if self.settings.polish_model_pack_id
+            else "Writing AI will be selected automatically after the hardware check."
         )
         try:
-            self.model_status_ready.emit(f"{speech_text}\n{refine_text}")
+            self.model_status_ready.emit(f"{speech_text}\n{writing_text}")
         except RuntimeError:
             pass
 
@@ -960,7 +961,9 @@ class SettingsDialog(QDialog):
             whisper_mode=self.whisper_check.isChecked(),
             append_trailing_space=self.trailing_check.isChecked(),
             local_refinement_enabled=self.refine_check.isChecked(),
-            ollama_model=self.ollama_model_edit.text().strip() or "gemma4:12b",
+            ollama_model=(
+                self.settings.ollama_model if self.settings.polish_model_pack_id else ""
+            ),
             polish_mode=PolishMode.coerce(self.polish_mode_combo.currentData()),
             polish_model_pack_id=self.settings.polish_model_pack_id,
             polish_policy_version=max(1, int(self.settings.polish_policy_version)),
@@ -1083,16 +1086,6 @@ class SettingsDialog(QDialog):
             ),
         )
         self.harden_data_folder_button.setEnabled(True)
-
-    def _manage_writing_models(self) -> None:
-        dialog = WritingModelsDialog(self.ollama_model_edit.text(), self)
-        if not dialog.exec():
-            return
-        self.ollama_model_edit.setText(dialog.selected_model)
-        update_status_label(
-            self.model_status,
-            "Writing AI selected. Save Settings to apply it.",
-        )
 
     def _reset_echo_bar_position(self) -> None:
         self.echo_bar_position = (None, None)

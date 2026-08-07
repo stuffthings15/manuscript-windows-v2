@@ -160,9 +160,17 @@ class ExecutionPlan:
     @property
     def status_label(self) -> str:
         if not self.use_llm:
+            return "Local correction"
+        backend = self.backend.value.upper()
+        return f"Local AI | {backend}"
+
+    @property
+    def diagnostic_label(self) -> str:
+        """Internal runtime identity. Never display this label to users."""
+        if not self.use_llm:
             return "Rules + MiniLM"
         backend = self.backend.value.upper()
-        return f"{backend} | {self.model}"
+        return f"{backend} | {self.model} | {self.pack_id}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,6 +279,7 @@ class AcceptanceProbeResult:
     protected_passed: bool
     backend: RuntimeBackend
     reason: str = ""
+    model_identity: str = ""
 
 
 @runtime_checkable

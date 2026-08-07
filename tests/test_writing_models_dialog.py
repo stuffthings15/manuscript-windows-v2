@@ -1,13 +1,9 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 
-import echo_link_app.settings_dialog as settings_module
-from echo_link_app.settings_dialog import SettingsDialog
-from echo_link_app.window import EchoLinkWindow
 from echo_link_app.writing_models_dialog import WritingModelsDialog
-from echo_link_core.storage import EchoLinkStore
 from echo_link_core.writing_models import WritingModelBenchmark, WritingModelInfo
 
 
@@ -49,29 +45,39 @@ def _models():
     )
 
 
-def test_dialog_lists_version_digest_and_selects_configured_model(qapp):
+def test_dialog_lists_version_digest_without_exposing_manual_model_choice(qapp):
     dialog = WritingModelsDialog(
-        "qwen2.5:3b",
+        "",
         manager=_Manager(),
         auto_refresh=False,
     )
     dialog._handle_refresh(("models", "1.2.3", _models()))
     assert dialog.table.rowCount() == 2
-    assert dialog._selected_name() == "qwen2.5:3b"
+    assert dialog.configured_model == ""
+    assert dialog.selected_model == ""
+    assert dialog._selected_name() == ""
     assert dialog.table.item(1, 0).text() == "Local AI 2"
     assert dialog.table.item(1, 1).text() == "3b"
     assert dialog.table.item(1, 3).text() == "abc123456789"
     assert dialog.status.text() == "2 local writing AI packs found."
     assert "qwen" not in dialog.status.text().casefold()
     assert "ollama" not in dialog.status.text().casefold()
-    assert dialog.use_button.isEnabled()
-    assert not dialog.remove_button.isEnabled()
+    visible_table_text = " ".join(
+        dialog.table.item(row, column).text()
+        for row in range(dialog.table.rowCount())
+        for column in range(dialog.table.columnCount())
+    ).casefold()
+    assert "qwen" not in visible_table_text
+    assert "ollama" not in visible_table_text
+    button_text = {button.text() for button in dialog.findChildren(QPushButton)}
+    assert "Use selected" not in button_text
+    assert "Import local GGUF" not in button_text
     dialog.close()
 
 
-def test_dialog_reports_benchmark_and_can_choose_another_model(qapp, monkeypatch):
+def test_dialog_reports_benchmark_but_cannot_choose_another_model(qapp):
     dialog = WritingModelsDialog(
-        "qwen2.5:3b",
+        "",
         manager=_Manager(),
         auto_refresh=False,
     )
@@ -84,16 +90,11 @@ def test_dialog_reports_benchmark_and_can_choose_another_model(qapp, monkeypatch
         )
     )
     assert "20.0 tokens/second" in dialog.status.text()
-    assert dialog.remove_button.isEnabled()
-    accepted = []
-    monkeypatch.setattr(dialog, "accept", lambda: accepted.append(True))
-    dialog._use_selected()
-    assert dialog.selected_model == "other:latest"
-    assert accepted == [True]
+    assert dialog.selected_model == ""
     dialog.close()
 
 
-def test_different_tags_are_distinct_installed_models(qapp):
+def test_automatic_dialog_does_not_preselect_a_configured_tag(qapp):
     dialog = WritingModelsDialog(
         "qwen2.5:3b",
         manager=_Manager(),
@@ -104,27 +105,31 @@ def test_different_tags_are_distinct_installed_models(qapp):
         WritingModelInfo("qwen2.5:3b", "three", 3, "", "gguf", "qwen2", "3B", "Q4"),
     )
     dialog._handle_refresh(("models", "1.2.3", models))
-    assert dialog._selected_name() == "qwen2.5:3b"
+    assert dialog.configured_model == ""
+    assert dialog._selected_name() == ""
     dialog.table.selectRow(0)
-    assert dialog.remove_button.isEnabled()
+    assert dialog._selected_name() == "qwen2.5:1b"
+    assert dialog.selected_model == ""
     dialog.close()
 
 
-def test_settings_uses_only_explicitly_selected_writing_model(qapp, tmp_path, monkeypatch):
-    window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
-    dialog = SettingsDialog(window.store, window.engine, window)
-
-    class AcceptedModelDialog:
-        def __init__(self, configured, _parent):
-            assert configured == "gemma4:12b"
-            self.selected_model = "qwen2.5:7b"
-
-        def exec(self):
-            return 1
-
-    monkeypatch.setattr(settings_module, "WritingModelsDialog", AcceptedModelDialog)
-    dialog._manage_writing_models()
-    assert dialog.ollama_model_edit.text() == "qwen2.5:7b"
-    assert dialog.model_status.text() == "Writing AI selected. Save Settings to apply it."
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        (("error", "Ollama qwen service failed"), "diagnostics are unavailable"),
+        (("action-error", "Gemma model failed"), "speed check could not finish"),
+    ],
+)
+def test_dialog_hides_runtime_and_model_names_from_errors(qapp, payload, expected):
+    dialog = WritingModelsDialog("", manager=_Manager(), auto_refresh=False)
+    if payload[0] == "error":
+        dialog._handle_refresh(payload)
+    else:
+        dialog._handle_action(("error", payload[1]))
+    visible = dialog.status.text().casefold()
+    assert expected in visible
+    assert "ollama" not in visible
+    assert "qwen" not in visible
+    assert "gemma" not in visible
+    assert "model" not in visible
     dialog.close()
-    window.close()

@@ -1,0 +1,154 @@
+"""Reproduce the owner's report: click in a Word essay, open the HUD, read "0 of 0".
+
+Deliberately minimal. The full session harness has its own failure modes and
+seven of its runs failed in the harness rather than the app, so this does only
+the three things the owner does - open the document, click in it, press the
+shortcut - and then prints exactly what the app logged for that one attempt.
+
+    .venv/Scripts/python.exe tools/repro_zero_of_zero.py
+"""
+from __future__ import annotations
+
+import ctypes
+from pathlib import Path
+import shutil
+import sys
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+for entry in (ROOT / "src", ROOT / "tools"):
+    if str(entry) not in sys.path:
+        sys.path.insert(0, str(entry))
+
+from animal_essay_corpus_probe import CORPUS, _essay_files  # noqa: E402
+
+LOG = Path.home() / "AppData/Local/ManuscriptWindowsV2/echo-link.log"
+_VK = {"ctrl": 0x11, "shift": 0x10, "space": 0x20}
+
+
+def log_size() -> int:
+    return LOG.stat().st_size if LOG.exists() else 0
+
+
+def log_since(offset: int) -> str:
+    if not LOG.exists():
+        return ""
+    with LOG.open("r", encoding="utf-8", errors="replace") as handle:
+        handle.seek(offset)
+        return handle.read()
+
+
+def open_in_word(path: Path):
+    import comtypes.client
+
+    word = comtypes.client.CreateObject("Word.Application", dynamic=True)
+    word.Visible = True
+    word.Documents.Open(str(path.resolve()))
+    time.sleep(3.0)
+    return word
+
+
+def foreground_word() -> tuple[int, tuple[int, int, int, int]]:
+    import uiautomation as automation
+
+    window = automation.GetRootControl().WindowControl(
+        searchDepth=2, RegexName=r".*- Word$"
+    )
+    if not window.Exists(15.0, 0.4):
+        raise SystemExit("no Word window found")
+    handle = int(window.NativeWindowHandle or 0)
+    user32 = ctypes.windll.user32
+    user32.ShowWindow(handle, 9)
+    current = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)
+    target = user32.GetWindowThreadProcessId(handle, None)
+    user32.AttachThreadInput(current, target, True)
+    user32.BringWindowToTop(handle)
+    user32.SetForegroundWindow(handle)
+    user32.AttachThreadInput(current, target, False)
+    time.sleep(1.5)
+    rect = window.BoundingRectangle
+    return handle, (rect.left, rect.top, rect.right, rect.bottom)
+
+
+def click_in_document(bounds: tuple[int, int, int, int]) -> tuple[int, int]:
+    """Click where the writer's text is, not on the ribbon or the margin."""
+    left, top, right, bottom = bounds
+    x = (left + right) // 2
+    # Below the ribbon, well inside the first page of body text.
+    y = top + int((bottom - top) * 0.40)
+    user32 = ctypes.windll.user32
+    user32.SetCursorPos(x, y)
+    time.sleep(0.4)
+    user32.mouse_event(0x0002, 0, 0, 0, 0)  # left down
+    time.sleep(0.08)
+    user32.mouse_event(0x0004, 0, 0, 0, 0)  # left up
+    time.sleep(1.2)
+    return x, y
+
+
+def press_hotkey() -> None:
+    user32 = ctypes.windll.user32
+    keys = [_VK["ctrl"], _VK["shift"], _VK["space"]]
+    for key in keys:
+        user32.keybd_event(key, 0, 0, 0)
+        time.sleep(0.05)
+    for key in reversed(keys):
+        user32.keybd_event(key, 0, 2, 0)
+        time.sleep(0.05)
+
+
+def hud_counter() -> str:
+    import uiautomation as automation
+
+    hud = automation.GetRootControl().WindowControl(
+        searchDepth=3, RegexName=r"Manuscript writing HUD.*"
+    )
+    if not hud.Exists(25.0, 0.5):
+        return "<no HUD window>"
+    found: list[str] = []
+
+    def walk(control, depth: int = 0) -> None:
+        if depth > 8:
+            return
+        for child in control.GetChildren():
+            try:
+                name = str(child.Name or "").strip()
+                if name:
+                    found.append(f"{child.ControlTypeName}: {name}")
+            except Exception:  # noqa: BLE001 - the HUD may be repainting
+                pass
+            walk(child, depth + 1)
+
+    walk(hud)
+    return "\n".join(found)
+
+
+def main() -> int:
+    essays = _essay_files(CORPUS)
+    if not essays:
+        raise SystemExit(f"no essays under {CORPUS}")
+    source = essays[0]
+    work = ROOT / "build" / "repro"
+    work.mkdir(parents=True, exist_ok=True)
+    target = work / source.name
+    shutil.copy2(source, target)
+    print(f"essay: {target}")
+
+    offset = log_size()
+    open_in_word(target)
+    _handle, bounds = foreground_word()
+    point = click_in_document(bounds)
+    print(f"clicked at {point} inside {bounds}")
+    press_hotkey()
+
+    print("\n--- HUD contents ---")
+    print(hud_counter())
+
+    time.sleep(20.0)
+    print("\n--- app log for this attempt ---")
+    print(log_since(offset).strip() or "<nothing logged>")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

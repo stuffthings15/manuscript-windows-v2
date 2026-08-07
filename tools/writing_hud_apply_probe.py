@@ -15,6 +15,12 @@ import time
 import pyperclip
 import uiautomation as automation
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
+if str(ROOT / "tools") not in sys.path:
+    sys.path.insert(0, str(ROOT / "tools"))
+
 from echo_link_app.rewrite_palette import _sentence_spans
 from echo_link_core.windows_selection import WindowsSelectionReader
 from echo_link_core.insertion import active_window

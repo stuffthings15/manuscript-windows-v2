@@ -44,6 +44,9 @@ NO_EM_DASH_DIRECTION = (
     "Never use an em dash. Use a comma, colon, semicolon, or parentheses instead. "
     "Correct every spelling, grammar, punctuation, vocabulary, and sentence structure error."
 )
+REPORT_SCHEMA_VERSION = 2
+INDEPENDENT_JUDGE_MODEL = "GPT-5.6 Sol"
+REQUIRED_JUDGE_SCORE_PERCENT = 100.0
 
 
 class _ProbeSettingsStore:
@@ -60,16 +63,16 @@ class _ProbeSettingsStore:
 
 def build_manuscript_writer(model: str) -> PolishWritingAssistantAdapter:
     requested = str(model).strip().casefold()
-    professional = "14b" in requested
+    professional = "12b" in requested
     mode = PolishMode.PROFESSIONAL if professional else PolishMode.BALANCED
-    if requested.startswith("gemma4:"):
+    if "e2b" in requested:
+        preferred = "gemma4-e2b-qat-v1"
+    elif "e4b" in requested:
+        preferred = "gemma4-e4b-qat-v1"
+    elif "12b" in requested:
         preferred = "gemma4-12b-q4-k-m-v1"
     else:
-        preferred = (
-            "qwen3-14b-q4-k-m-v1"
-            if professional
-            else "qwen3-8b-q4-k-m-v1"
-        )
+        preferred = ""
     store = _ProbeSettingsStore()
     engine = create_default_polish_engine(
         store=store,
@@ -252,10 +255,150 @@ def static_output_gate(
         and em_dash_count == 0
     )
     return {
+        "check_type": "static_heuristic",
         "passed": passed,
-        "score": 100.0 if passed else 0.0,
+        "static_check_score_percent": 100.0 if passed else 0.0,
+        "independent_model_judgment": False,
         **failures,
     }
+
+
+def _judgment_error(value: object) -> str:
+    """Explain why a value is not a completed independent GPT judgment."""
+    if not isinstance(value, dict):
+        return "missing"
+    if value.get("status") != "completed":
+        return "status is not completed"
+    if value.get("judge_model") != INDEPENDENT_JUDGE_MODEL:
+        return "judge model is not GPT-5.6 Sol"
+    if value.get("independent") is not True:
+        return "judgment is not marked independent"
+    if not str(value.get("judge_run_id", "")).strip():
+        return "judge run id is missing"
+    if not str(value.get("judged_at", "")).strip():
+        return "judged timestamp is missing"
+    score = value.get("score_percent")
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        return "judge score is missing"
+    if not 0.0 <= float(score) <= 100.0:
+        return "judge score is outside 0 to 100"
+    if not isinstance(value.get("passed"), bool):
+        return "judge pass result is missing"
+    if not isinstance(value.get("findings"), list):
+        return "judge findings are missing"
+    return ""
+
+
+def _case_judgment(case: dict) -> object:
+    return case.get(
+        "independent_gpt56sol_judgment",
+        case.get("gpt56sol_judgment"),
+    )
+
+
+def _upgrade_report_schema(report: dict) -> dict:
+    """Migrate old reports without treating their placeholders as judgments."""
+    report["schema_version"] = REPORT_SCHEMA_VERSION
+    report.pop("judge_model", None)
+    report.pop("threshold_percent", None)
+    report.pop("runtime_passed", None)
+    report.pop("runtime_passed_count", None)
+    report["independent_judge"] = {
+        "requested_model": INDEPENDENT_JUDGE_MODEL,
+        "required": True,
+        "required_score_percent": REQUIRED_JUDGE_SCORE_PERCENT,
+        "required_case_fields": [
+            "status",
+            "judge_model",
+            "independent",
+            "judge_run_id",
+            "judged_at",
+            "score_percent",
+            "passed",
+            "findings",
+        ],
+    }
+    for case in report.get("cases", ()):
+        if "runtime_static_passed" not in case and "runtime_passed" in case:
+            case["runtime_static_passed"] = bool(case["runtime_passed"])
+        case.pop("runtime_passed", None)
+        if "independent_gpt56sol_judgment" not in case:
+            case["independent_gpt56sol_judgment"] = case.get(
+                "gpt56sol_judgment"
+            )
+        case.pop("gpt56sol_judgment", None)
+    return report
+
+
+def _update_report_summary(report: dict, *, expected_case_count: int) -> None:
+    """Set honest runtime, independent-judge, and final gate summaries."""
+    _upgrade_report_schema(report)
+    cases = list(report.get("cases", ()))
+    case_count = len(cases)
+    runtime_static_passed_count = sum(
+        bool(case.get("runtime_static_passed")) for case in cases
+    )
+    report["case_count"] = case_count
+    report["expected_case_count"] = expected_case_count
+    report["runtime_static_passed_count"] = runtime_static_passed_count
+    report["runtime_static_passed"] = bool(
+        case_count == expected_case_count
+        and runtime_static_passed_count == case_count
+    )
+
+    judgment_errors: list[dict[str, str]] = []
+    completed_judgments: list[dict] = []
+    for case in cases:
+        judgment = _case_judgment(case)
+        error = _judgment_error(judgment)
+        if error:
+            judgment_errors.append(
+                {
+                    "mode": str(case.get("mode", "")),
+                    "page_id": str(case.get("page_id", "")),
+                    "error": error,
+                }
+            )
+        else:
+            completed_judgments.append(judgment)
+    judged_count = len(completed_judgments)
+    judgment_complete = bool(
+        case_count == expected_case_count and judged_count == case_count
+    )
+    judgment_passed_count = sum(
+        bool(value["passed"])
+        and float(value["score_percent"]) >= REQUIRED_JUDGE_SCORE_PERCENT
+        for value in completed_judgments
+    )
+    judgment_passed = bool(
+        judgment_complete and judgment_passed_count == case_count
+    )
+    report["independent_judged_count"] = judged_count
+    report["independent_judgment_complete"] = judgment_complete
+    report["independent_judgment_passed_count"] = judgment_passed_count
+    report["independent_judgment_passed"] = judgment_passed
+    report["independent_judgment_errors"] = judgment_errors
+    report["independent_judge_score_percent"] = (
+        min(float(value["score_percent"]) for value in completed_judgments)
+        if judgment_complete
+        else None
+    )
+    final_passed = bool(report["runtime_static_passed"] and judgment_passed)
+    report["final_passed"] = final_passed
+    report["final_score_percent"] = (
+        100.0 if final_passed else None
+    )
+    if case_count < expected_case_count:
+        status = "runtime_incomplete"
+    elif not report["runtime_static_passed"]:
+        status = "runtime_or_static_checks_failed"
+    elif not judgment_complete:
+        status = "awaiting_independent_gpt56sol_judgment"
+    elif not judgment_passed:
+        status = "independent_gpt56sol_judgment_failed"
+    else:
+        status = "passed"
+    report["completion_status"] = status
 
 
 def _utc_now() -> str:
@@ -392,12 +535,10 @@ def run_probe(
         report = json.loads(output.read_text(encoding="utf-8"))
     else:
         report = {
-            "schema_version": 1,
+            "schema_version": REPORT_SCHEMA_VERSION,
             "probe": "gpt56sol_five_page_manuscript_quality",
             "author_model": "GPT-5.6 Sol",
-            "judge_model": "GPT-5.6 Sol",
             "writer_model": model,
-            "threshold_percent": 100.0,
             "em_dash_allowed": False,
             "started_at": _utc_now(),
             "source_pages": [
@@ -412,6 +553,8 @@ def run_probe(
             ],
             "cases": [],
         }
+    _upgrade_report_schema(report)
+    expected_case_count = len(modes) * len(pages)
     completed = {
         (str(case.get("mode")), str(case.get("page_id")))
         for case in report.get("cases", ())
@@ -449,32 +592,35 @@ def run_probe(
                         "output": corrected,
                         "hud_sections": sections,
                         "static_gate": gate,
-                        "runtime_passed": bool(gate["passed"]),
-                        "gpt56sol_judgment": None,
+                        "runtime_static_passed": bool(gate["passed"]),
+                        "independent_gpt56sol_judgment": None,
                     }
                 )
             except (OSError, RuntimeError, TypeError, ValueError) as exc:
                 case.update(
                     {
                         "output": "",
-                        "runtime_passed": False,
+                        "runtime_static_passed": False,
                         "error": f"{type(exc).__name__}: {exc}",
-                        "gpt56sol_judgment": None,
+                        "independent_gpt56sol_judgment": None,
                     }
                 )
             case["finished_at"] = _utc_now()
             report["cases"].append(case)
+            _update_report_summary(
+                report,
+                expected_case_count=expected_case_count,
+            )
             _save_report(output, report)
-            state = "PASS" if case.get("runtime_passed") else "FAIL"
-            print(f"{mode} {page.page_id}: {state}", flush=True)
+            state = "PASS" if case.get("runtime_static_passed") else "FAIL"
+            print(
+                f"{mode} {page.page_id}: runtime/static {state}",
+                flush=True,
+            )
     report["finished_at"] = _utc_now()
-    report["case_count"] = len(report["cases"])
-    report["runtime_passed_count"] = sum(
-        bool(case.get("runtime_passed")) for case in report["cases"]
-    )
-    report["runtime_passed"] = (
-        report["case_count"] == len(modes) * len(pages)
-        and report["runtime_passed_count"] == report["case_count"]
+    _update_report_summary(
+        report,
+        expected_case_count=expected_case_count,
     )
     _save_report(output, report)
     return report
@@ -487,7 +633,7 @@ def main(argv: list[str] | None = None) -> int:
             "The report preserves full AI output for GPT-5.6 Sol judging."
         )
     )
-    parser.add_argument("--model", default="qwen3:8b")
+    parser.add_argument("--model", default="auto")
     parser.add_argument(
         "--modes",
         default=",".join(MODES),
@@ -524,12 +670,21 @@ def main(argv: list[str] | None = None) -> int:
         resume=args.resume,
     )
     print(
-        "Five-page Manuscript runtime gate: "
-        f"{report['runtime_passed_count']}/{report['case_count']}",
+        "Five-page Manuscript runtime/static gate: "
+        f"{report['runtime_static_passed_count']}/{report['case_count']}",
+        flush=True,
+    )
+    print(
+        "Independent GPT-5.6 Sol judgments: "
+        f"{report['independent_judged_count']}/{report['case_count']}",
+        flush=True,
+    )
+    print(
+        f"Final gate: {report['completion_status']}",
         flush=True,
     )
     print(args.output, flush=True)
-    return 0 if report["runtime_passed"] else 1
+    return 0 if report["final_passed"] else 1
 
 
 if __name__ == "__main__":

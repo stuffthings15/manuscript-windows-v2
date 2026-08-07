@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from echo_link_app.accessibility import set_accessible, update_status_label
+from echo_link_app.ai_status import user_ai_status
 from echo_link_app.theme import COLORS
 from echo_link_core.document_analytics import DocumentAnalytics, analyze_document
 from echo_link_core.documents import DocumentWorkspace, LocalDocument
@@ -61,7 +62,10 @@ class DocumentEditorPanel(QWidget):
         super().__init__(parent)
         self.workspace = workspace
         self.writing_assistant = writing_assistant or LocalWritingAssistant()
-        self._writing_model_provider = writing_model_provider or (lambda: "gemma4:12b")
+        # A document assistant may run only with the model accepted by the
+        # shared hardware policy and runtime probe. Never invent a fallback
+        # model when this panel is used on its own.
+        self._writing_model_provider = writing_model_provider or (lambda: "")
         self._protected_terms_provider = protected_terms_provider or (lambda: ())
         self._writing_timeout_provider = writing_timeout_provider or (lambda: 30.0)
         self.current_document_id: int | None = None
@@ -774,7 +778,11 @@ class DocumentEditorPanel(QWidget):
             if not 2.0 <= timeout <= 300.0:
                 raise ValueError("Local writing timeout must be between 2 and 300 seconds.")
         except (TypeError, ValueError) as exc:
-            update_status_label(self.assistant_status, str(exc), assertive=True)
+            update_status_label(
+                self.assistant_status,
+                user_ai_status(str(exc)),
+                assertive=True,
+            )
             return
 
         self._assistant_request_id += 1
@@ -822,6 +830,7 @@ class DocumentEditorPanel(QWidget):
         ):
             return
         self._set_assistant_busy(False)
+        message = user_ai_status(message)
         update_status_label(self.assistant_status, message, assertive=not ok)
         if not ok:
             return

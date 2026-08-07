@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -23,12 +24,18 @@ from .writing_models import LocalWritingModelManager, WritingModelError
 
 TRUSTED_KEY_ID = "manuscript-polish-2026-01"
 TRUSTED_PUBLIC_KEY_FINGERPRINT = (
-    "e008336cabf50edfb38b89ba8bab0bec8138fb6d44b0e37eee9afe09b11cf35a"
+    "c0d994b686dc9401fefacb765e8d582cb6f170c6063440d233c93d15905e30fe"
 )
 _DIGEST_INFO_SHA256 = bytes.fromhex(
     "3031300d060960864801650304020105000420"
 )
 _MAX_MANIFEST_BYTES = 512 * 1024
+_SAFE_OLLAMA_TAG = re.compile(
+    r"[a-z0-9][a-z0-9._-]*"
+    r"(?:/[a-z0-9][a-z0-9._-]*)*"
+    r"(?::[a-z0-9][a-z0-9._-]*)?",
+    re.IGNORECASE,
+)
 
 
 class ModelPackSecurityError(RuntimeError):
@@ -43,7 +50,7 @@ class ModelPackConsentRequired(RuntimeError):
     def __init__(self, pack: PolishModelPack):
         self.pack = pack
         super().__init__(
-            f"{pack.display_name} needs an explicit local model download approval "
+            "A local AI pack needs explicit download approval "
             f"({pack.size_bytes / (1024**3):.1f} GB)."
         )
 
@@ -85,37 +92,30 @@ class ModelPackManager:
 
     def catalog(self, *, refresh_installed: bool = True) -> tuple[PolishModelPack, ...]:
         manifest = self._load_verified_manifest()
-        installed: dict[str, tuple[str, int, str]] = {}
+        installed: tuple[object, ...] = ()
         if refresh_installed:
             try:
                 values = self.writing_models.list_models(timeout=2.0)
             except (OSError, RuntimeError, ValueError, WritingModelError):
                 values = ()
-            installed = {
-                value.name.casefold(): (
-                    value.digest.casefold(),
-                    value.size_bytes,
-                    value.quantization,
-                )
-                for value in values
-            }
+            installed = tuple(values)
         packs: list[PolishModelPack] = []
         for raw in manifest["packs"]:
             pack = _parse_pack(raw)
-            local = installed.get(pack.model.casefold())
-            if pack.runtime == "ollama" and local is not None:
-                digest, size, quantization = local
-                matches = (
-                    hmac.compare_digest(digest, pack.manifest_digest.casefold())
-                    and size > 0
-                    and _same_quantization(quantization, pack.quantization)
-                )
+            if pack.runtime == "ollama":
+                local = _verified_ollama_model(pack, installed)
+                matches = local is not None
                 pack = replace(
                     pack,
+                    model=(
+                        str(getattr(local, "name", pack.model)).strip()
+                        if local is not None
+                        else pack.model
+                    ),
                     installed=matches,
                     validated=matches and bool(raw.get("validated")),
                 )
-            elif pack.runtime != "ollama":
+            else:
                 path = self.install_root / pack.pack_id / "model.gguf"
                 if path.is_file():
                     matches = (
@@ -139,9 +139,13 @@ class ModelPackManager:
     ) -> PolishModelPack:
         if not plan.use_llm or not plan.pack_id:
             raise ModelPackNotFoundError("The execution plan does not require a model pack.")
-        pack = self.get(plan.pack_id)
+        pack = self._find_pack(plan.pack_id)
         if pack.installed and pack.validated:
             return pack
+        if pack.installed:
+            raise ModelPackSecurityError(
+                "The installed model pack is not validated by the signed allowlist."
+            )
         if not consent:
             raise ModelPackConsentRequired(pack)
         if not pack.available:
@@ -150,14 +154,22 @@ class ModelPackManager:
             self._pull_ollama(pack)
         else:
             self._download_file(pack, progress=progress)
-        installed = self.get(pack.pack_id)
-        if not installed.installed:
+        installed = self._find_pack(pack.pack_id)
+        if not installed.installed or not installed.validated:
             raise ModelPackSecurityError(
-                "The downloaded model did not match the signed allowlist."
+                "The downloaded model was not validated by the signed allowlist."
             )
         return installed
 
     def get(self, pack_id: str) -> PolishModelPack:
+        pack = self._find_pack(pack_id)
+        if not pack.validated:
+            raise ModelPackSecurityError(
+                "The installed model pack is not validated by the signed allowlist."
+            )
+        return pack
+
+    def _find_pack(self, pack_id: str) -> PolishModelPack:
         wanted = str(pack_id).strip()
         for pack in self.catalog(refresh_installed=True):
             if pack.pack_id == wanted:
@@ -175,7 +187,7 @@ class ModelPackManager:
         return replacements.get(wanted, wanted)
 
     def remove(self, pack_id: str) -> None:
-        pack = self.get(pack_id)
+        pack = self._find_pack(pack_id)
         if pack.runtime == "ollama":
             self.writing_models.remove_model(pack.model)
             return
@@ -189,8 +201,10 @@ class ModelPackManager:
     def model_file(self, pack_id: str) -> Path:
         """Return an exact local GGUF path without copying model weights."""
         pack = self.get(pack_id)
+        expected_digest, expected_size = self._model_blob_receipt(pack)
         cached = self._model_files.get(pack.pack_id)
         if cached is not None and cached.is_file():
+            _verify_exact_gguf(cached, expected_digest, expected_size)
             return cached
         if pack.runtime != "ollama":
             path = validate_local_data_file(
@@ -199,14 +213,14 @@ class ModelPackManager:
             )
             if not path.is_file():
                 raise ModelPackNotFoundError("Installed Polish GGUF was not found.")
-            _require_gguf(path)
+            _verify_exact_gguf(path, expected_digest, expected_size)
             self._model_files[pack.pack_id] = path
             return path
 
         executable = self.writing_models.ollama_executable
         executable = executable or shutil.which("ollama") or shutil.which("ollama.exe")
         if not executable:
-            raise ModelPackNotFoundError("Ollama model storage is unavailable.")
+            raise ModelPackNotFoundError("Local AI storage is unavailable.")
         try:
             completed = subprocess.run(
                 [str(executable), "show", pack.model, "--modelfile"],
@@ -221,23 +235,50 @@ class ModelPackManager:
                 f"Could not locate the local GGUF: {exc}"
             ) from exc
         if completed.returncode != 0:
-            raise ModelPackNotFoundError("Ollama did not expose the local GGUF.")
+            raise ModelPackNotFoundError("Local AI did not expose its model file.")
         source = ""
         for line in completed.stdout.splitlines():
             if line.strip().upper().startswith("FROM "):
                 source = line.strip()[5:].strip().strip('"')
                 break
         if not source or not Path(source).is_absolute():
-            raise ModelPackSecurityError("Ollama returned an unsafe model path.")
+            raise ModelPackSecurityError("Local AI returned an unsafe model path.")
         try:
             path = validate_local_data_file(source, purpose="Polish model")
         except (OSError, RuntimeError, ValueError) as exc:
-            raise ModelPackSecurityError("Ollama model path failed validation.") from exc
+            raise ModelPackSecurityError("Local AI model path failed validation.") from exc
         if not path.is_file():
-            raise ModelPackNotFoundError("Ollama GGUF was not found.")
-        _require_gguf(path)
+            raise ModelPackNotFoundError("The local AI model file was not found.")
+        _verify_exact_gguf(path, expected_digest, expected_size)
         self._model_files[pack.pack_id] = path
         return path
+
+    def _model_blob_receipt(self, pack: PolishModelPack) -> tuple[str, int]:
+        if pack.runtime != "ollama":
+            return pack.manifest_digest, pack.size_bytes
+        manifest = self._load_verified_manifest()
+        raw = next(
+            (
+                value
+                for value in manifest["packs"]
+                if isinstance(value, dict) and value.get("id") == pack.pack_id
+            ),
+            None,
+        )
+        if raw is None:
+            raise ModelPackSecurityError("Signed model blob receipt is missing.")
+        digest = str(raw.get("model_blob_digest") or "").casefold()
+        try:
+            size = int(raw.get("model_blob_size"))
+        except (TypeError, ValueError) as exc:
+            raise ModelPackSecurityError("Signed model blob receipt is invalid.") from exc
+        if (
+            len(digest) != 64
+            or any(value not in "0123456789abcdef" for value in digest)
+            or not 1 <= size <= 64 * 1024**3
+        ):
+            raise ModelPackSecurityError("Signed model blob receipt is invalid.")
+        return digest, size
 
     def _pull_ollama(self, pack: PolishModelPack) -> None:
         free = shutil.disk_usage(Path.home()).free
@@ -248,7 +289,7 @@ class ModelPackManager:
         executable = self.writing_models.ollama_executable
         executable = executable or shutil.which("ollama") or shutil.which("ollama.exe")
         if not executable:
-            raise ModelPackDownloadError("Ollama is not installed.")
+            raise ModelPackDownloadError("The local AI service is not installed.")
         try:
             completed = subprocess.run(
                 [str(executable), "pull", pack.model],
@@ -261,8 +302,17 @@ class ModelPackManager:
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise ModelPackDownloadError(f"Local model download failed: {exc}") from exc
         if completed.returncode != 0:
-            detail = (completed.stderr or completed.stdout or "Ollama failed.").strip()
-            raise ModelPackDownloadError(f"Local model download failed: {detail[-500:]}")
+            detail = (completed.stderr or completed.stdout or "Local AI failed.").strip()
+            lowered = detail.casefold()
+            if any(
+                marker in lowered
+                for marker in ("connectex", "dial tcp", "connection", "timeout")
+            ):
+                raise ModelPackDownloadError(
+                    "Local AI download could not reach the model service. "
+                    "Check the internet connection and firewall, then retry."
+                )
+            raise ModelPackDownloadError("Local AI download failed. Retry from Settings.")
 
     def _download_file(
         self,
@@ -431,7 +481,7 @@ def _validate_manifest(manifest: object) -> None:
         raise ModelPackSecurityError("Polish model manifest must be an object.")
     if manifest.get("schema_version") != 1:
         raise ModelPackSecurityError("Unsupported Polish model manifest schema.")
-    if manifest.get("policy_version") not in {1, 2}:
+    if manifest.get("policy_version") not in {1, 2, 3}:
         raise ModelPackSecurityError("Unsupported Polish model policy.")
     packs = manifest.get("packs")
     if not isinstance(packs, list) or not packs:
@@ -469,14 +519,38 @@ def _parse_pack(raw: object) -> PolishModelPack:
         raise ModelPackSecurityError("Polish model pack limits are invalid.")
     if not backends:
         raise ModelPackSecurityError("Polish model pack has no runtime backend.")
+    if raw.get("validated") is not True:
+        raise ModelPackSecurityError(
+            "Polish model pack is not marked validated by the signed manifest."
+        )
+    model = str(raw.get("model") or "")
+    runtime = str(raw.get("runtime") or "")
+    if runtime == "ollama" and not _is_safe_ollama_tag(model):
+        raise ModelPackSecurityError("Signed Ollama model tag is unsafe.")
+    if runtime == "ollama":
+        blob_digest = str(raw.get("model_blob_digest") or "").casefold()
+        try:
+            blob_size = int(raw.get("model_blob_size"))
+        except (TypeError, ValueError) as exc:
+            raise ModelPackSecurityError(
+                "Signed Ollama model blob receipt is invalid."
+            ) from exc
+        if (
+            len(blob_digest) != 64
+            or any(value not in "0123456789abcdef" for value in blob_digest)
+            or not 1 <= blob_size <= 64 * 1024**3
+        ):
+            raise ModelPackSecurityError(
+                "Signed Ollama model blob receipt is invalid."
+            )
     return PolishModelPack(
         pack_id=pack_id,
         display_name=str(raw["display_name"])[:120],
-        model=str(raw["model"])[:120],
+        model=model,
         family=str(raw["family"])[:80],
         parameters=str(raw["parameters"])[:40],
         quantization=str(raw["quantization"])[:40],
-        runtime=str(raw["runtime"])[:40],
+        runtime=runtime[:40],
         manifest_digest=digest,
         size_bytes=size_bytes,
         min_ram_bytes=min_ram,
@@ -489,13 +563,95 @@ def _parse_pack(raw: object) -> PolishModelPack:
         version=str(raw.get("version") or "1")[:40],
         available=bool(raw.get("available", True)),
         installed=False,
-        validated=bool(raw.get("validated", False)),
+        validated=False,
+    )
+
+
+def _is_safe_ollama_tag(value: object) -> bool:
+    tag = str(value or "")
+    return bool(
+        tag
+        and tag == tag.strip()
+        and len(tag) <= 120
+        and ".." not in tag
+        and _SAFE_OLLAMA_TAG.fullmatch(tag)
+    )
+
+
+def _same_ollama_repository(candidate: str, canonical: str) -> bool:
+    candidate_repository, candidate_separator, _candidate_tag = candidate.partition(":")
+    canonical_repository, canonical_separator, _canonical_tag = canonical.partition(":")
+    return bool(
+        candidate_separator
+        and canonical_separator
+        and hmac.compare_digest(
+            candidate_repository.casefold(),
+            canonical_repository.casefold(),
+        )
+    )
+
+
+def _same_model_family(left: str, right: str) -> bool:
+    normalize = lambda value: re.sub(r"[^a-z0-9]+", "", str(value).casefold())
+    normalized_left = normalize(left)
+    normalized_right = normalize(right)
+    return bool(
+        normalized_left
+        and normalized_right
+        and hmac.compare_digest(normalized_left, normalized_right)
+    )
+
+
+def _ollama_receipt_matches(local: object, pack: PolishModelPack) -> bool:
+    try:
+        size = int(getattr(local, "size_bytes"))
+    except (AttributeError, TypeError, ValueError):
+        return False
+    digest = str(getattr(local, "digest", "") or "").casefold()
+    quantization = str(getattr(local, "quantization", "") or "")
+    family = str(getattr(local, "family", "") or "")
+    return bool(
+        hmac.compare_digest(digest, pack.manifest_digest.casefold())
+        and size == pack.size_bytes
+        and _same_quantization(quantization, pack.quantization)
+        and _same_model_family(family, pack.family)
+    )
+
+
+def _verified_ollama_model(
+    pack: PolishModelPack,
+    installed: Iterable[object],
+) -> object | None:
+    """Select the canonical tag, or an exact-receipt alias in its repository."""
+    exact: list[object] = []
+    aliases: list[object] = []
+    canonical = pack.model
+    for local in installed:
+        name = str(getattr(local, "name", "") or "")
+        if (
+            not _is_safe_ollama_tag(name)
+            or not _same_ollama_repository(name, canonical)
+            or not _ollama_receipt_matches(local, pack)
+        ):
+            continue
+        if hmac.compare_digest(name.casefold(), canonical.casefold()):
+            exact.append(local)
+        else:
+            aliases.append(local)
+    candidates = exact or aliases
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda value: (
+            len(str(getattr(value, "name", ""))),
+            str(getattr(value, "name", "")).casefold(),
+        ),
     )
 
 
 def _same_quantization(left: str, right: str) -> bool:
-    normalize = lambda value: str(value).replace("-", "_").casefold()
-    return hmac.compare_digest(normalize(left), normalize(right))
+    return hmac.compare_digest(str(left).strip(), str(right).strip())
 
 
 def _sha256(path: Path) -> str:
@@ -514,6 +670,22 @@ def _require_gguf(path: Path) -> None:
         raise ModelPackNotFoundError(f"Polish model could not be read: {exc}") from exc
     if magic != b"GGUF":
         raise ModelPackSecurityError("Polish model is not a GGUF file.")
+
+
+def _verify_exact_gguf(path: Path, digest: str, size: int) -> None:
+    _require_gguf(path)
+    try:
+        actual_size = path.stat().st_size
+    except OSError as exc:
+        raise ModelPackNotFoundError(f"Polish model could not be read: {exc}") from exc
+    if actual_size != int(size):
+        raise ModelPackSecurityError(
+            "Polish model blob size does not match the signed receipt."
+        )
+    if not hmac.compare_digest(_sha256(path), str(digest).casefold()):
+        raise ModelPackSecurityError(
+            "Polish model blob digest does not match the signed receipt."
+        )
 
 
 __all__ = [

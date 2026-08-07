@@ -1049,8 +1049,8 @@ def run_probe(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run every Manuscript tone on a full page and judge it locally")
-    parser.add_argument("--writer-model", default="qwen3:14b")
-    parser.add_argument("--judge-model", default="qwen2.5:14b")
+    parser.add_argument("--writer-model", default="gemma4:12b-it-q4_K_M")
+    parser.add_argument("--judge-model", default="gemma4:12b-it-q4_K_M")
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument(
         "--tones",

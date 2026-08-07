@@ -892,7 +892,11 @@ class CorrectionQualityGate:
             name for name, pattern in _RESIDUAL_CHECKS if pattern.search(text)
         )
         tone = TONE_CONTRACTS.get(command)
-        tone_verified = tone is None or not self._tone_violations(text, tone)
+        tone_violations = self._tone_violations(text, tone) if tone is not None else ()
+        # Every visible tone contract explicitly prohibits broken grammar.
+        # A stylistically plausible sentence with a known residual error has
+        # not passed that contract, even when no tone-specific regex fires.
+        tone_verified = tone is None or (not residual and not tone_violations)
         deductions = min(1.0, 0.18 * len(residual) + (0.25 if not tone_verified else 0.0))
         score = max(0.0, 1.0 - deductions)
         # `complete` keeps its plain meaning: nothing known is left wrong.

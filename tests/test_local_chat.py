@@ -72,7 +72,7 @@ def test_chat_uses_only_approved_excerpts_and_returns_structured_citations(
 
 def test_chat_requires_a_configured_local_model(tmp_path: Path):
     index, _path = _approved_index(tmp_path)
-    with pytest.raises(ValueError, match="local writing model"):
+    with pytest.raises(ValueError, match="Local AI is still getting ready"):
         ApprovedSourceChat().ask("Where does speech stay?", sources=index, model=" ")
 
 
@@ -148,7 +148,7 @@ def test_chat_does_not_retry_or_fall_back_after_local_failure(tmp_path: Path, mo
         raise OSError("local service stopped")
 
     monkeypatch.setattr("echo_link_core.local_transport._open_request", fail_once)
-    with pytest.raises(RuntimeError, match="Local source chat model unavailable"):
+    with pytest.raises(RuntimeError, match="Local source chat AI unavailable"):
         ApprovedSourceChat("http://127.0.0.1:11434").ask(
             "Where does speech stay?",
             sources=index,
@@ -165,7 +165,7 @@ def test_chat_rejects_invalid_local_model_responses(tmp_path: Path, monkeypatch,
         "echo_link_core.local_transport._open_request",
         lambda *_args, **_kwargs: _Response(payload),
     )
-    with pytest.raises(RuntimeError, match="Local source chat model"):
+    with pytest.raises(RuntimeError, match="Local source chat AI"):
         ApprovedSourceChat().ask(
             "Where does speech stay?",
             sources=index,

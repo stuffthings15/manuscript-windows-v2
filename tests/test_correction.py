@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from echo_link_core.accepted_inference import AcceptedInferenceCoordinator
 from echo_link_core.correction import (
     CorrectionPipeline,
     CorrectionResult,
@@ -11,6 +14,64 @@ from echo_link_core.correction import (
     deterministic_cleanup,
 )
 from echo_link_core.models import DictationMode, DictationSettings, OLLAMA_KEEP_ALIVE
+from echo_link_core.polish_types import (
+    ExecutionPlan,
+    GenerationResult,
+    PolishMode,
+    PolishTask,
+    RuntimeBackend,
+    RuntimeStatus,
+)
+
+
+class CoordinatorRuntime:
+    runtime_id = "test:dictation-shared"
+
+    def __init__(self, response="Dogs are good."):
+        self.response = response
+        self.requests = []
+        self.status_models = []
+
+    def generate(self, request):
+        self.requests.append(request)
+        return GenerationResult(
+            self.response,
+            request.plan.model,
+            RuntimeBackend.CUDA,
+            0.01,
+        )
+
+    def status(self, model, *, timeout=1.0):
+        self.status_models.append((model, timeout))
+        return RuntimeStatus(
+            model=model,
+            loaded=True,
+            backend=RuntimeBackend.CUDA,
+            model_bytes=4_000,
+            gpu_bytes=4_000,
+        )
+
+    def close(self):
+        pass
+
+
+def accepted_coordinator(response="Dogs are good."):
+    runtime = CoordinatorRuntime(response)
+    coordinator = AcceptedInferenceCoordinator(runtime)
+    plan = ExecutionPlan(
+        policy_version=8,
+        mode=PolishMode.AUTO,
+        task=PolishTask.PROOFREAD,
+        use_llm=True,
+        pack_id="gemma4-e4b-qat-v1",
+        model="gemma4:e4b-it-qat",
+        backend=RuntimeBackend.CUDA,
+        context_window=2048,
+        max_output_tokens=512,
+        require_full_gpu=True,
+    )
+    assert coordinator.accept_verified(plan)
+    return coordinator, runtime, plan
 
 
 class StubRefiner:
@@ -24,7 +85,7 @@ class StubRefiner:
         return {"qwen2.5:3b"}
 
 
-def test_correction_pipeline_preloads_the_selected_ai_model():
+def test_correction_pipeline_does_not_preload_a_configured_model_before_acceptance():
     calls = []
 
     class PreloadRefiner:
@@ -34,9 +95,45 @@ def test_correction_pipeline_preloads_the_selected_ai_model():
     settings = DictationSettings(ollama_model="gemma4:e4b-it-qat")
     pipeline = CorrectionPipeline(lambda: {}, settings, PreloadRefiner())
 
-    pipeline.preload(timeout=45.0)
+    assert pipeline.preload(timeout=45.0) is False
 
-    assert calls == [("gemma4:e4b-it-qat", 45.0)]
+    assert calls == []
+
+
+def test_correction_pipeline_preloads_only_the_accepted_ai_model():
+    coordinator, runtime, plan = accepted_coordinator()
+    settings = DictationSettings(ollama_model="gemma4:e2b-it-qat")
+    pipeline = CorrectionPipeline(lambda: {}, settings, coordinator)
+    pipeline.accept_model(plan.model)
+
+    assert pipeline.preload(timeout=45.0) is True
+
+    assert runtime.status_models == [(plan.model, 2.0)]
+
+
+def test_correction_pipeline_never_refines_with_an_unaccepted_configured_model():
+    calls = []
+
+    class RecordingRefiner:
+        def refine(self, text, *, model, **_kwargs):
+            calls.append((text, model))
+            return CorrectionResult("AI result.", "ollama")
+
+    settings = DictationSettings(
+        mode=DictationMode.ACCURACY,
+        append_trailing_space=False,
+        ollama_model="gemma4:e2b-it-qat",
+    )
+    pipeline = CorrectionPipeline(lambda: {}, settings, RecordingRefiner())
+
+    unaccepted = pipeline.correct("hello there")
+    with pytest.raises(ValueError, match="shared coordinator"):
+        pipeline.accept_model("gemma4:e4b-it-qat")
+    still_unaccepted = pipeline.correct("hello there")
+
+    assert unaccepted.text == "Hello there."
+    assert still_unaccepted.text == "Hello there."
+    assert calls == []
 
 
 def test_ollama_refiner_preload_uses_an_empty_prompt_and_five_minute_keep_alive(monkeypatch):
@@ -249,12 +346,13 @@ def test_snippet_command_returns_exact_local_content_without_refinement():
 
 
 def test_rejected_refinement_keeps_deterministic_text():
-    refiner = StubRefiner(CorrectionResult("Hello there.", "deterministic", "not available"))
+    coordinator, _runtime, plan = accepted_coordinator(response="")
     settings = DictationSettings(mode=DictationMode.ACCURACY, append_trailing_space=False)
-    pipeline = CorrectionPipeline(lambda: {}, settings, refiner)
+    pipeline = CorrectionPipeline(lambda: {}, settings, coordinator)
+    pipeline.accept_model(plan.model)
     result = pipeline.correct("hello there")
     assert result.text == "Hello there."
-    assert result.warning == "not available"
+    assert result.warning == "Local AI returned an invalid response."
 
 
 def test_meaning_guard_protects_numbers_and_paths():

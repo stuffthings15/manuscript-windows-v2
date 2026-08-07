@@ -155,3 +155,18 @@ def test_non_loopback_injected_assistant_is_blocked(app, tmp_path):
     assert assistant.calls == []
     assert "numeric loopback" in panel.assistant_status.text()
     panel.close()
+
+
+def test_document_assistant_has_no_unapproved_fallback_model(app, tmp_path):
+    assistant = FakeAssistant()
+    workspace = DocumentWorkspace(EchoLinkStore(tmp_path / "echo-link.db"))
+    panel = DocumentEditorPanel(workspace, writing_assistant=assistant)
+    document = workspace.create_document("Draft", "Current visible draft.")
+    panel.refresh_documents(select_id=document.id)
+
+    panel.assistant_command_buttons["Proofread"].click()
+    app.processEvents()
+
+    assert assistant.calls == []
+    assert "unavailable" in panel.assistant_status.text().casefold()
+    panel.close()

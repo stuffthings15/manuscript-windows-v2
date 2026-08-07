@@ -108,6 +108,9 @@ class ChildCorrection:
     def update_settings(self, _settings) -> None:
         pass
 
+    def preload(self, *, timeout: float) -> None:
+        del timeout
+
 
 class ChildInserter:
     def __init__(self, stage: str, marker: Path) -> None:
@@ -161,6 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Crash Manuscript at engine boundaries and verify recovery after relaunch."
     )
     parser.add_argument("--child-database")
+    parser.add_argument("--relaunch-database")
     parser.add_argument("--stage", choices=CRASH_STAGES)
     parser.add_argument("--marker")
     parser.add_argument("--output", type=Path)
@@ -196,6 +200,12 @@ def _crashing_child(database: Path, stage: str, marker: Path) -> int:
         correction=ChildCorrection(stage),
         inserter=ChildInserter(stage, marker),
     )
+    if settings.mode not in (DictationMode.FAST, DictationMode.DEVELOPER):
+        engine.accept_ai_plan(
+            pack_id="crash-probe-pack",
+            model="crash-probe-ai",
+            policy_version=1,
+        )
     if not engine.start_recording(
         target_window=WindowSnapshot(101, 202, "Crash probe target")
     ):
@@ -235,6 +245,52 @@ def _audio_files(directory: Path) -> list[str]:
     )
 
 
+def _relaunch_snapshot(database: Path) -> dict[str, object]:
+    """Open crash state exactly as a fresh app process would."""
+    store = EchoLinkStore(database)
+    return {
+        "recovery_items": store.list_recovery_items(),
+        "history_items": store.list_history(),
+    }
+
+
+def _run_relaunch_snapshot(
+    database: Path,
+    environment: dict[str, str],
+) -> tuple[dict[str, object], int, str]:
+    relaunched = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--relaunch-database",
+            str(database),
+        ],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    error = relaunched.stderr.strip()
+    if relaunched.returncode != 0:
+        return {"recovery_items": [], "history_items": []}, relaunched.returncode, error
+    try:
+        snapshot = json.loads(relaunched.stdout)
+    except (TypeError, ValueError) as exc:
+        return (
+            {"recovery_items": [], "history_items": []},
+            relaunched.returncode,
+            f"Invalid relaunch report: {exc}",
+        )
+    if not isinstance(snapshot, dict):
+        return (
+            {"recovery_items": [], "history_items": []},
+            relaunched.returncode,
+            "Invalid relaunch report type.",
+        )
+    return snapshot, relaunched.returncode, error
+
+
 def _run_stage(stage: str, directory: Path) -> dict[str, object]:
     directory.mkdir(parents=True, exist_ok=True)
     database = directory / "echo-link.db"
@@ -258,9 +314,17 @@ def _run_stage(stage: str, directory: Path) -> dict[str, object]:
     )
 
     marker_before_relaunch = _marker_count(marker)
-    first_rows = EchoLinkStore(database).list_recovery_items()
-    relaunched_store = EchoLinkStore(database)
-    rows = relaunched_store.list_recovery_items()
+    first_snapshot, first_relaunch_exit, first_relaunch_error = _run_relaunch_snapshot(
+        database,
+        environment,
+    )
+    second_snapshot, second_relaunch_exit, second_relaunch_error = _run_relaunch_snapshot(
+        database,
+        environment,
+    )
+    first_rows = list(first_snapshot.get("recovery_items", []))
+    rows = list(second_snapshot.get("recovery_items", []))
+    history_items = list(second_snapshot.get("history_items", []))
     marker_after_relaunch = _marker_count(marker)
     audio_files = _audio_files(directory)
     expected_exit, expected_status, expected_text, expected_insertions = EXPECTED[stage]
@@ -277,6 +341,8 @@ def _run_stage(stage: str, directory: Path) -> dict[str, object]:
     )
     checks = {
         "expected_exit": child.returncode == expected_exit,
+        "first_relaunch_opened": first_relaunch_exit == 0,
+        "second_relaunch_opened": second_relaunch_exit == 0,
         "single_recovery_row_or_none": len(rows) == (1 if expected_status else 0),
         "expected_recovery_status": actual_status == expected_status,
         "expected_recovery_text": actual_text == expected_text,
@@ -284,13 +350,16 @@ def _run_stage(stage: str, directory: Path) -> dict[str, object]:
         "expected_external_insertion_count": marker_before_relaunch == expected_insertions,
         "relaunch_did_not_insert_again": marker_after_relaunch == marker_before_relaunch,
         "relaunch_read_is_stable": first_rows == rows,
-        "history_empty": relaunched_store.list_history() == [],
+        "history_empty": history_items == [],
         "audio_files_empty": audio_files == [],
     }
     return {
         "stage": stage,
         "passed": all(checks.values()),
         "child_exit": child.returncode,
+        "first_relaunch_exit": first_relaunch_exit,
+        "second_relaunch_exit": second_relaunch_exit,
+        "relaunch_error": first_relaunch_error or second_relaunch_error,
         "checks": checks,
         "recovery_count": len(rows),
         "recovery_status": actual_status,
@@ -328,6 +397,14 @@ def run_crash_matrix(directory: str | Path | None = None) -> dict[str, object]:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.relaunch_database:
+        try:
+            snapshot = _relaunch_snapshot(Path(args.relaunch_database))
+        except Exception as exc:
+            print(f"Relaunch inspection failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 7
+        print(json.dumps(snapshot, sort_keys=True))
+        return 0
     if args.child_database:
         if not args.stage or not args.marker:
             return 2

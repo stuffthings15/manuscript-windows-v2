@@ -137,8 +137,11 @@ internal static partial class Program
                 ["ok"] = true,
                 ["protocol_version"] = ProtocolVersion,
                 ["runtime"] = "llama.cpp",
-                ["host_version"] = "2.0.0",
+                ["host_version"] = "2.1.0",
+                ["model_pack_id"] = configuration.ModelPackId,
+                ["model"] = configuration.ModelName,
                 ["backend"] = configuration.Backend,
+                ["context_window"] = configuration.ContextWindow,
             };
         }
         if (type == "shutdown")
@@ -148,19 +151,29 @@ internal static partial class Program
         }
         if (type == "status")
         {
+            RequirePlanIdentity(request, configuration, requirePack: false);
             RuntimeState state = await inference.StatusAsync(
                 TimeSpan.FromSeconds(BoundedDouble(request, "timeout_seconds", 1, 0.2, 5)));
             return StatusResponse(state);
         }
         if (type == "generate")
         {
+            RequirePlanIdentity(request, configuration, requirePack: true);
             GenerationResponse generated = await GenerateAsync(request, inference);
+            RuntimeState state = await inference.StatusAsync(TimeSpan.FromSeconds(2));
+            if (configuration.Backend != "cpu" && !state.FullGpuResident)
+            {
+                throw new InvalidOperationException(
+                    "llama.cpp did not retain full GPU residency. CPU/GPU spill was rejected.");
+            }
             return new()
             {
                 ["ok"] = true,
                 ["text"] = generated.Text,
                 ["model"] = configuration.ModelName,
                 ["backend"] = configuration.Backend,
+                ["full_gpu_resident"] = state.FullGpuResident,
+                ["gpu_bytes"] = state.GpuBytes,
                 ["input_tokens"] = generated.InputTokens,
                 ["output_tokens"] = generated.OutputTokens,
                 ["elapsed_seconds"] = generated.ElapsedSeconds,
@@ -168,6 +181,7 @@ internal static partial class Program
         }
         if (type == "acceptance_probe")
         {
+            RequirePlanIdentity(request, configuration, requirePack: true);
             return await AcceptanceProbeAsync(request, configuration, inference);
         }
         throw new ArgumentException("Unknown Polish host request type.");
@@ -272,7 +286,9 @@ internal static partial class Program
                 ["elapsed_seconds"] = timer.Elapsed.TotalSeconds,
                 ["correctness_passed"] = correctness,
                 ["protected_passed"] = protectedPassed,
+                ["model"] = configuration.ModelName,
                 ["backend"] = configuration.Backend,
+                ["full_gpu_resident"] = state.FullGpuResident,
                 ["reason"] = string.Join("; ", failures),
             };
         }
@@ -289,7 +305,9 @@ internal static partial class Program
                 ["elapsed_seconds"] = 0.0,
                 ["correctness_passed"] = false,
                 ["protected_passed"] = false,
+                ["model"] = configuration.ModelName,
                 ["backend"] = configuration.Backend,
+                ["full_gpu_resident"] = false,
                 ["reason"] = SafeError(error),
             };
         }
@@ -307,6 +325,36 @@ internal static partial class Program
         ["full_gpu_resident"] = state.FullGpuResident,
         ["load_elapsed_seconds"] = state.LoadElapsedSeconds,
     };
+
+    private static void RequirePlanIdentity(
+        JsonElement request,
+        HostConfiguration configuration,
+        bool requirePack)
+    {
+        string backend = RequiredString(request, "backend", 20);
+        if (!backend.Equals(configuration.Backend, StringComparison.Ordinal))
+        {
+            throw new UnauthorizedAccessException("Polish host backend identity mismatch.");
+        }
+        int context = BoundedInt(request, "context_window", 0, 512, 32768);
+        if (context != configuration.ContextWindow)
+        {
+            throw new UnauthorizedAccessException("Polish host context identity mismatch.");
+        }
+        string model = RequiredString(request, "model", 120);
+        if (!model.Equals(configuration.ModelName, StringComparison.Ordinal))
+        {
+            throw new UnauthorizedAccessException("Polish host model identity mismatch.");
+        }
+        if (requirePack)
+        {
+            string pack = RequiredString(request, "model_pack_id", 120);
+            if (!pack.Equals(configuration.ModelPackId, StringComparison.Ordinal))
+            {
+                throw new UnauthorizedAccessException("Polish host pack identity mismatch.");
+            }
+        }
+    }
 
     private static void Authenticate(JsonElement request, string expectedSecret)
     {
@@ -498,6 +546,7 @@ internal sealed record HostConfiguration(
     string RuntimeRoot,
     string ModelPath,
     string ModelRoot,
+    string ModelPackId,
     string ModelName,
     string Backend,
     int ParentProcessId,
@@ -566,6 +615,13 @@ internal sealed record HostConfiguration(
         }
         int idle = ParseBounded(values, "idle-seconds", 300, 60, 3600);
         int context = ParseBounded(values, "context-window", 4096, 512, 32768);
+        string modelPackId = Required(values, "model-pack-id");
+        if (
+            modelPackId.Length > 120
+            || modelPackId.Any(value => !char.IsLetterOrDigit(value) && value is not ('.' or '_' or '-')))
+        {
+            throw new ArgumentException("Polish host model pack ID is invalid.");
+        }
         string modelName = Required(values, "model-name");
         if (modelName.Length > 120)
         {
@@ -578,6 +634,7 @@ internal sealed record HostConfiguration(
             runtimeRoot,
             modelPath,
             modelRoot,
+            modelPackId,
             modelName,
             backend,
             parent,
@@ -756,6 +813,17 @@ internal sealed class LlamaServerRuntime : IAsyncDisposable
             }
             using JsonDocument document = JsonDocument.Parse(raw);
             JsonElement root = document.RootElement;
+            if (
+                !root.TryGetProperty("model", out JsonElement reportedModel)
+                || reportedModel.ValueKind != JsonValueKind.String
+                || !string.Equals(
+                    reportedModel.GetString(),
+                    _configuration.ModelName,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "llama.cpp returned the wrong model identity.");
+            }
             string candidate = root
                 .GetProperty("choices")[0]
                 .GetProperty("message")

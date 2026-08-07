@@ -73,6 +73,9 @@ class BlockingCorrection:
     def update_settings(self, _settings) -> None:
         pass
 
+    def preload(self, **_kwargs) -> None:
+        pass
+
 
 class InstantCorrection:
     def deterministic(self, raw_text: str, *_args) -> CorrectionResult:
@@ -82,6 +85,9 @@ class InstantCorrection:
         return CorrectionResult(f"corrected {raw_text}", "ollama")
 
     def update_settings(self, _settings) -> None:
+        pass
+
+    def preload(self, **_kwargs) -> None:
         pass
 
 
@@ -115,6 +121,11 @@ def _engine(tmp_path, correction, *, event_callback=None, level_callback=None):
         inserter=inserter,
         event_callback=event_callback,
         level_callback=level_callback,
+    )
+    engine.accept_ai_plan(
+        pack_id="gemma4-e4b-qat-v1",
+        model="gemma4:e4b-it-qat",
+        policy_version=8,
     )
     return engine, recorder, inserter
 
@@ -174,6 +185,11 @@ def test_refine_recording_preloads_ai_without_blocking_microphone(tmp_path):
 
     correction = PreloadingCorrection()
     engine, _recorder, _inserter = _engine(tmp_path, correction)
+    engine.accept_ai_plan(
+        pack_id="gemma4-e4b-qat-v1",
+        model="gemma4:e4b-it-qat",
+        policy_version=8,
+    )
     try:
         started = time.perf_counter()
         assert engine.start_recording(insert_result=False)

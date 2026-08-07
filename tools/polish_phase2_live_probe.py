@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from echo_link_core.polish_model_packs import ModelPackManager
+from echo_link_core.polish_hardware import POLISH_POLICY_VERSION
 from echo_link_core.polish_runtime import AdaptiveInferenceRuntime
 from echo_link_core.polish_runtime_packs import RuntimePackManager
 from echo_link_core.polish_types import (
@@ -39,13 +40,14 @@ def main() -> int:
             / "Manuscript.PolishHost.dll"
         ),
     )
+    pack = model_packs.get("gemma4-12b-q4-k-m-v1")
     plan = ExecutionPlan(
-        policy_version=1,
+        policy_version=POLISH_POLICY_VERSION,
         mode=PolishMode.BALANCED,
         task=PolishTask.PROOFREAD,
         use_llm=True,
-        pack_id="qwen3-14b-q4-k-m-v1",
-        model="qwen3:14b",
+        pack_id="gemma4-12b-q4-k-m-v1",
+        model=pack.model,
         backend=RuntimeBackend.CUDA,
         context_window=2048,
         max_output_tokens=128,
@@ -73,8 +75,7 @@ def main() -> int:
         prepared = runtime.prepare(plan, consent=False)
         evidence["prepared"] = prepared
         evidence["downgrade_reason"] = runtime.last_downgrade_reason
-        if not prepared:
-            raise RuntimeError(runtime.last_downgrade_reason or "Runtime did not prepare.")
+        evidence["runtime_id"] = runtime.runtime_id
         probe = runtime.acceptance_probe(plan)
         evidence["acceptance_probe"] = {
             "accepted": probe.accepted,
@@ -139,6 +140,7 @@ def main() -> int:
     finally:
         runtime.close()
     output = ROOT / "build" / "phase2-live-probe.json"
+    output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
         json.dumps(evidence, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

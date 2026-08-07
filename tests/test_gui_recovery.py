@@ -21,12 +21,17 @@ def app():
     return application
 
 
-def test_transcription_error_returns_record_button_to_ready_state(app, tmp_path):
+def test_transcription_error_keeps_record_button_ready_for_next_capture(app, tmp_path):
     window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
 
     window._handle_session_event(SessionEvent(SessionState.LISTENING, "Listening..."))
     window._handle_session_event(SessionEvent(SessionState.TRANSCRIBING, "Processing locally..."))
-    assert window.record_button.isEnabled() is False
+    assert window.record_button.text() == "Start recording"
+    assert window.record_button.isEnabled() is True
+
+    window._handle_session_event(SessionEvent(SessionState.REFINING, "AI processing..."))
+    assert window.record_button.text() == "Start recording"
+    assert window.record_button.isEnabled() is True
 
     window._handle_session_event(
         SessionEvent(SessionState.ERROR, "No speech was detected. Check the microphone and try again.")

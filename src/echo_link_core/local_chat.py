@@ -39,12 +39,14 @@ class ApprovedSourceChat:
         *,
         max_excerpts: int = 6,
         max_context_chars: int = 6_000,
+        inference=None,
     ) -> None:
         if not 1 <= int(max_excerpts) <= 20:
             raise ValueError("max_excerpts must be between 1 and 20.")
         if not 200 <= int(max_context_chars) <= 20_000:
             raise ValueError("max_context_chars must be between 200 and 20000.")
         self._transport = LoopbackJSONTransport(endpoint)
+        self._inference = inference
         self.max_excerpts = int(max_excerpts)
         self.max_context_chars = int(max_context_chars)
 
@@ -69,7 +71,7 @@ class ApprovedSourceChat:
             raise ValueError("Approve at least one local source first.")
         local_model = (model or "").strip()
         if not local_model:
-            raise ValueError("Choose a local writing model first.")
+            raise ValueError("Local AI is still getting ready.")
 
         matches = sources.search(query, limit=self.max_excerpts)
         citations = self._bounded_citations(matches)
@@ -77,32 +79,51 @@ class ApprovedSourceChat:
             raise ValueError("No approved source lines match this question.")
 
         prompt = _build_prompt(query, citations)
-        try:
-            payload = self._transport.post_json(
-                "/api/generate",
-                {
-                    "model": local_model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "keep_alive": OLLAMA_KEEP_ALIVE,
-                    "options": {
-                        "temperature": 0.0,
-                        "num_ctx": 8192,
-                        "num_predict": 768,
-                    },
-                },
+        if self._inference is not None:
+            generation = self._inference.generate_task(
+                prompt,
+                command="Summarize",
+                profile="General",
+                instruction=(
+                    "Answer the QUESTION using only the APPROVED LOCAL EXCERPTS. "
+                    "Cite factual claims with the supplied source IDs. If the "
+                    "excerpts do not answer the question, say so. Return only the answer."
+                ),
+                protected_terms=tuple(item.source_id for item in citations),
                 timeout=max(2.0, float(timeout)),
+                max_output_tokens=768,
+                model=local_model,
             )
-        except LocalTransportError as exc:
-            raise RuntimeError(f"Local source chat model unavailable: {exc}") from exc
-        if not isinstance(payload, dict):
-            raise RuntimeError("Local source chat model returned an invalid response.")
-        if payload.get("error"):
-            raise RuntimeError(f"Local source chat model error: {payload['error']}")
-        answer = str(payload.get("response") or "").strip()
+            answer = str(generation.text or "").strip()
+            result_model = str(generation.model or local_model).strip()
+        else:
+            try:
+                payload = self._transport.post_json(
+                    "/api/generate",
+                    {
+                        "model": local_model,
+                        "prompt": prompt,
+                        "stream": False,
+                        "keep_alive": OLLAMA_KEEP_ALIVE,
+                        "options": {
+                            "temperature": 0.0,
+                            "num_ctx": 8192,
+                            "num_predict": 768,
+                        },
+                    },
+                    timeout=max(2.0, float(timeout)),
+                )
+            except LocalTransportError as exc:
+                raise RuntimeError(f"Local source chat AI unavailable: {exc}") from exc
+            if not isinstance(payload, dict):
+                raise RuntimeError("Local source chat AI returned an invalid response.")
+            if payload.get("error"):
+                raise RuntimeError(f"Local source chat AI error: {payload['error']}")
+            answer = str(payload.get("response") or "").strip()
+            result_model = local_model
         if not answer:
-            raise RuntimeError("Local source chat model returned an empty answer.")
-        return LocalChatResult(answer, local_model, citations)
+            raise RuntimeError("Local source chat AI returned an empty answer.")
+        return LocalChatResult(answer, result_model, citations)
 
     def _bounded_citations(
         self,
