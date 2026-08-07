@@ -118,6 +118,16 @@ class WindowsSelectionReader:
                     # scope. The writer expressed no boundary, so the whole
                     # document is what they meant to have reviewed.
                     caret_only = not text.strip()
+                    # Where the caret actually is, before the scope grows to
+                    # the whole document. Two things need it. The badge belongs
+                    # beside the writer's cursor, not centred on a rectangle
+                    # covering every page. And the monitor keys "have I already
+                    # offered this?" on the anchor, so a whole-document capture
+                    # gave every click in the document the same key: the badge
+                    # appeared once and then never again, no matter where the
+                    # writer clicked, until they left Word and came back.
+                    caret_anchor = _selection_anchor(selected_range) if caret_only else None
+                    expanded_to_document = False
                     if not text.strip():
                         if not self.include_caret_sentence:
                             continue
@@ -159,6 +169,27 @@ class WindowsSelectionReader:
                                     ):
                                         selected_range = whole
                                         text = whole_text
+                                        expanded_to_document = True
+                                    elif (
+                                        isinstance(whole_text, str)
+                                        and len(whole_text) > self.max_characters
+                                    ):
+                                        # The document is longer than one
+                                        # capture can hold, so the review covers
+                                        # the caret's page and the rest is not
+                                        # offered. That is a real limit and the
+                                        # writer has to be able to find out: an
+                                        # essay reviewed as 3522 of 5203
+                                        # characters reported eight sections, all
+                                        # accepted, and paragraphs 9 and 10 came
+                                        # back untouched with nothing logged.
+                                        logger.warning(
+                                            "Writing HUD reviewing part of the "
+                                            "document: over %d characters, so "
+                                            "text outside this page is not "
+                                            "offered",
+                                            self.max_characters,
+                                        )
                             except Exception:
                                 if diagnostic:
                                     logger.exception(
@@ -194,7 +225,16 @@ class WindowsSelectionReader:
                                 logger.exception("Word page expansion failed")
                     if len(text) > self.max_characters:
                         continue
-                    anchor = _selection_anchor(selected_range)
+                    # Only when the scope grew to the whole document. A caret
+                    # widened to its own sentence still anchors on the sentence,
+                    # which is what an ordinary editor shows and what the tests
+                    # pin; it is the document-wide capture whose rectangle is
+                    # useless for placing a badge and identical on every click.
+                    anchor = (
+                        caret_anchor
+                        if (expanded_to_document and caret_anchor)
+                        else _selection_anchor(selected_range)
+                    )
                     if anchor is None:
                         if diagnostic:
                             logger.info("Word HUD candidate rejected no-anchor")
