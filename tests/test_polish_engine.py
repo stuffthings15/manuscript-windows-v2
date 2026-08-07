@@ -5425,3 +5425,29 @@ def test_a_repeated_modal_may_be_reduced_but_not_lost():
         "a pet can only be great when its needs are met",
         grammar_mode=True,
     )
+
+
+def test_guard_reconciliation_never_breaks_a_contraction():
+    """"shouldn't" is one word, not "shouldn" plus a stray "t".
+
+    Splitting on letters alone made "shouldn" a token one edit from "should",
+    so the source was rewritten to "should't" - which deleted the negation the
+    guard was about to count and refused a correct repair for reversing the
+    writer's meaning. A word carrying an apostrophe is never rewritten.
+    """
+    from echo_link_core.polish import (
+        _negation_count,
+        _normalize_contractions,
+        _reconcile_guard_vocabulary,
+    )
+
+    source = _normalize_contractions("They shouldnt chew shoes.")
+    candidate = _normalize_contractions("They should not chew shoes.")
+    reconciled = _reconcile_guard_vocabulary(source, candidate)
+    assert "should't" not in reconciled
+    assert _negation_count(reconciled) == _negation_count(candidate)
+    # The typo repair it exists for still works.
+    assert "could" in _reconcile_guard_vocabulary(
+        "the backyard cud work real good",
+        "the backyard could work really well",
+    )

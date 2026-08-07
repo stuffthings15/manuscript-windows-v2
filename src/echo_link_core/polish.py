@@ -5382,6 +5382,11 @@ _GUARD_VOCABULARY: frozenset[str] = frozenset(
 )
 
 
+# A word, contraction included. Letters alone split "shouldn't" into "shouldn"
+# and "t", and the first is one edit from "should".
+_GUARD_TOKEN = re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)*")
+
+
 def _reconcile_guard_vocabulary(source: str, candidate: str) -> str:
     """Spell a guard word in the source when the candidate shows what it was.
 
@@ -5411,9 +5416,15 @@ def _reconcile_guard_vocabulary(source: str, candidate: str) -> str:
     Words must also share a first letter. That is what separates a misspelling
     from a different word, and it is why "wether" cannot reach "neither".
     """
-    source_tokens = {value.casefold() for value in re.findall(r"[A-Za-z]+", source)}
+    # Contractions are one token. Splitting on letters alone made "shouldn" a
+    # token of its own, one edit from "should", so "They shouldn't chew shoes"
+    # was rewritten to "They should't chew shoes" - which deleted the negation
+    # the guard was about to count, and refused a correct repair for reversing
+    # the writer's meaning. A word carrying an apostrophe is never touched
+    # below: a contraction is not a misspelling of the bare modal inside it.
+    source_tokens = {value.casefold() for value in _GUARD_TOKEN.findall(source)}
     candidate_tokens = {
-        value.casefold() for value in re.findall(r"[A-Za-z]+", candidate)
+        value.casefold() for value in _GUARD_TOKEN.findall(candidate)
     }
     targets = tuple(
         word
@@ -5426,6 +5437,8 @@ def _reconcile_guard_vocabulary(source: str, candidate: str) -> str:
     def replace(match: re.Match[str]) -> str:
         token = match.group(0)
         folded = token.casefold()
+        if "'" in folded or "’" in folded:
+            return token
         if folded in _GUARD_VOCABULARY or len(folded) < 3:
             return token
         if folded in candidate_tokens:
@@ -5446,7 +5459,7 @@ def _reconcile_guard_vocabulary(source: str, candidate: str) -> str:
             replacement.capitalize() if token[:1].isupper() else replacement
         )
 
-    return re.sub(r"[A-Za-z]+", replace, source)
+    return _GUARD_TOKEN.sub(replace, source)
 
 
 def _misspelled_non_entity_starter(word: str) -> bool:
