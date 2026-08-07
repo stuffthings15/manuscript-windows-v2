@@ -5493,3 +5493,47 @@ def test_short_real_names_are_still_protected_entities():
 
     for name in ("ann", "tom", "ian", "bob", "joe", "sue", "kim", "mia", "amy"):
         assert _misspelled_non_entity_starter(name) is False, name
+
+
+def test_a_full_stop_followed_by_a_comma_is_repaired():
+    """"same shirt again., but it mainly wants" is punctuation nobody typed.
+
+    The writer's source ran two sentences together with a full stop; the model
+    rewrote the join as a comma clause and the original full stop survived
+    beside it, so the product damaged text it had otherwise corrected well.
+    """
+    from echo_link_core.selected_text import _repair_stranded_terminator
+
+    assert _repair_stranded_terminator(
+        "wearing the same shirt again., but it mainly wants food."
+    ) == "wearing the same shirt again, but it mainly wants food."
+    assert _repair_stranded_terminator("He left. , then returned.") == (
+        "He left, then returned."
+    )
+
+
+def test_abbreviations_keep_their_full_stop_before_a_comma():
+    """"etc., and" and "Mr. Smith, who" are correct English and must survive."""
+    from echo_link_core.selected_text import _repair_stranded_terminator
+
+    for value in (
+        "lights, heaters, filters, etc., and other equipment.",
+        "Bring a leash, e.g., a short one.",
+        "Ask Dr. Reyes, who runs the clinic.",
+    ):
+        assert _repair_stranded_terminator(value) == value, value
+
+
+def test_clock_abbreviations_keep_their_full_stop():
+    """"At 12:40 p.m., observers will test the alarm" is correct as written.
+
+    The full suite caught this: the first version of the repair turned
+    "p.m.," into "p.m,". A regression test, not a comment, keeps it caught.
+    """
+    from echo_link_core.selected_text import _repair_stranded_terminator
+
+    for value in (
+        "At 12:40 p.m., observers will test the alarm.",
+        "At 9:05 a.m., the vet arrives.",
+    ):
+        assert _repair_stranded_terminator(value) == value, value

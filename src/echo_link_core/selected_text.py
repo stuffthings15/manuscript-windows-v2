@@ -921,6 +921,7 @@ class LocalWritingAssistant:
             candidate = _safe_final_proofread(source, candidate, command, {})
         if command == "Caveman":
             candidate = _apply_safe_caveman_splits(candidate)
+        candidate = _repair_stranded_terminator(candidate)
         candidate = _restore_ui_label_case(source, candidate)
         if command in _PROOFREAD_CLEANUP_COMMANDS:
             candidate = _restore_proofread_style_options(source, candidate)
@@ -1855,6 +1856,39 @@ def _missing_immutable_tokens(source: str, candidate: str) -> tuple[str, ...]:
     expected = Counter(match.group(0).upper() for match in _IMMUTABLE_TOKEN.finditer(source))
     actual = Counter(match.group(0).upper() for match in _IMMUTABLE_TOKEN.finditer(candidate))
     return tuple((expected - actual).elements())
+
+
+# Abbreviations that legitimately end in a full stop and are then followed by a
+# comma: "etc., and", "e.g., a dog", "Mr. Smith, who". These must survive.
+_TERMINATOR_ABBREVIATIONS = frozenset(
+    {
+        "al", "am", "cf", "dr", "eg", "etc", "ie", "inc", "jr", "lt", "ltd",
+        "mr", "mrs", "ms", "no", "pm", "prof", "sr", "st", "vs",
+    }
+)
+_STRANDED_TERMINATOR = re.compile(r"([.!?])\s*,")
+
+
+def _repair_stranded_terminator(text: str) -> str:
+    """Collapse a sentence-ending mark that is followed by a comma.
+
+    The writer's "same shirt again. but it mainly wants" came back as "same
+    shirt again., but it mainly wants". The model rewrote the run-on as a
+    comma clause while the full stop from the source survived alongside it, so
+    the product introduced punctuation nobody typed into text it had otherwise
+    corrected well.
+
+    A full stop that really belongs to an abbreviation is kept, because
+    "etc., and" and "Mr. Smith, who" are correct English.
+    """
+    def repair(match: re.Match[str]) -> str:
+        preceding = re.search(r"[A-Za-z.]+$", text[: match.start()])
+        word = (preceding.group(0) if preceding else "").replace(".", "").casefold()
+        if word in _TERMINATOR_ABBREVIATIONS:
+            return match.group(0)
+        return ","
+
+    return _STRANDED_TERMINATOR.sub(repair, text)
 
 
 def _canonicalize_immutable_tokens(
