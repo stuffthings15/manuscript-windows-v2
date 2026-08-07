@@ -156,7 +156,32 @@ The fifteen that remain:
 | 2 | AI correction was not accepted |
 | 1 each | modal meaning changed + actor changed; added owner, they; prohibition changed; modal actor changed; changed protected content; AI output rejected |
 
-### The largest remaining class: a modal counted outside its own clause
+### The hedge class: fixed, and the diagnosis that was wrong
+
+**Corrected.** The note below blamed clause scope in `_negated_modal_count`.
+That was wrong, and the mistake is worth keeping: *both arms of that branch
+append a failure*, so scoping it would only have relabelled the refusal from
+"prohibition changed" to "modal meaning changed" and accepted nothing. The gate
+is `_modal_meaning_preserved`. Read the branch before believing a label.
+
+The real defect: the writer hedges an open-ended list - "some habitats does
+need maybe lights heaters filters or other equipments" - where the hedge says
+which items the list holds, not whether the sentence is true. Repairs keep that
+openness in words ("or other equipment", "things like lights") and the modal
+counter, which only sees literal modals, called each one a lost modal family.
+Essay 8 paragraph 5 was refused four times, including the attempt that wrote
+the hedge back as "things like" - the meaning preserved exactly and refused
+anyway.
+
+Fixed in `fd1f177` with a narrow exemption: the hedge has to follow a lexical
+verb, which is not a modal position, and the candidate has to keep the list
+open. Without the verb requirement it accepted "students may use the lab or
+other rooms" -> "students use the lab or other rooms". `have`/`has`/`had` are
+excluded because "you have may seen" is a garbled modal position rather than a
+hedged object. Essay 7 paragraph 5 is untouched and still refuses, as it
+should. Corpus: **186 of 200, errors 622 -> 12.**
+
+### The original, superseded diagnosis
 
 Four of the fifteen are `prohibition changed (missing may)`, and at least two of
 those are the guard being wrong. From `build/refusal-evidence.md`, essay 8
