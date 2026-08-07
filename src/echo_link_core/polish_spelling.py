@@ -430,10 +430,91 @@ def normalize_polish_text(text: str) -> str:
     return unicodedata.normalize("NFC", text)
 
 
+def _affix_condition_matches(condition: str, word: str, *, suffix: bool) -> bool:
+    """Whether a Hunspell affix condition matches the end (or start) of a word.
+
+    A condition is a run of single characters and bracketed classes, "[aeiou]"
+    or negated "[^aeiou]", and "." matches anything.
+    """
+    if not condition or condition == ".":
+        return True
+    tokens: list[tuple[bool, set[str]]] = []
+    index = 0
+    while index < len(condition):
+        if condition[index] == "[":
+            close = condition.find("]", index)
+            if close < 0:
+                return False
+            group = condition[index + 1 : close]
+            negated = group.startswith("^")
+            tokens.append((negated, set(group[1:] if negated else group)))
+            index = close + 1
+        else:
+            tokens.append((False, {condition[index]}))
+            index += 1
+    if len(tokens) > len(word):
+        return False
+    segment = word[-len(tokens) :] if suffix else word[: len(tokens)]
+    for character, (negated, allowed) in zip(segment, tokens):
+        if (character in allowed) == negated:
+            return False
+    return True
+
+
+def _load_affix_rules(path: Path) -> dict[str, list[tuple[str, str, str, str]]]:
+    """Read `en_US.aff` into {flag: [(kind, strip, add, condition), ...]}."""
+    rules: dict[str, list[tuple[str, str, str, str]]] = {}
+    try:
+        lines = path.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+    except OSError:
+        return rules
+    for line in lines:
+        parts = line.split()
+        # A rule line is "SFX flag strip add condition"; the header that
+        # precedes each block is "SFX flag cross_product count" and is skipped
+        # by requiring five fields.
+        if len(parts) < 5 or parts[0] not in {"SFX", "PFX"}:
+            continue
+        kind, flag, strip, add = parts[0], parts[1], parts[2], parts[3]
+        condition = parts[4]
+        if add == "0":
+            add = ""
+        if strip == "0":
+            strip = ""
+        # Morphological fields can follow the condition; they are not needed.
+        rules.setdefault(flag, []).append((kind, strip, add.split("/", 1)[0], condition))
+    return rules
+
+
+def _apply_affix(word: str, kind: str, strip: str, add: str, condition: str) -> str:
+    if kind == "SFX":
+        if not _affix_condition_matches(condition, word, suffix=True):
+            return ""
+        if strip and not word.endswith(strip):
+            return ""
+        return (word[: len(word) - len(strip)] if strip else word) + add
+    if not _affix_condition_matches(condition, word, suffix=False):
+        return ""
+    if strip and not word.startswith(strip):
+        return ""
+    return add + (word[len(strip) :] if strip else word)
+
+
 def _load_hunspell_words(path: Path) -> set[str]:
+    """Every form the dictionary describes, not just the entries it lists.
+
+    A Hunspell dictionary is a word list plus an affix file, and the flags
+    after each entry's slash say which affix rules it takes. Reading only the
+    list and discarding the flags left 48,262 base forms: the speller knew
+    "cat" but not "cats", "change" but not "changes", and did not know "after"
+    at all. Every spelling decision in the product inherited that - whether a
+    word is a typo, whether a repair is trustworthy, and the residual-error
+    count in the quality scorer, which was mostly plurals.
+    """
     lines = path.read_text(encoding="utf-8-sig").splitlines()
     if not lines:
         raise ValueError("Bundled Hunspell dictionary is empty.")
+    rules = _load_affix_rules(path.with_suffix(".aff"))
     words: set[str] = set()
     for line in lines[1:]:
         raw = line.strip()
@@ -442,11 +523,37 @@ def _load_hunspell_words(path: Path) -> set[str]:
         # Hunspell escapes literal slashes as "\/"; the first unescaped slash
         # starts the affix flags.
         value = raw.replace("\\/", "\0")
-        value = value.split("/", 1)[0].replace("\0", "/")
-        value = value.split("\t", 1)[0].strip()
-        folded = _dictionary_form(value)
-        if folded:
-            words.add(folded)
+        head, _, flags = value.partition("/")
+        stem = head.replace("\0", "/").split("\t", 1)[0].strip()
+        folded = _dictionary_form(stem)
+        if not folded:
+            continue
+        words.add(folded)
+        if not flags or not rules:
+            continue
+        flags = flags.split("\t", 1)[0].strip()
+        suffixed: list[str] = []
+        for flag in flags:
+            for kind, strip, add, condition in rules.get(flag, ()):
+                form = _apply_affix(folded, kind, strip, add, condition)
+                if not form:
+                    continue
+                derived = _dictionary_form(form)
+                if derived:
+                    words.add(derived)
+                    if kind == "SFX":
+                        suffixed.append(derived)
+        # A prefix may also attach to a form a suffix already made
+        # ("re" + "checked"), which is what Hunspell's cross-product allows.
+        for flag in flags:
+            for kind, strip, add, condition in rules.get(flag, ()):
+                if kind != "PFX":
+                    continue
+                for base in suffixed:
+                    form = _apply_affix(base, kind, strip, add, condition)
+                    derived = _dictionary_form(form) if form else ""
+                    if derived:
+                        words.add(derived)
     if len(words) < 10_000:
         raise ValueError("Bundled Hunspell dictionary is incomplete.")
     return words
