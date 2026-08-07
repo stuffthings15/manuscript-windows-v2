@@ -4,6 +4,50 @@ Rewritten 2026-08-06. Everything below is about `Manuscript/Windows Version 2`,
 which is its own git repository. The older `Manuscript/Windows` tree is
 superseded.
 
+## The skipped section, narrowed (2026-08-07)
+
+**Symptom, reported by the owner across three days:** the review skips sections
+- the counter goes 1 then 4 - and the card reads "No corrected text was
+returned. Keep the original text."
+
+**It is not the corrector.** Essay 1 was split into sections using the HUD's own
+`_group_sentence_suggestions`, on text with Word's carriage returns, and every
+one of the ten sections was then corrected by the real engine:
+`llm=True`, changed, all ten. Reproduce with the snippet in this file's history;
+it takes about two minutes and rules the engine out before anyone touches it.
+
+**Where it actually is.** That message comes from `rewrite_palette._set_suggested_text`
+(around line 2099) and fires only when *both* the original and the replacement
+are empty:
+
+    visible = replacement if replacement.strip() else original
+    if not visible.strip():
+        visible = "No corrected text was returned. Keep the original text."
+
+The live caller is line 1900, `self._set_suggested_text(str(suggestion.original), replacement)`.
+So the section arrives with an **empty `suggestion.original`**. It is an
+offsets/slicing bug in building the section, not a failed correction, and every
+minute spent on guards is a minute in the wrong file.
+
+**The Word-specific lead.** The three text views of the same document disagree:
+
+| view | characters |
+|---|---|
+| Word COM `Content.Text` | 5217 |
+| COM after `_word_visible_text_and_spans` | 5216 |
+| what the HUD captured over UI Automation | 5203 |
+
+Thirteen characters between the UIA text the suggestions are computed on and the
+COM text everything else uses. The document has ten `` and no `
+`, which is
+also why the review logs `paragraphs=1` for a ten-paragraph essay. Check whether
+a grouped section's span is being sliced against a different string from the one
+it was measured on.
+
+**Next step:** log `suggestion.original` length and span for each grouped section
+in `_analyze_suggestions`, run one Word review, and find the section whose span
+is non-empty but whose slice is not.
+
 ## The state in one paragraph
 
 The Word review loop works mechanically: badge, click, review each section,
