@@ -136,6 +136,56 @@ to 19 of 20 with a residual of zero. Figures in
 the four remaining `actor changed (missing it)` rows and the one `added owner,
 they` row are already addressed - re-run to confirm before quoting a new number.
 
+### Confirmed after fixes 11-13 (2026-08-06, later still)
+
+Re-ran `tools/model_coverage_probe.py` on an idle machine, which is the check
+the note above asks for. **185 of 200 paragraphs, errors 622 -> 13.** That
+number is now confirmed rather than projected.
+
+One claim above did not survive the re-run. Fixes 12 and 13 were expected to
+clear the `actor changed (missing it)` and `added owner, they` rows; they did
+not. Three `missing it` and the one `added owner, they` are still there.
+Evidence: `build/model-coverage-confirm-11-13.json`.
+
+The fifteen that remain:
+
+| count | reason |
+|---|---|
+| 4 | prohibition changed (missing may) |
+| 3 | actor changed (missing it) |
+| 2 | AI correction was not accepted |
+| 1 each | modal meaning changed + actor changed; added owner, they; prohibition changed; modal actor changed; changed protected content; AI output rejected |
+
+### The largest remaining class: a modal counted outside its own clause
+
+Four of the fifteen are `prohibition changed (missing may)`, and at least two of
+those are the guard being wrong. From `build/refusal-evidence.md`, essay 8
+paragraph 5:
+
+> **Writer:** ...it dont need batteries although although some habitats does
+> need **maybe** lights heaters filters or other equipments.
+>
+> **Refused:** It is not a movie, and it does not need batteries, although some
+> habitats do need lights, heaters, filters, or other equipment.
+
+The dropped `maybe` sits in the `although some habitats do need...` clause. The
+negation it is being judged against - `does not need batteries` - is in a
+different clause. The `elif` branch at `polish.py:779` calls
+`_negated_modal_count` on the whole normalised text, so any modal that moves
+anywhere in a text containing a negation is labelled a changed prohibition.
+Clause scope is the fix.
+
+The smoking gun is the fourth refusal of that same paragraph. The model wrote
+`do need **things like** lights, heaters...` - the hedge preserved, in different
+words - and was refused anyway, because the check counts the literal token and
+cannot see a hedge expressed any other way.
+
+**Do not narrow this without re-checking essay-7 p5.** That refusal is correct
+(`its needds is maybe MET` -> `its needs are met` turns a hedge into a claim)
+and it may rely on the same whole-text scope, so a clause-scoped rewrite could
+silently lose it. Run `tools/refusal_evidence_probe.py --essays 7,8` and
+confirm 7 still refuses and 8 no longer does, before and after.
+
 ### Two refusals that are correct, and one that is not
 
 Do not "fix" these two. They are the guards working:
