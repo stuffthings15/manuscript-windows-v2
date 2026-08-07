@@ -1308,3 +1308,100 @@ def test_protected_view_is_named_instead_of_asking_for_a_selection():
     assert _no_selection_message(ordinary) == (
         "No selected text was found. Highlight text and try again."
     )
+
+
+def _word_range_fake(monkeypatch, com_text):
+    """A minimal Word document whose Content.Text is exactly com_text."""
+    state = {"text": com_text, "assigned": []}
+
+    class _Content:
+        @property
+        def Text(self):
+            return state["text"]
+
+        @property
+        def End(self):
+            return len(state["text"])
+
+    class _Range:
+        def __init__(self, start, end):
+            self.start = start
+            self.end = end
+
+        @property
+        def Text(self):
+            return state["text"][self.start : self.end]
+
+        @Text.setter
+        def Text(self, value):
+            state["assigned"].append((self.start, self.end, value))
+            state["text"] = (
+                state["text"][: self.start] + value + state["text"][self.end :]
+            )
+
+    class _Document:
+        Name = "Document1"
+        Content = _Content()
+
+        def Activate(self):
+            pass
+
+        def Range(self, start, end):
+            return _Range(start, end)
+
+    class _Word:
+        ActiveDocument = _Document()
+
+        def Activate(self):
+            pass
+
+    monkeypatch.setattr(insertion, "_active_word_application", lambda: _Word())
+    return state
+
+
+def _replace_second_sentence(state):
+    captured, _spans = insertion._word_visible_text_and_spans(state["text"])
+    start = captured.index("Second")
+    record = SelectionRecord(
+        captured,
+        WindowSnapshot(10, 20, "Document1 - Word", "OpusApp"),
+        "document",
+        hashlib.sha256(captured.encode("utf-8")).hexdigest(),
+    )
+    return insertion._replace_word_document_range(
+        record,
+        expected_document_text=captured,
+        start=start,
+        end=len(captured),
+        expected_text=captured[start:],
+        new_text="Second corrected sentence.",
+    )
+
+
+def test_word_range_replacement_allows_a_non_breaking_space(monkeypatch):
+    """A non-breaking space is text, not an embedded object.
+
+    Essay 1 paragraph 3 contains one in "Bakersfield , United States". The
+    refusal treated every character UI Automation omits as an object, so a
+    correct correction reported "a range containing an object", was never
+    written back to the document, and the review then stalled on that section
+    and dropped to "0 of 0".
+    """
+    state = _word_range_fake(
+        monkeypatch, "First bad sentence.\rSecond bad\xa0sentence.\r"
+    )
+    assert _replace_second_sentence(state) is True
+    assert state["assigned"], "the corrected sentence was never written back"
+    assert "Second corrected sentence." in state["text"]
+
+
+def test_word_range_replacement_still_refuses_an_object_anchor(monkeypatch):
+    """U+0001 is where a shape or picture sits, and must still be refused.
+
+    Widening the rule above must not let the writer's artwork be overwritten.
+    """
+    state = _word_range_fake(
+        monkeypatch, "First bad sentence.\rSecond bad\x01sentence.\r"
+    )
+    assert _replace_second_sentence(state) is False
+    assert state["assigned"] == []
