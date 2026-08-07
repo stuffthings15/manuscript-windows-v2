@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
 )
 
 from echo_link_app.accessibility import set_accessible, update_status_label
+from echo_link_app.ai_status import user_ai_status
 from echo_link_app.theme import COLORS
 from echo_link_app.branding import APP_NAME, ICON_PNG
 from echo_link_core.paths import resource_path
@@ -60,6 +61,8 @@ from echo_link_core.writing_suggestions import (
 
 
 FILTERS = ("All", "Spelling", "Grammar", "Formatting", "Clarity")
+_REVIEW_MAX_CHARACTERS = 1_200
+_REVIEW_MAX_WORDS = 180
 logger = logging.getLogger(__name__)
 
 
@@ -94,7 +97,7 @@ class RewritePalette(QDialog):
     _CARD_MAX_WIDTH = 760
     _CARD_MAX_HEIGHT = 820
     _ASSISTANT_SIZE = QSize(620, 660)
-    # A cold Qwen load may use 90 seconds, followed by up to 30 seconds
+    # A cold local AI load may use 90 seconds, followed by up to 30 seconds
     # of generation. The HUD must not discard a valid late result early.
     _AI_TIMEOUT_MS = 120_000
 
@@ -165,6 +168,9 @@ class RewritePalette(QDialog):
         self._review_index = 0
         self._review_progress_total = 0
         self._review_progress_completed = 0
+        # Last counter string written to the log, so the progression is
+        # recorded once per change rather than on every repaint.
+        self._logged_progress = ""
         self._step_replacer: Callable[[str, object], bool] | None = None
         self._accepted_external_changes = False
         self._preview_base = ""
@@ -856,11 +862,21 @@ class RewritePalette(QDialog):
         self._user_opened = True
         self._target_marking_enabled = True
         if self._ai_proofread:
+            # The review card was populated by fast local rules while it was
+            # hidden behind the badge. Clear that placeholder before any AI
+            # loading view can reveal it as if it were the finished answer.
+            self.after_text.clear()
+            self.after_text.setPlaceholderText("AI correction is being prepared...")
+            self.after_text.setToolTip("AI correction is being prepared.")
             self._set_view("loading", activate=True)
             if self._request_ai_proofread_current():
                 return
         self._set_view("card", activate=True)
         self.apply_suggestion_button.setFocus(Qt.FocusReason.MouseFocusReason)
+
+    def open_current_capture(self) -> None:
+        """Open the already captured text without rereading the host application."""
+        self._open_from_badge()
 
     def _back_from_assistant(self) -> None:
         self._set_view("card" if self._review_suggestions else "badge", activate=True)
@@ -1060,6 +1076,7 @@ class RewritePalette(QDialog):
         self._refresh_decision_buttons()
 
     def show_result(self, text: str, message: str) -> None:
+        message = user_ai_status(message)
         self.set_busy(False)
         self._preview_base = text
         self._set_result_text(text)
@@ -1076,6 +1093,7 @@ class RewritePalette(QDialog):
         text: str,
         message: str,
     ) -> None:
+        message = user_ai_status(message)
         attempt = int(attempt_id)
         if attempt not in self._ai_attempts and attempt != self._active_ai_attempt_id:
             logger.info(
@@ -1157,6 +1175,7 @@ class RewritePalette(QDialog):
         suggestion_id: str,
         message: str,
     ) -> None:
+        message = user_ai_status(message)
         attempt = int(attempt_id)
         if attempt not in self._ai_attempts and attempt != self._active_ai_attempt_id:
             logger.info(
@@ -1202,6 +1221,7 @@ class RewritePalette(QDialog):
         QTimer.singleShot(0, self._request_next_ai_prefetch)
 
     def show_error(self, message: str) -> None:
+        message = user_ai_status(message)
         self.set_busy(False)
         if not self.after_text.toPlainText().strip():
             self._restore_visible_suggestion()
@@ -1515,16 +1535,19 @@ class RewritePalette(QDialog):
         """Retire a background prefetch attempt that never came back."""
         if attempt_id == self._active_ai_attempt_id:
             return
-        suggestion_id = self._ai_attempts.pop(attempt_id, "")
+        suggestion_id = self._ai_attempts.get(attempt_id, "")
         if not suggestion_id:
             return
-        self._ai_requested_ids.discard(suggestion_id)
         logger.info(
             "Writing HUD background AI attempt timed out attempt=%s suggestion=%s",
             attempt_id,
             suggestion_id,
         )
-        QTimer.singleShot(0, self._request_next_ai_prefetch)
+        self.show_sentence_error(
+            attempt_id,
+            suggestion_id,
+            "AI took too long. This section needs retry.",
+        )
 
     def show_sentence_progress(
         self,
@@ -1555,16 +1578,34 @@ class RewritePalette(QDialog):
             for suggestion_id in review_ids
             if suggestion_id and suggestion_id in self._ai_completed_ids
         )
+        active_ids = set(self._ai_attempts.values())
+        terminal_failed = sum(
+            1
+            for suggestion_id in review_ids
+            if (
+                suggestion_id
+                and suggestion_id in self._ai_failed_ids
+                and self._ai_auto_retry_counts.get(suggestion_id, 0) >= 1
+                and suggestion_id not in active_ids
+            )
+        )
         ready = self._review_progress_completed + prepared
+        progress = ready + terminal_failed
         total = max(
             self._review_progress_total,
             self._review_progress_completed + len(review_ids),
         )
-        remaining = max(0, total - ready)
+        remaining = max(0, total - progress)
         if remaining <= 0:
-            return ready, total, "All sections ready."
+            if terminal_failed:
+                return (
+                    progress,
+                    total,
+                    f"{ready} of {total} sections ready | {terminal_failed} needs retry.",
+                )
+            return progress, total, "All sections ready."
         if not self._ai_duration_samples:
-            return ready, total, (
+            return progress, total, (
                 f"Preparing {remaining} section"
                 f"{'s' if remaining != 1 else ''} in the background..."
             )
@@ -1576,7 +1617,7 @@ class RewritePalette(QDialog):
             if retrying
             else ""
         )
-        return ready, total, (
+        return progress, total, (
             f"{ready} of {total} sections ready | about {eta}s until all "
             f"sections are ready.{note}"
         )
@@ -1613,23 +1654,16 @@ class RewritePalette(QDialog):
         attempt_id = self._active_ai_attempt_id
         if not attempt_id or not suggestion_id:
             return
-        self._ai_attempts.pop(attempt_id, None)
-        self._active_ai_attempt_id = 0
-        self._active_ai_suggestion_id = ""
-        self._active_ai_background = False
-        self._ai_progress_timer.stop()
-        self._ai_requested_ids.discard(suggestion_id)
-        self.set_busy(False)
         logger.info(
             "Writing HUD AI request timed out attempt=%s suggestion=%s",
             attempt_id,
             suggestion_id,
         )
-        message = "AI took too long. No correction was shown. Click to retry."
-        self._set_status(message, assertive=True)
-        self._set_view("badge", activate=True, reposition=False)
-        self.badge_button.setToolTip(message)
-        self.badge_button.setAccessibleName(f"Manuscript error. {message}")
+        self.show_sentence_error(
+            attempt_id,
+            suggestion_id,
+            "AI took too long. This section needs retry.",
+        )
 
     def _cancel_active_ai_request(self) -> None:
         suggestion_id = self._active_ai_suggestion_id
@@ -1659,6 +1693,18 @@ class RewritePalette(QDialog):
             atomic = self._with_dictionary_spelling(text, atomic)
             self._suggestions = _group_sentence_suggestions(text, atomic)
             self._review_progress_total = len(self._suggestions)
+            self._logged_progress = ""
+            # The counter counts grouped sections, not paragraphs. When the
+            # two differ a reader sees "8" where the document has 10, which
+            # looks like sections went missing. Record both.
+            logger.info(
+                "Writing HUD review prepared sections=%d atomic=%d "
+                "paragraphs=%d characters=%d",
+                len(self._suggestions),
+                len(atomic),
+                len([part for part in text.split("\n\n") if part.strip()]),
+                len(text),
+            )
         except (RuntimeError, TypeError, ValueError) as exc:
             self._suggestions = ()
             self._review_progress_total = 0
@@ -1866,6 +1912,23 @@ class RewritePalette(QDialog):
             self._review_progress_completed + self._review_index + 1,
         )
         progress = f"{overall_position} of {overall_total}"
+        if progress != self._logged_progress:
+            # The counter is the only thing that shows a section was skipped.
+            # A user saw it go from 1 straight to 4 and the log said nothing,
+            # so record every change with the numbers it was built from.
+            previous = self._logged_progress or "start"
+            self._logged_progress = progress
+            logger.info(
+                "Writing HUD section counter %s -> %s "
+                "(completed=%d index=%d available=%d visible=%d total=%d)",
+                previous,
+                progress,
+                self._review_progress_completed,
+                self._review_index,
+                len(self._review_suggestions),
+                len(self._visible_suggestions),
+                self._review_progress_total,
+            )
         self.card_position.setText(progress)
         self.card_position.setAccessibleName(
             f"Current writing suggestion position, {progress}"
@@ -1894,6 +1957,7 @@ class RewritePalette(QDialog):
             self.suggestion_title.setText("AI correction not ready")
             self.after_heading.setText("AI correction not ready")
             self.after_text.clear()
+            self.after_text.setPlaceholderText("")
             self.after_text.setToolTip("")
             explanation = (
                 "This section does not have a finished AI correction yet. "
@@ -1952,6 +2016,9 @@ class RewritePalette(QDialog):
             # Never expose or enable the deterministic placeholder as an AI
             # result: a fast Accept here silently applied rules-only text.
             # Stay on the big card; only the controls lock while it finishes.
+            self.after_text.clear()
+            self.after_text.setPlaceholderText("AI correction is being prepared...")
+            self.after_text.setToolTip("AI correction is being prepared.")
             if suggestion_id == self._active_ai_suggestion_id:
                 self._active_ai_background = False
             elif (
@@ -2030,6 +2097,7 @@ class RewritePalette(QDialog):
         visible = replacement if replacement.strip() else original
         if not visible.strip():
             visible = "No corrected text was returned. Keep the original text."
+        self.after_text.setPlaceholderText("")
         self.after_text.setPlainText(visible)
         self.after_text.setToolTip(visible)
         visible_format = QTextCharFormat()
@@ -2166,10 +2234,14 @@ class RewritePalette(QDialog):
         had_changes = bool(getattr(suggestion, "has_changes", True))
         try:
             updated = _apply_sentence_suggestion(self._preview_base, suggestion)
-            pending = _shift_pending_sentence_suggestions(
+            remaining = (
+                self._review_suggestions[: self._review_index]
+                + self._review_suggestions[self._review_index + 1 :]
+            )
+            pending = _shift_remaining_sentence_suggestions(
                 updated,
                 suggestion,
-                self._review_suggestions[self._review_index + 1 :],
+                remaining,
             )
         except (RuntimeError, TypeError, ValueError) as exc:
             logger.warning("Writing HUD Accept failed: %s", exc)
@@ -2191,11 +2263,33 @@ class RewritePalette(QDialog):
         self._set_result_text(updated)
         self._dismissed_ids.clear()
         self._suggestions = pending
+        previously_pending = len(self._review_suggestions)
         self._review_progress_completed = min(
             self._review_progress_total,
-            self._review_progress_completed + self._review_index + 1,
+            self._review_progress_completed + 1,
         )
         self._review_index = 0
+        # If accepting one section removes more than one pending section, the
+        # counter jumps and the extra sections are never reviewed. That is
+        # invisible without this line.
+        dropped = previously_pending - 1 - len(pending)
+        logger.info(
+            "Writing HUD section accepted id=%s changed=%s pending %d -> %d "
+            "dropped=%d completed=%d of %d",
+            accepted_id or "none",
+            changed_now,
+            previously_pending,
+            len(pending),
+            dropped,
+            self._review_progress_completed,
+            self._review_progress_total,
+        )
+        if dropped:
+            logger.warning(
+                "Writing HUD dropped %d section(s) while accepting one; the "
+                "counter will skip ahead",
+                dropped,
+            )
         self._render_suggestions()
         self._update_series_progress()
         if pending:
@@ -2240,6 +2334,13 @@ class RewritePalette(QDialog):
             self._show_review_suggestion()
             self._set_current_review_status("Dismissed. Next text ready.")
             self._request_ai_proofread_current()
+            return
+        if self._step_replacer is not None:
+            self.finish_choice()
+            if self._accepted_external_changes:
+                self.applied.emit()
+            else:
+                self.unchanged.emit()
             return
         if self._preview_base != self.source_edit.toPlainText():
             self._set_status("Applying accepted sentences...")
@@ -2668,15 +2769,102 @@ def _token_diff_opcodes(
     return tuple(opcodes)
 
 
-def _review_spans(text: str, *, maximum_sentences: int = 5) -> tuple[tuple[int, int, int], ...]:
-    sentence_spans = _sentence_spans(text)
+def _bounded_review_units(
+    text: str,
+    spans: Sequence[tuple[int, int]],
+    *,
+    maximum_characters: int,
+    maximum_words: int,
+) -> tuple[tuple[int, int], ...]:
+    """Split unusually long sentences at word boundaries before AI routing."""
+    bounded: list[tuple[int, int]] = []
+    for start, end in spans:
+        cursor = start
+        while cursor < end:
+            chunk_end = min(end, cursor + maximum_characters)
+            words = tuple(re.finditer(r"\S+", text[cursor:end]))
+            if len(words) > maximum_words:
+                chunk_end = min(chunk_end, cursor + words[maximum_words - 1].end())
+            if chunk_end < end:
+                whitespace = max(
+                    text.rfind(" ", cursor + 1, chunk_end + 1),
+                    text.rfind("\t", cursor + 1, chunk_end + 1),
+                )
+                if whitespace > cursor:
+                    chunk_end = whitespace
+            trimmed_end = chunk_end
+            while trimmed_end > cursor and text[trimmed_end - 1].isspace():
+                trimmed_end -= 1
+            if trimmed_end <= cursor:
+                trimmed_end = min(end, max(cursor + 1, chunk_end))
+            bounded.append((cursor, trimmed_end))
+            cursor = chunk_end
+            while cursor < end and text[cursor].isspace():
+                cursor += 1
+    return tuple(bounded)
+
+
+def _compact_line_fragment(text: str, span: tuple[int, int]) -> bool:
+    value = text[span[0] : span[1]].strip()
+    return bool(
+        value
+        and len(value) <= 100
+        and len(value.split()) <= 12
+        and re.search(r"[.!?][\"'\u201d\u2019)\]]*$", value) is None
+    )
+
+
+def _review_spans(
+    text: str,
+    *,
+    maximum_sentences: int = 5,
+    maximum_characters: int = _REVIEW_MAX_CHARACTERS,
+    maximum_words: int = _REVIEW_MAX_WORDS,
+) -> tuple[tuple[int, int, int], ...]:
+    sentence_spans = _bounded_review_units(
+        text,
+        _sentence_spans(text),
+        maximum_characters=maximum_characters,
+        maximum_words=maximum_words,
+    )
     if not sentence_spans:
         return ()
     reviews: list[tuple[int, int, int]] = []
     current: list[tuple[int, int]] = []
     for sentence in sentence_spans:
         gap = text[current[-1][1] : sentence[0]] if current else ""
-        paragraph_break = bool(current and ("\n" in gap or "\r" in gap))
+        line_break = bool(current and ("\n" in gap or "\r" in gap))
+        blank_line = bool(
+            line_break
+            and re.search(r"(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)", gap)
+        )
+        # Two short unpunctuated lines used to be reviewed as one unit, on the
+        # theory that they were one wrapped fragment. In a document they are
+        # not: a line break in the captured text is there because the writer
+        # pressed Enter. Reviewing them together means the replacement is one
+        # run of text, and applying it silently deletes the break - essay 2's
+        # title and subtitle came back fused into a single line, ten paragraphs
+        # in and nine out.
+        #
+        # Kept only where the gap is not a real paragraph mark. Word hands UI
+        # Automation a carriage return per paragraph, so in practice that means
+        # this no longer fires there, which is the intent.
+        compact_line_pair = bool(
+            line_break
+            and not blank_line
+            and "\r" not in gap
+            and "\n" not in gap
+            and _compact_line_fragment(text, current[-1])
+            and _compact_line_fragment(text, sentence)
+        )
+        paragraph_break = line_break and not compact_line_pair
+        size_overload = bool(
+            current
+            and (
+                sentence[1] - current[0][0] > maximum_characters
+                or len(text[current[0][0] : sentence[1]].split()) > maximum_words
+            )
+        )
         dependent_fragment = bool(
             re.match(
                 r"\s*(?:Because\b|While\b|Which\s+(?:caus|result|lead|made|was|were|"
@@ -2692,7 +2880,10 @@ def _review_spans(text: str, *, maximum_sentences: int = 5) -> tuple[tuple[int, 
             and not dependent_fragment
             and _review_literal_burden(text[current[0][0] : sentence[1]]) > 6
         )
-        if (
+        if size_overload:
+            reviews.append((current[0][0], current[-1][1], len(current)))
+            current = []
+        elif (
             current
             and not paragraph_break
             and len(current) >= maximum_sentences
@@ -2792,23 +2983,27 @@ def _apply_sentence_suggestion(text: str, suggestion: object) -> str:
     return text[: suggestion.start] + suggestion.replacement + text[suggestion.end :]
 
 
-def _shift_pending_sentence_suggestions(
+def _shift_remaining_sentence_suggestions(
     updated: str,
     accepted: object,
-    pending: Sequence[object],
+    remaining: Sequence[object],
 ) -> tuple[_SentenceSuggestion, ...]:
     if not isinstance(accepted, _SentenceSuggestion):
         raise TypeError("Expected a full-sentence suggestion.")
     delta = len(accepted.replacement) - len(accepted.original)
     digest = hashlib.sha256(updated.encode("utf-8")).hexdigest()[:20]
     shifted: list[_SentenceSuggestion] = []
-    for item in pending:
+    for item in remaining:
         if not isinstance(item, _SentenceSuggestion):
             raise TypeError("Expected full-sentence suggestions.")
-        if item.start < accepted.end:
+        if item.end <= accepted.start:
+            start = item.start
+            end = item.end
+        elif item.start >= accepted.end:
+            start = item.start + delta
+            end = item.end + delta
+        else:
             raise ValueError("Pending sentence suggestions overlap accepted text.")
-        start = item.start + delta
-        end = item.end + delta
         if updated[start:end] != item.original:
             raise ValueError("Pending sentence suggestion no longer matches the draft.")
         shifted.append(

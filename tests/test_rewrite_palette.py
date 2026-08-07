@@ -288,7 +288,20 @@ def test_review_spans_bound_one_punctuation_free_passage():
     assert all(left[1] <= right[0] for left, right in zip(spans, spans[1:]))
 
 
-def test_review_spans_group_short_unpunctuated_lines():
+def test_review_spans_keep_each_written_line_separate():
+    """Short unpunctuated lines used to be reviewed five at a time.
+
+    A review unit is replaced as one run of text, so a line break inside it
+    survives only if the model happens to write it back. It does not: essay 2's
+    title and subtitle were reviewed together and came back fused into one
+    line, ten paragraphs in and nine out. A break in the captured text is there
+    because the writer pressed Enter, and the review must not be able to delete
+    it.
+
+    The cost is more review cards for a list of short lines. That is the right
+    way round - a writer can click through cards, but cannot get a deleted
+    paragraph break back.
+    """
     source = "\n".join(
         (
             "first short item",
@@ -304,8 +317,8 @@ def test_review_spans_group_short_unpunctuated_lines():
 
     spans = _review_spans(source)
 
-    assert [count for _start, _end, count in spans] == [5, 3]
-    assert source[spans[0][0] : spans[0][1]].count("\n") == 4
+    assert len(spans) == 8
+    assert all(source[start:end].count("\n") == 0 for start, end, _count in spans)
 
 
 def test_sentence_splitter_does_not_treat_west_as_street_abbreviation():
