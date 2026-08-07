@@ -1596,6 +1596,34 @@ class EchoLinkWindow(QMainWindow):
                 record = self.engine.inserter.capture_selection()
             except RuntimeError as exc:
                 capture_error = exc
+        if (
+            record is None
+            and show_palette
+            and self.selected_text_record is not None
+            and self.rewrite_palette.isVisible()
+        ):
+            # The badge prepares a whole-document review the moment the caret
+            # lands, and the reuse branch above only fires while the palette is
+            # still showing the badge. Once it had moved to the card, pressing
+            # the shortcut re-read the source, found a bare caret rather than a
+            # selection, and called require_recapture - which threw away a
+            # review that was already built and left the writer looking at the
+            # first section with Replace greyed out and nothing advancing.
+            #
+            # A shortcut press is a request to review this document, never a
+            # request to discard the review of it that is already on screen.
+            current = active_window()
+            captured = self.selected_text_record.window
+            if (
+                current.handle == captured.handle
+                and current.process_id == captured.process_id
+            ):
+                logger.info(
+                    "Writing HUD capture found no new selection; keeping the "
+                    "review already open for this document"
+                )
+                self.rewrite_palette.open_current_capture()
+                return
         if record is None:
             exc = capture_error or RuntimeError(
                 "No editable text was found. Put the cursor in a document and try again."

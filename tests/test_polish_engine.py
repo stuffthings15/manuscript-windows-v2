@@ -5451,3 +5451,45 @@ def test_guard_reconciliation_never_breaks_a_contraction():
         "the backyard cud work real good",
         "the backyard could work really well",
     )
+
+
+def test_three_letter_function_word_typo_is_not_a_protected_name():
+    """"Wen somebody says" opens essay 1 with a typo, not with a person.
+
+    A four-character floor in _misspelled_non_entity_starter let "Wen" through
+    as a proper name, so it became an opaque immutable token. The model then
+    correctly wrote "When", the token was gone, and the whole 627-character
+    section was refused as changed protected content and fell back to the
+    deterministic rules with every typo in it intact.
+    """
+    from echo_link_core.polish import (
+        _misspelled_non_entity_starter,
+        _runtime_opaque_entities,
+    )
+
+    assert _misspelled_non_entity_starter("wen") is True
+
+    paragraph = (
+        "Wen somebody says A certain animul cant be a pett they usually is "
+        "speaking befor they lernt much bout it and in Bakersfield , United "
+        "States to be honest this this can be especialy true for a DOG."
+    )
+    entities = _runtime_opaque_entities(paragraph)
+    assert "Wen" not in entities
+    # The real place name in the same sentence is still protected, because the
+    # guard this narrows is the one that stops Malik becoming Mali.
+    assert "Bakersfield" in entities
+
+
+def test_short_real_names_are_still_protected_entities():
+    """Two edits is far too loose at three letters; one deletion is not.
+
+    "Ann" is a single substitution from "and", so any rule that merely lowered
+    the length floor would have stopped treating it as a name. Only a letter
+    dropped from the function word counts, and no deletion from "and" spells
+    "ann".
+    """
+    from echo_link_core.polish import _misspelled_non_entity_starter
+
+    for name in ("ann", "tom", "ian", "bob", "joe", "sue", "kim", "mia", "amy"):
+        assert _misspelled_non_entity_starter(name) is False, name

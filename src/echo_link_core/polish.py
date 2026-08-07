@@ -5478,8 +5478,29 @@ def _misspelled_non_entity_starter(word: str) -> bool:
     name that is would be caught by every other guard in the validator. A typo
     of one is common in exactly the text this product exists for.
     """
-    if len(word) < 4:
+    if len(word) < 3:
         return False
+    if len(word) == 3:
+        # "Wen somebody says" opens essay 1, and the four-character floor below
+        # let it through as a proper name. It was then frozen as an opaque
+        # token, the model correctly wrote "When", the token vanished, and the
+        # whole 627-character section was refused as changed protected content.
+        #
+        # Two edits is far too loose at this length - "Ann" is one substitution
+        # from "and" - so a three-letter word only counts as a typo when a
+        # single letter was dropped from the function word. "when" minus "h" is
+        # "wen"; no deletion from "and" produces "ann", so real short names are
+        # still protected.
+        return any(
+            starter[:1] == word[:1]
+            and len(starter) == len(word) + 1
+            and any(
+                starter[:index] + starter[index + 1 :] == word
+                for index in range(len(starter))
+            )
+            for starter in _NON_ENTITY_STARTERS
+            if len(starter) >= 4
+        )
     return any(
         starter[:1] == word[:1]
         and abs(len(starter) - len(word)) <= 2

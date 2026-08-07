@@ -572,7 +572,7 @@ class LocalWritingAssistant:
         candidate = _canonicalize_immutable_tokens(candidate, protected, replacements)
         candidate = _restore_candidate_semantics(source, candidate, replacements)
         if _immutable_tokens_changed(protected, candidate, replacements):
-            _log_immutable_token_mismatch("initial", protected, candidate)
+            _log_immutable_token_mismatch("initial", protected, candidate, replacements)
             initial_missing_tokens = _missing_immutable_tokens(protected, candidate)
             retry_prompt = (
                 "RETRY RULE: Your prior answer changed immutable tokens. Regenerate from the "
@@ -594,7 +594,7 @@ class LocalWritingAssistant:
             candidate = _canonicalize_immutable_tokens(candidate, protected, replacements)
             candidate = _restore_candidate_semantics(source, candidate, replacements)
             if _immutable_tokens_changed(protected, candidate, replacements):
-                _log_immutable_token_mismatch("retry", protected, candidate)
+                _log_immutable_token_mismatch("retry", protected, candidate, replacements)
                 missing_tokens = _missing_immutable_tokens(protected, candidate)
                 final_retry_prompt = (
                     "FINAL RETRY RULE: Your last answer improved but still omitted protected tokens. "
@@ -615,7 +615,7 @@ class LocalWritingAssistant:
                 candidate = _canonicalize_immutable_tokens(candidate, protected, replacements)
                 candidate = _restore_candidate_semantics(source, candidate, replacements)
                 if _immutable_tokens_changed(protected, candidate, replacements):
-                    _log_immutable_token_mismatch("final-retry", protected, candidate)
+                    _log_immutable_token_mismatch("final-retry", protected, candidate, replacements)
                     # Three prompts have now asked for the token and not got it.
                     # Keep the writer's own sentence for the clause that holds
                     # it rather than throwing the whole corrected section away.
@@ -1671,19 +1671,53 @@ def _immutable_token_mismatch_count(source: str, candidate: str) -> int:
     return sequence_errors + malformed
 
 
-def _log_immutable_token_mismatch(stage: str, source: str, candidate: str) -> None:
-    """Log token labels only; never write source or generated user text."""
+def _protected_value_shape(value: str) -> str:
+    """Describe a protected value without repeating it.
+
+    Reading "expected two tokens" off the log and then reading the paragraph
+    accounted for only one of them, and there was no way to tell which rule had
+    added the other without instrumenting a build. The shape is enough to name
+    the rule - a number, a URL, a name, a vocabulary term - and it carries no
+    words the writer typed.
+    """
+    text = str(value)
+    if not text:
+        return "empty"
+    if "://" in text:
+        kind = "url"
+    elif re.fullmatch(r"[\d,.:_-]+", text):
+        kind = "number"
+    elif text[:1].isupper():
+        kind = "name"
+    else:
+        kind = "term"
+    return f"{kind}({len(text)})"
+
+
+def _log_immutable_token_mismatch(
+    stage: str,
+    source: str,
+    candidate: str,
+    replacements: dict[str, str] | None = None,
+) -> None:
+    """Log token labels and value shapes only; never source or generated text."""
     expected = tuple(
         match.group(0).upper() for match in _IMMUTABLE_TOKEN.finditer(source)
     )
     actual = tuple(
         match.group(0).upper() for match in _INTERNAL_TOKEN_LIKE.finditer(candidate)
     )
+    shapes = {
+        token: _protected_value_shape(value)
+        for token, value in sorted((replacements or {}).items())
+    }
     logger.warning(
-        "Writing correction protected-token mismatch stage=%s expected=%s actual=%s",
+        "Writing correction protected-token mismatch stage=%s expected=%s "
+        "actual=%s shapes=%s",
         stage,
         expected,
         actual,
+        shapes,
     )
 
 

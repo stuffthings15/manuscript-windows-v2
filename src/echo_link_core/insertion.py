@@ -55,6 +55,15 @@ _WORD_COM_NOT_APPLICABLE = object()
 # two never matched, every offset after it was out by one, and Replace Text
 # refused a document the writer had not touched.
 _WORD_UIA_OMITTED_CHARACTERS = frozenset({chr(0x01), chr(0xA0)})
+# Only U+0001 actually stands for something that is not text. Refusing every
+# range that merely contained a non-breaking space threw away correct
+# corrections: essay 1 paragraph 3 has one in "Bakersfield , United States",
+# so Replace Text reported "a range containing an object", the accept was
+# never applied, and the review then stalled on that section and dropped to
+# "0 of 0". The span builder above already skips both characters, so the
+# offsets are right either way; this set decides only what is unsafe to
+# overwrite.
+_WORD_OBJECT_ANCHORS = frozenset({chr(0x01)})
 
 
 class _LastInputInfo(ctypes.Structure):
@@ -469,7 +478,7 @@ def _replace_word_document_range(
         raw_range = str(content.Text or "")[raw_start:raw_end]
         if any(
             character in raw_range
-            for character in _WORD_UIA_OMITTED_CHARACTERS
+            for character in _WORD_OBJECT_ANCHORS
         ):
             logger.warning(
                 "Word COM range replacement refused a range containing an object"
