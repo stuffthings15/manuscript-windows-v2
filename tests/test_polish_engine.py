@@ -5537,3 +5537,32 @@ def test_clock_abbreviations_keep_their_full_stop():
         "At 9:05 a.m., the vet arrives.",
     ):
         assert _repair_stranded_terminator(value) == value, value
+
+
+def test_wether_becomes_whether():
+    """Essay 1 keeps "Wether in Bakersfield" through every run.
+
+    "wether" is a castrated ram, so it is a real word and no speller will ever
+    flag it - the same blind spot that leaves "cud" and "esay" alone. Only a
+    deterministic repair fires on every run.
+    """
+    from echo_link_core.selected_text import _repair_wether
+
+    assert _repair_wether("Wether in Bakersfield, housing size all change.") == (
+        "Whether in Bakersfield, housing size all change."
+    )
+    assert _repair_wether("it depends wether you live there") == (
+        "it depends whether you live there"
+    )
+
+
+def test_the_animal_wether_is_left_alone():
+    """The conjunction never takes an article; the ram usually does."""
+    from echo_link_core.selected_text import _repair_wether
+
+    for value in (
+        "The wether grazed beside the fence.",
+        "a wether is a castrated ram",
+        "two wethers were sold",
+    ):
+        assert _repair_wether(value) == value, value
