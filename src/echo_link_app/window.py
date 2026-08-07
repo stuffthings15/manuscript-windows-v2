@@ -2349,6 +2349,7 @@ class EchoLinkWindow(QMainWindow):
             model,
             profile,
             protected_terms,
+            self.selected_text_record.text or "",
         )
         with self._palette_ai_lock:
             if self._palette_ai_shutdown:
@@ -2393,6 +2394,7 @@ class EchoLinkWindow(QMainWindow):
             model,
             profile,
             protected_terms,
+            document_text,
         ) = job
         started_at = time.monotonic()
         runtime_done = threading.Event()
@@ -2437,6 +2439,10 @@ class EchoLinkWindow(QMainWindow):
                 # tokens on full-page HUD reviews.
                 "instruction": "",
                 "protected_terms": protected_terms,
+                # The whole capture, not just this section. A word that occurs
+                # once in the document is an ordinary word the writer
+                # capitalised, not a place; a section on its own cannot tell.
+                "document": document_text,
                 "timeout": hud_timeout,
                 "keep_alive": OLLAMA_KEEP_ALIVE,
                 "context_window": 4096,

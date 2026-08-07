@@ -8,6 +8,7 @@ from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -1344,7 +1345,7 @@ class PolishEngine:
             dict.fromkeys(
                 (
                     *request.protected_terms,
-                    *_runtime_opaque_entities(normalized),
+                    *_runtime_opaque_entities(normalized, request.document),
                     *_runtime_temporal_fact_phrases(deterministic.text),
                     *(
                         _runtime_negated_constraint_phrases(deterministic.text)
@@ -2101,7 +2102,7 @@ class PolishEngine:
                             for value in request.protected_terms
                             if value in source
                         ),
-                        *_runtime_opaque_entities(source),
+                        *_runtime_opaque_entities(source, request.document),
                         *_runtime_temporal_fact_phrases(seed),
                         *(
                             _runtime_negated_constraint_phrases(seed)
@@ -3053,6 +3054,7 @@ class PolishWritingAssistantAdapter:
         profile: str = "General",
         protected_terms=(),
         timeout: float = 30.0,
+        document: str = "",
         **_ignored,
     ) -> WritingResult:
         mode = PolishMode.coerce(self.mode_provider())
@@ -3075,6 +3077,7 @@ class PolishWritingAssistantAdapter:
                     protected_terms=protected,
                     manual=True,
                     download_consent=consent,
+                    document=document,
                     plan_callback=plan_callback,
                 )
             )
@@ -3152,6 +3155,7 @@ class PolishWritingAssistantAdapter:
                     proofread is not None
                     and command in _STAGED_STYLE_COMMANDS
                 ),
+                document=document,
                 plan_callback=plan_callback,
             )
         )
@@ -6231,7 +6235,41 @@ def _obligation_counter(text: str) -> Counter[str]:
     return Counter(values)
 
 
-def _named_entities(text: str) -> set[str]:
+@lru_cache(maxsize=1)
+def _entity_dictionary():
+    """One shared dictionary. Warming it is expensive; this is called per name."""
+    from .polish_spelling import EnglishDictionary
+
+    return EnglishDictionary()
+
+
+@lru_cache(maxsize=512)
+def _document_occurrences(word: str, document: str) -> int:
+    return len(re.findall(rf"(?<!\w){re.escape(word)}(?!\w)", document, re.IGNORECASE))
+
+
+def _capitalised_ordinary_word(value: str, document: str) -> bool:
+    """Is this capitalised single word an ordinary word rather than a name?
+
+    Measured over the twenty-essay corpus: place names occur 2 to 6 times in a
+    document and never exactly once, while 14 of the 20 ordinary words wrongly
+    frozen as names occur exactly once. Dictionary membership alone is not
+    enough - Netherlands, Peru, Malta, France and Utrecht are all in the
+    bundled word list - and "appears lowercase elsewhere" fails backwards,
+    because Therefore never does and Utrecht always does. Both were tried and
+    measured; see tools/entity_frequency_probe.py.
+    """
+    if not document or " " in value:
+        return False
+    if _document_occurrences(value, document) != 1:
+        return False
+    try:
+        return _entity_dictionary().contains(value.casefold())
+    except Exception:  # noqa: BLE001 - a missing dictionary must not unprotect names
+        return False
+
+
+def _named_entities(text: str, document: str = "") -> set[str]:
     ignored = {
         "A",
         "An",
@@ -6369,6 +6407,13 @@ def _named_entities(text: str) -> set[str]:
                 # writer misspelling one, or the list grows a typo at a time
                 # ("Teh" is already in it).
                 continue
+            if _capitalised_ordinary_word(value, document):
+                # "Therefore", "Watching", "Without" and "Weather" open a
+                # clause, get read as names, and are frozen as opaque tokens the
+                # model cannot write around. It drops them through every retry
+                # and the section falls back to the rules with each typo intact,
+                # which is why seven essays never corrected a single word.
+                continue
         repeated_lowercase = bool(
             re.search(
                 rf"(?<!\w){re.escape(value.casefold())}(?!\w)",
@@ -6454,8 +6499,8 @@ def _named_entity_matches_source_phrase(value: str, source: str) -> bool:
     return False
 
 
-def _maximal_named_entities(text: str) -> tuple[str, ...]:
-    values = _named_entities(text)
+def _maximal_named_entities(text: str, document: str = "") -> tuple[str, ...]:
+    values = _named_entities(text, document)
     values.update(match.group(0) for match in _HONORIFIC_NAME.finditer(text))
     values.update(match.group(0) for match in _VERSIONED_NAME.finditer(text))
     return tuple(
@@ -6474,7 +6519,7 @@ def _maximal_named_entities(text: str) -> tuple[str, ...]:
     )
 
 
-def _runtime_opaque_entities(text: str) -> tuple[str, ...]:
+def _runtime_opaque_entities(text: str, document: str = "") -> tuple[str, ...]:
     """Use opaque tokens only where they improve safety without hurting fluency.
 
     Single-word names need the strongest guard because small models sometimes
@@ -6488,7 +6533,7 @@ def _runtime_opaque_entities(text: str) -> tuple[str, ...]:
     }
     return tuple(
         value
-        for value in _maximal_named_entities(text)
+        for value in _maximal_named_entities(text, document)
         if " " not in value or value in versioned
     )
 

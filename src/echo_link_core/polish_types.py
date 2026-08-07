@@ -186,6 +186,11 @@ class CorrectionRequest:
     manual: bool = False
     download_consent: bool = False
     preverified_fallback_available: bool = False
+    # The whole document the text was taken from, when the caller has it. A
+    # section alone cannot answer "how often does this word occur", and that
+    # count is what separates a place name from an ordinary word the writer
+    # happened to capitalise at a clause opening.
+    document: str = ""
     plan_callback: Callable[[ExecutionPlan], None] | None = field(
         default=None,
         compare=False,

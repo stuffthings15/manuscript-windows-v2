@@ -5566,3 +5566,47 @@ def test_the_animal_wether_is_left_alone():
         "two wethers were sold",
     ):
         assert _repair_wether(value) == value, value
+
+
+def test_capitalised_ordinary_word_occurring_once_is_not_a_name():
+    """The seven essays that never corrected a word died on exactly this."""
+    from echo_link_core.polish import _runtime_opaque_entities
+
+    document = (
+        "Owning a pet is a big job. Therefore a family should think first. "
+        "A dog needs walks every day and a cat needs a clean box. "
+        "Money matters too, because vet bills add up over the years."
+    )
+    section = "Therefore a family should think first."
+    assert "Therefore" in _runtime_opaque_entities(section)
+    assert "Therefore" not in _runtime_opaque_entities(section, document)
+
+
+def test_place_names_stay_protected_when_the_document_is_known():
+    from echo_link_core.polish import _runtime_opaque_entities
+
+    document = (
+        "Utrecht is a city in the Netherlands. Utrecht has many canals. "
+        "People in the Netherlands cycle to work, and Utrecht is no different."
+    )
+    section = "Utrecht is a city in the Netherlands."
+    entities = _runtime_opaque_entities(section, document)
+    assert "Utrecht" in entities
+    assert "Netherlands" in entities
+
+
+def test_a_name_the_dictionary_does_not_know_stays_protected():
+    """Malik occurs once, so only dictionary membership keeps it safe."""
+    from echo_link_core.polish import _runtime_opaque_entities
+
+    document = "Malik walked the dog before school. It rained the whole way."
+    section = "Malik walked the dog before school."
+    assert "Malik" in _runtime_opaque_entities(section, document)
+
+
+def test_a_capitalised_word_used_twice_is_still_treated_as_a_name():
+    from echo_link_core.polish import _runtime_opaque_entities
+
+    document = "Weather is hard on animals. Weather also changes their walks."
+    section = "Weather is hard on animals."
+    assert "Weather" in _runtime_opaque_entities(section, document)
