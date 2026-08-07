@@ -373,3 +373,42 @@ def test_the_open_list_exemption_cannot_swallow_a_real_permission() -> None:
         assert not _modal_meaning_preserved(
             _normalised(source), _normalised(candidate), grammar_mode=True
         ), source
+
+
+def test_modal_actor_check_reads_the_reconciled_source_like_its_neighbours() -> None:
+    """One call site was judging against the writer's own spelling.
+
+    Every other counter in the validator compares reconciled text on both
+    sides. `_modal_subject_counter` read `meaning_reference`, which still
+    spells modals the way the writer typed them. "cud" is an ordinary English
+    word, so no speller will ever repair it and the prepared text keeps it -
+    the source then has no modal beside its subject, the candidate has "the
+    owner could write", and a correct repair reads as a modal attached to a new
+    actor. Essay 19 paragraph 6 was refused for it.
+    """
+    from echo_link_core.polish import MiniLMPolishClassifier, PolishValidator
+    from echo_link_core.polish_types import PolishTask
+
+    validator = PolishValidator(MiniLMPolishClassifier())
+    source = (
+        "on days wen everyting goes wrong the owner in Belize City cud write "
+        "a cahrt on the wall or ask a fammily member to help."
+    )
+    prepared = (
+        "on days wen everything goes wrong the owner in Belize City cud write "
+        "a chart on the wall or ask a family member to help."
+    )
+    candidate = (
+        "On days when everything goes wrong, the owner in Belize City could "
+        "write a chart on the wall or ask a family member to help."
+    )
+
+    result = validator.validate(
+        source,
+        candidate,
+        task=PolishTask.PROOFREAD,
+        grammar_mode=True,
+        prepared=prepared,
+    )
+
+    assert "modal actor changed" not in result.failures, result.failures

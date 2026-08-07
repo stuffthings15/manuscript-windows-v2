@@ -815,7 +815,16 @@ class PolishValidator:
                 source_obligation, candidate_obligation
             )
             failures.append(label)
-        if _modal_subject_counter(meaning_reference) != _modal_subject_counter(candidate):
+        # Reconciled text on both sides, like every other counter here. This
+        # one call site read `meaning_reference`, which still spells the
+        # writer's modals the way the writer typed them. "cud" is a real word,
+        # so no speller will ever repair it and `prepared` keeps it - the
+        # source then has no modal beside its subject, the candidate has
+        # "the owner could write", and a correct repair reads as a modal
+        # attached to a new actor. That refused the paragraph.
+        if _modal_subject_counter(normalized_source) != _modal_subject_counter(
+            normalized_candidate
+        ):
             failures.append("modal actor changed")
         if not _ordering_preserved(
             meaning_reference,
