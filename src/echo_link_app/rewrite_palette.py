@@ -1789,13 +1789,38 @@ class RewritePalette(QDialog):
         if not total:
             self.target_changed.emit(-1, -1)
             source = self._preview_base or self.source_edit.toPlainText()
-            self.suggestion_title.setText("No sentence available")
-            self.before_text.setPlainText(source)
-            self._set_suggested_text(source, source)
-            self.suggestion_explanation.setText(
-                "Capture editable text again."
-            )
-            self.card_position.setText("0 of 0")
+            # Two different things end up here and they need different words.
+            # Saying "No sentence available - capture editable text again" over
+            # two blank panes and "0 of 0" told a writer nothing: they could not
+            # tell a failed capture from a document with nothing to fix, and the
+            # empty Original pane read as the app having lost their text.
+            captured = bool(source.strip())
+            if captured:
+                self.suggestion_title.setText("Nothing to correct here")
+                self.suggestion_explanation.setText(
+                    "Manuscript found no spelling, grammar or punctuation "
+                    "problem in this text."
+                )
+                self.before_text.setPlainText(source)
+                self._set_suggested_text(source, source)
+                self.card_position.setText("0 of 0")
+            else:
+                self.suggestion_title.setText("No text was captured")
+                self.suggestion_explanation.setText(
+                    "Manuscript could not read any text to review. Click in "
+                    "your document, or select the part you want checked, and "
+                    "press the Writing HUD shortcut again. A document opened "
+                    "from email or a download may be read-only until you "
+                    "choose Enable Editing."
+                )
+                # Blank panes with headings look like lost text. Hide them and
+                # let the message carry the card.
+                self.before_text.setPlainText("")
+                self._set_suggested_text("", "")
+                self.card_position.setText("")
+            self.before_heading.setVisible(captured)
+            self.before_text.setVisible(captured)
+            self.after_heading.setVisible(captured)
             self.queue_heading.hide()
             self.queue_preview.hide()
             self.previous_button.setEnabled(False)
@@ -1805,6 +1830,11 @@ class RewritePalette(QDialog):
             self.dismiss_suggestion_button.setEnabled(False)
             self.apply_changes_button.setEnabled(bool(self.result_text) and not self._busy)
             return
+        # The empty-card branch above hides these, so restore them here rather
+        # than leaving a real suggestion with no Original pane.
+        self.before_heading.setVisible(True)
+        self.before_text.setVisible(True)
+        self.after_heading.setVisible(True)
         suggestion = self._review_suggestions[self._review_index]
         self._publish_current_target()
         sentence_count = int(getattr(suggestion, "sentence_count", 1))

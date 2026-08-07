@@ -14,6 +14,159 @@ local AI was barely running. Two separate faults were switching it off, both
 silently. Both are fixed. The corpus has not yet been re-measured with the AI
 actually working, and that measurement is the next thing anyone should do.
 
+## The section that says "corrected" and was not (2026-08-06, later)
+
+**A section whose AI answer was refused still shows a review card, still says
+Accept, and still counts as a completed section.** It carries the deterministic
+rules repair instead. From outside the engine - from the HUD, from a probe, from
+the harness report - it is indistinguishable from a full correction. A run of
+twenty paragraphs where nine were rules-only was reported as twenty successes,
+and nothing in the log said otherwise.
+
+That is the defect to hold in mind when reading any pass rate in this file.
+`tools/model_coverage_probe.py` is the measurement that cannot be fooled by it:
+one row per paragraph, `used_llm` and the guard that refused it.
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python.exe tools\model_coverage_probe.py --label after-my-change
+.\.venv\Scripts\python.exe tools\refusal_evidence_probe.py --essays 1,2
+```
+
+The second one writes the answer each guard refused next to the writer's text,
+which is the only way to judge whether a refusal was right. Read it before
+touching a guard.
+
+### What the refusals actually were
+
+Almost none were meaning errors. The meaning guards count exact words, and the
+writer's text is full of typos, so a model that spelled a tracked word correctly
+looked like a model that invented one:
+
+| writer | model | guard said |
+|---|---|---|
+| `befor` | before | date or ordering relationship changed (added before) |
+| `cud work real good` | could work really well | modal meaning changed |
+| `shoud` | should | obligation strength changed (added should) |
+| `Thier is` | There are | named entity removed |
+| `Utercht`, `Csco` | Utrecht, Cusco | named entity removed / new named entity added |
+| `tHE oner` | the owner | code or identifiers changed |
+| `with out proper cair` | without proper care | negation changed |
+| `may to be honest NOT greet` | may not greet | prohibition changed |
+
+Every row is the product refusing a correct correction, and each one cost a
+whole paragraph. Fixed, in the order they matter:
+
+1. **Four validate call sites were judging against the raw source** instead of
+   the spelling-repaired text the model was handed. An earlier session had
+   already established `prepared` as the right reference; these four never got
+   it, and they are the sites that decide a paragraph's fallback.
+2. **`_reconcile_guard_vocabulary`** spells the guards' own closed-class
+   vocabulary in the source, using **the candidate as the evidence**. A source
+   token is only respelled when the candidate actually uses that guard word and
+   has dropped the source token. This is deliberate: a first version rewrote the
+   source on its own and turned `wether` into `neither` and `lights` into
+   `might`, inventing the negation and modal it was checking. **Do not remove
+   the candidate-as-evidence requirement.** A dictionary cannot replace it -
+   `cud` is a real word, so no speller will ever call it a typo.
+3. **`_edit_distance_at_most` is now Damerau-Levenshtein.** A swapped letter pair
+   is one typo, not two, which is what puts `Utercht` within reach of `Utrecht`.
+4. **Named entities**: a misspelled function word is not a name
+   (`_misspelled_non_entity_starter`, which generalises the hand-added `Teh` in
+   the ignore list), and a respelled name is not a removed or invented one
+   (`_named_entity_respelled_in`). The ending rule in `_same_name_respelled` is
+   load-bearing: `Pett` -> `Pet` and `Csco` -> `Cusco` are typos, `Malik` ->
+   `Mali` is a different person. A unit test catches that one; it caught me.
+5. **`_IDENTIFIER` camelCase needs a lowercase letter after the first capital.**
+   A held shift key produces `tHE` and `iF`; the source-code guard was refusing
+   ordinary typos. `getUser`, `eBay` and `iPhone` still match.
+6. **Filler is stripped before anything is counted** (`_strip_discourse_hedges`).
+   It carries a pronoun and can sit between a modal and its negator, so deleting
+   it read as both an actor change and an invented prohibition.
+7. **`dense_source` now reaches the sentence-recovery path.** The main path knew
+   error-saturated text legitimately moves further when repaired and used a
+   lower similarity floor; the recovery path did not, so the same paragraph was
+   accepted whole and refused sentence by sentence.
+8. **A dropped protected token no longer discards the section when the model
+   merged or split sentences** (`_restore_by_sentence_overlap`). Matching is by
+   content-word overlap with a clear-best-match requirement, and there is a
+   content-loss check, because replacing one candidate sentence with one source
+   sentence silently shortens the paragraph when the model had merged two.
+9. **Word capture: a bare caret now takes the whole document, not the page.**
+   UI Automation cannot see Word's unrendered pages, so a 5203-character essay
+   was capped at 3522 and paragraphs 9 and 10 were never offered - while the run
+   reported every section it did offer as accepted. A selection the writer made
+   is still respected.
+10. **Refusals are now recorded.** `CorrectionResult.metrics["refusal_reason"]`
+    carries the guard, and `window.py` logs `Writing HUD section fell back to
+    rules ... reason=` at WARNING. Startup coming up rules-only logs at WARNING
+    with its reason too, instead of one INFO line reading `pack=rules-only`.
+
+Two more, found by re-measuring rather than by reasoning:
+
+11. **A modal's multiplicity is not meaning; its presence is.** The writer wrote
+    "then maybe forgets their keys because the maybe morning got busy" and the
+    repair dropped the stray second one, refused as "modal meaning changed
+    (missing may)". Losing or gaining a modal *family* still fails.
+12. **Dropping a redundant "it" subject is allowed**, the mirror of adding one,
+    which had been allowed since the fragment repair went in. The literal
+    "first alert ... closed it" rule above it is the narrow version of this and
+    can go once something else covers it.
+
+13. **The two actor functions disagreed about what counts as an added actor.**
+    `_actors_preserved` forgave a noun actor that appeared only because a
+    misspelling was fixed; `_added_actors_are_safe_subjects`, which decides the
+    same question, did not - so "oner" -> "owner" was forgiven by one and called
+    an invented owner by the other. It also has to look at both sides for the
+    noun a new "they" refers to: in the paragraph that found this, every noun
+    actor is misspelled and therefore invisible on the source side.
+
+Full corpus, 200 paragraphs, all twenty essays:
+
+| | before | after |
+|---|---|---|
+| paragraphs corrected by the model | 91 | **185** |
+| grammar error score after correction | 185 | **13** |
+
+The error score before correction is 622, so the corrector now removes about 98
+percent of the measurable grammar errors, against 70 percent at baseline, while
+the model reaches twice as many paragraphs. Essays 1 and 2 alone went 11 of 20
+to 19 of 20 with a residual of zero. Figures in
+`build/model-coverage-verified.json`; that run predates fix 12 and 13 above, so
+the four remaining `actor changed (missing it)` rows and the one `added owner,
+they` row are already addressed - re-run to confirm before quoting a new number.
+
+### Two refusals that are correct, and one that is not
+
+Do not "fix" these two. They are the guards working:
+
+- `essay-7 p5`: the writer wrote "its needds is maybe MET"; the model wrote "its
+  needs are met" and dropped the hedge. That is a claim the writer did not make.
+  This one only became visible because "maybe" now folds into "may" for
+  counting - the guard used to be blind to it.
+- `essay-6 p6`: "which is why it is good but also not" -> "This is good but also
+  not" drops the clause that connected it to the paragraph.
+
+The one that is a real defect, still open:
+
+- `essay-5 p5` fails with `The result changed protected content.` **The
+  protection layer froze the word "Feeding".** The paragraph is a run-on -
+  "...peoples need structure Feeding the parrot , replacing watter..." - so
+  "Feeding" is capitalized mid-sentence, `_maximal_named_entities` reads it as a
+  single-word name, and `_runtime_opaque_entities` replaces it with
+  `ECHOLINKTOKEN0X`. The model then has to drop the token to fix the run-on,
+  which is impossible to satisfy. Three retries and the deterministic restore
+  all fail, correctly.
+
+  The `ignored` set in `_named_entities` already contains "Cleaning" - a
+  hand-added gerund from this same corpus, which is the tell. **Do not fix this
+  by loosening name protection**; single-word name protection is what stops
+  `Malik` -> `Mali`, and it is the guard this corpus needs most. The fix belongs
+  in deciding whether a capitalized word is a name at all, and needs to
+  distinguish an unpunctuated sentence start from a genuine mid-sentence name.
+  It costs one paragraph in twenty essays, and that paragraph still gets the
+  rules repair (4 errors -> 1), so it is not urgent.
+
 ## Fixed and committed
 
 `8697fa4` - stop the corrector rewriting words the writer chose
@@ -164,7 +317,42 @@ directions; the corpus-wide number is not yet a clean measure of it.
 
 6. Feature sweep by hand, then installer lifecycle. Neither has started.
 
+## "0 of 0 and no original sentence" (2026-08-06, found by using the app)
+
+A writer pressed the Writing HUD shortcut in Word with the caret in the document
+and got a review card reading "No sentence available", "0 of 0", and two empty
+panes headed "Original sentence" and "Suggested text". Two separate faults:
+
+1. **The shortcut never asked for Word scope widening.** The automatic badge
+   built its reader with `include_word_page=True` and the shortcut did not, so
+   the same caret in the same document produced a whole review one way and
+   `Writing HUD capture failed: No selected text was found` the other. Both
+   readers are now built the same way, and in Word a caret with no selection
+   takes the whole document.
+2. **An empty review still drew a review card.** The card said "No sentence
+   available - capture editable text again" over blank panes, which is
+   indistinguishable from the app having lost the writer's text, and gave the
+   same words whether nothing was captured or the text was already clean. Those
+   are now two different messages, the failed-capture one names Protected View
+   as a cause, and the empty panes and their headings are hidden rather than
+   shown empty.
+
+`tools/restart_app_and_wait.py` restarts the app from source and blocks until
+its own log says the model loaded, returning non-zero if it came up rules-only.
+Use it before any live run: several runs here were driven against an app that
+did not contain the code being tested.
+
 ## Rules that cost time when ignored
+
+- **Measure with the code you are measuring.** Three full-corpus runs here were
+  thrown away because the probe imports the module once at start, so edits made
+  during a twenty-minute run do not apply and the report is a mixture. Freeze
+  the code, then run.
+- **A guard fix can trade one false refusal for another.** Folding "maybe" into
+  "may" fixed one paragraph and broke a different one in the same run, and the
+  second break turned out to be the guard correctly catching a dropped hedge.
+  Re-measure the whole corpus after every guard change, not the paragraph you
+  were looking at.
 
 - **Test in Word, not Notepad.** Notepad hid the Accept bug for hours.
 - **Read the log line, do not guess.** `%LOCALAPPDATA%\ManuscriptWindowsV2\echo-link.log`.

@@ -114,6 +114,10 @@ class WindowsSelectionReader:
                         if diagnostic:
                             logger.info("Word HUD candidate rejected non-text")
                         continue
+                    # True when nothing was selected and the caret decided the
+                    # scope. The writer expressed no boundary, so the whole
+                    # document is what they meant to have reviewed.
+                    caret_only = not text.strip()
                     if not text.strip():
                         if not self.include_caret_sentence:
                             continue
@@ -132,6 +136,34 @@ class WindowsSelectionReader:
                                 logger.info("Word HUD candidate rejected empty-caret-sentence")
                             continue
                     if self.include_word_page and " - word" in window.title.casefold():
+                        # A page is the wrong unit when the writer only put the
+                        # caret in the document. UI Automation cannot see Word's
+                        # unrendered pages, so expanding to the enclosing page
+                        # capped a 5203-character essay at 3522: paragraphs 9
+                        # and 10 were never offered, and the run still reported
+                        # every section it did offer as accepted. The review
+                        # already works in short sections, so a longer capture
+                        # costs nothing but adds the rest of the essay.
+                        if caret_only:
+                            try:
+                                whole = getattr(pattern, "DocumentRange", None)
+                                if whole is not None:
+                                    whole_text = whole.GetText(
+                                        self.max_characters + 1
+                                    )
+                                    if (
+                                        isinstance(whole_text, str)
+                                        and whole_text.strip()
+                                        and len(whole_text) > len(text)
+                                        and len(whole_text) <= self.max_characters
+                                    ):
+                                        selected_range = whole
+                                        text = whole_text
+                            except Exception:
+                                if diagnostic:
+                                    logger.exception(
+                                        "Word document expansion failed"
+                                    )
                         try:
                             page_unit = getattr(
                                 getattr(automation, "TextUnit", None),

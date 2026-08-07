@@ -3087,3 +3087,37 @@ def test_apply_retry_budget_resets_for_each_new_capture(app, tmp_path):
 
     window._quitting = True
     window.close()
+
+
+def test_empty_capture_says_no_text_was_found_not_zero_of_zero(app):
+    """A failed capture must not look like a review card with nothing in it.
+
+    A writer opened the HUD after a capture that read no text and saw "No
+    sentence available", "0 of 0", and two blank panes headed "Original
+    sentence" and "Suggested text". Nothing said the capture had failed, and the
+    empty Original pane read as the app having lost their document.
+    """
+    palette = RewritePalette(suggestion_engine=_SuggestionEngine())
+    palette.show_capture("")
+    app.processEvents()
+
+    assert "No text was captured" in palette.suggestion_title.text()
+    assert "Enable Editing" in palette.suggestion_explanation.text()
+    # No position, because there is no sequence to be positioned in.
+    assert palette.card_position.text() == ""
+    # And no headings over empty panes.
+    assert not palette.before_text.isVisible()
+
+
+def test_clean_text_says_there_is_nothing_to_correct(app):
+    """Text that captured fine but needs no repair is a different message."""
+    palette = RewritePalette(suggestion_engine=_SuggestionEngine())
+    palette.show_capture("The dog waits by the door.")
+    app.processEvents()
+
+    if palette.suggestions:
+        # The bundled engine found something; this case is covered elsewhere.
+        palette.finish_choice()
+        return
+    assert "Nothing to correct" in palette.suggestion_title.text()
+    assert palette.before_text.toPlainText() == "The dog waits by the door."

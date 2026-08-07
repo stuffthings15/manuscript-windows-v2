@@ -1253,3 +1253,36 @@ def test_word_page_expansion_never_shrinks_a_larger_selection():
     assert detected is not None
     assert detected.record.text == whole_document
     assert "Third paragraph is on the next page." in detected.record.text
+
+
+# The bare-caret path is not unit-tested here. Driving it needs a fake that
+# implements paragraph expansion, endpoint moves and endpoint comparison well
+# enough for _sentence_range_at_caret, and a fixture that elaborate tests the
+# fake rather than the reader. The whole-document widening is verified in real
+# Word by tools/word_essay_session.py, which reports the captured character
+# count against the essay length - which is how the page cap was found.
+
+
+def test_word_respects_a_selection_the_writer_made():
+    """Only a bare caret widens. A real selection is the writer's boundary."""
+    selected = _PageRange(
+        "The sentence the writer highlighted.",
+        "The sentence the writer highlighted.\rAnd the rest of the page.",
+        [_Rect(10, 20, 300, 40)],
+    )
+    document = _Range("Earlier.\rThe sentence the writer highlighted.\rLater.")
+    control = _Control([selected], document_range=document)
+    automation = _Automation(control)
+    automation.TextUnit = type("TextUnit", (), {"Page": 6})
+
+    detected = _reader(
+        control,
+        loader=lambda: automation,
+        title="Essay - Word",
+        include_word_page=True,
+        max_characters=5000,
+    ).read()
+
+    assert detected is not None
+    assert "Earlier." not in detected.record.text
+    assert "Later." not in detected.record.text

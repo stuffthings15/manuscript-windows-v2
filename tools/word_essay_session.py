@@ -58,6 +58,7 @@ from word_essay_probe import (  # noqa: E402
 )
 from writing_hud_apply_probe import (  # noqa: E402
     _accept_button,
+    _descendants,
     _dismiss_existing_hud,
 )
 from echo_link_core.insertion import (  # noqa: E402
@@ -74,12 +75,23 @@ def local_ai_state(window_seconds: float = 900.0) -> tuple[bool, str]:
 
     The app says this plainly and the answer decides whether a run is worth
     starting, so it is read rather than assumed.
+
+    Only lines from the currently running app count. The log outlives restarts,
+    and scanning back past one reported `loaded=True` from a previous instance
+    while the running app had come up rules-only - so a run that corrected
+    nothing was started, and then investigated as a capture fault.
     """
     try:
         lines = LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError as exc:
         return False, f"could not read the app log: {exc}"
+    for index in range(len(lines) - 1, -1, -1):
+        if "Automatic Writing HUD selection monitor started" in lines[index]:
+            lines = lines[index:]
+            break
     for line in reversed(lines[-4000:]):
+        if "Adaptive Polish came up rules-only" in line:
+            return False, line.strip()[-110:]
         if "Adaptive Polish model prewarmed" in line:
             if "loaded=True" in line:
                 return True, line.strip()[-110:]
@@ -89,6 +101,52 @@ def local_ai_state(window_seconds: float = 900.0) -> tuple[bool, str]:
         if "verification failed" in line:
             return False, line.strip()[-110:]
     return False, "the app has not reported loading a model yet"
+
+
+def log_line_count() -> int:
+    """How long the app log is now, so a run can read only its own lines."""
+    try:
+        return len(
+            LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
+        )
+    except OSError:
+        return 0
+
+
+def rules_fallbacks_since(start_line: int) -> list[str]:
+    """Every section the app corrected with rules alone during this run.
+
+    The app logs one WARNING per refused section, naming the guard. Read from
+    `start_line` so an earlier run's refusals are not attributed to this one.
+    """
+    try:
+        lines = LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    return [
+        line.split("reason=", 1)[-1].strip()[:160]
+        for line in lines[start_line:]
+        if "Writing HUD section fell back to rules" in line
+    ]
+
+
+def whole_document_button(hud):
+    """The HUD's own "Check entire document" control.
+
+    Asking the app to fetch the document is far steadier than selecting it
+    and pressing a global hotkey: no selection has to survive a foreground
+    change, which is the step that failed run after run.
+    """
+    for control in _descendants(hud):
+        try:
+            if control.ControlTypeName != "ButtonControl" or not control.IsEnabled:
+                continue
+            name = str(control.Name).strip().casefold()
+        except Exception:  # noqa: BLE001 - UI Automation is best effort
+            continue
+        if "entire document" in name or name == "document":
+            return control
+    return None
 
 
 def word_application():
@@ -162,6 +220,26 @@ def review_markdown(name: str, before: str, after: str, report: dict) -> str:
         "is correct English that still means what the left column meant.",
         "",
     ]
+    fell_back = int(report.get("sections_that_fell_back_to_rules") or 0)
+    if fell_back:
+        # Say it at the top. Otherwise a reader judges these paragraphs as the
+        # AI's work when the AI's answer was thrown away, and the thin result
+        # reads as a bad model rather than a refused correction.
+        lines.extend(
+            [
+                f"**{fell_back} section(s) got the deterministic rules repair "
+                "only - the AI answer was refused.** Spelling and agreement are "
+                "fixed in those; sentence structure is not. Reasons:",
+                "",
+                *(
+                    f"- {reason}"
+                    for reason in report.get("rules_fallback_reasons") or ()
+                ),
+                "",
+            ]
+        )
+    if report.get("error"):
+        lines.extend([f"**Run reported:** {report['error']}", ""])
     for index in range(max(len(left), len(right))):
         was = left[index] if index < len(left) else ""
         now = right[index] if index < len(right) else ""
@@ -235,6 +313,8 @@ def run_session(
         time.sleep(2.5)
 
     before = visible_text(document)
+    # Marked before the review starts so only this run's refusals are counted.
+    run_log_length = log_line_count()
     report: dict = {
         "essay": essay_path.name,
         "document": str(working),
@@ -375,6 +455,45 @@ def run_session(
     )
     report["total_seconds"] = round(time.monotonic() - started, 3)
     report["finished_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    # A section whose AI answer was refused still shows a review card, still
+    # says Accept, and still lands here as an accepted section. It carries the
+    # deterministic rules repair, which fixes spelling and agreement and leaves
+    # the sentence structure alone - so "8 of 8 accepted" can mean eight
+    # paragraphs the AI never corrected. The app names each one in its log now,
+    # and a run that hides them is not worth reading.
+    fallbacks = rules_fallbacks_since(run_log_length)
+    report["sections_that_fell_back_to_rules"] = len(fallbacks)
+    report["rules_fallback_reasons"] = fallbacks[:20]
+    if fallbacks:
+        report.setdefault(
+            "error",
+            f"{len(fallbacks)} of {len(report['sections'])} sections were shown "
+            "as corrected but only got the deterministic rules repair",
+        )
+
+    # Judge the essay, not the run. Counting accepted sections said "8 of 8,
+    # no error" while paragraphs 9 and 10 were never corrected at all, and
+    # the badge-text check meant to catch that never ran because the whole
+    # document path does not read the badge. Comparing the finished text
+    # with the original cannot be sidestepped by a change of route.
+    before_paragraphs = paragraphs(before)
+    after_paragraphs = paragraphs(after)
+    untouched = [
+        index + 1
+        for index in range(len(before_paragraphs))
+        if index < len(after_paragraphs)
+        and before_paragraphs[index] == after_paragraphs[index]
+    ]
+    missing = max(0, len(before_paragraphs) - len(after_paragraphs))
+    report["paragraphs"] = len(before_paragraphs)
+    report["paragraphs_unchanged"] = untouched
+    if untouched or missing:
+        report.setdefault(
+            "error",
+            f"{len(untouched) + missing} of {len(before_paragraphs)} paragraphs "
+            f"were never corrected: {untouched or 'missing from the result'}",
+        )
 
     try:
         document.Save()

@@ -1576,6 +1576,13 @@ class EchoLinkWindow(QMainWindow):
             reader = WindowsSelectionReader(
                 max_characters=500_000,
                 include_caret_sentence=True,
+                # The automatic badge has always asked for Word scope widening
+                # and the shortcut never did, so the same caret in the same
+                # document produced a whole review one way and "No selected text
+                # was found" the other. In Word a caret with no selection now
+                # means the whole document, which is what a writer pressing
+                # "check my writing" is asking for.
+                include_word_page=True,
             )
             detected = reader.read()
             if detected is not None:
@@ -1977,6 +1984,20 @@ class EchoLinkWindow(QMainWindow):
                 plan.pack_id or "rules-only",
                 plan.backend.value,
             )
+            if not plan.use_llm or not plan.pack_id:
+                # Say why, at WARNING. Coming up rules-only turns the product's
+                # main feature off, and it was only ever visible as one INFO
+                # line reading "pack=rules-only" - which is how a run that
+                # corrected nothing was investigated as a capture fault for an
+                # hour. The reason is usually momentary (another program holding
+                # the GPU at launch) and every later request re-plans, so this
+                # is a warning about the warm-up, not a permanent state.
+                logger.warning(
+                    "Adaptive Polish came up rules-only: %s",
+                    plan.downgrade_reason
+                    or plan.reason
+                    or "no installed pack fits this hardware",
+                )
             # Load the selected model now, in this startup daemon thread, so
             # the user's first correction does not pay the multi-second cold
             # load. The acceptance probe also records a passing benchmark, so
@@ -2435,6 +2456,20 @@ class EchoLinkWindow(QMainWindow):
                 len(result.text),
                 "adaptive",
             )
+            if polish_result is not None and not polish_result.used_llm:
+                # A section the AI was refused on still shows a review card and
+                # still says Accept, so from outside it is indistinguishable
+                # from a full correction. Name it, with the guard that refused
+                # it: a run where nine of twenty paragraphs were rules-only was
+                # reported as twenty successes, and nothing in the log said
+                # otherwise.
+                logger.warning(
+                    "Writing HUD section fell back to rules command=%s "
+                    "characters=%d reason=%s",
+                    command,
+                    len(source),
+                    str(polish_result.metrics.get("refusal_reason") or "unrecorded"),
+                )
             duration = max(0.1, time.monotonic() - started_at)
             if polish_result is None or polish_result.used_llm:
                 sample = {

@@ -1692,6 +1692,67 @@ def _sentence_pieces(text: str) -> list[str]:
     return [piece for piece in re.split(r"(?<=[.!?])(\s+)", text) if piece != ""]
 
 
+def _restore_by_sentence_overlap(
+    source_pieces: list[str],
+    candidate_pieces: list[str],
+    missing: set[str],
+) -> list[str]:
+    """Swap the writer's sentence in where the model's answer corresponds to it.
+
+    Used when a correction merged or split sentences, so index alignment is
+    meaningless. Correspondence is measured by shared content words, and a
+    source sentence is only restored when one candidate sentence is a clear
+    best match. Anything ambiguous returns [] and the caller refuses the
+    answer as before, so a protected value is never moved to a clause it did
+    not come from.
+    """
+
+    def words(piece: str) -> set[str]:
+        return {
+            value
+            for value in re.findall(r"[A-Za-z]{4,}", piece.casefold())
+            if not value.startswith("echolinktoken")
+        }
+
+    rebuilt = list(candidate_pieces)
+    for piece in source_pieces:
+        tokens = {
+            match.group(0).upper() for match in _IMMUTABLE_TOKEN.finditer(piece)
+        }
+        if not tokens & missing:
+            continue
+        wanted = words(piece)
+        if not wanted:
+            return []
+        scores = [
+            (len(wanted & words(value)) / len(wanted), index)
+            for index, value in enumerate(candidate_pieces)
+            if value.strip()
+        ]
+        if not scores:
+            return []
+        scores.sort(reverse=True)
+        best_score, best_index = scores[0]
+        runner_up = scores[1][0] if len(scores) > 1 else 0.0
+        if best_score < 0.5 or best_score - runner_up < 0.2:
+            # No clear correspondence. Guessing would relocate the writer's
+            # protected value into a sentence about something else.
+            return []
+        rebuilt[best_index] = piece
+    # Replacing one candidate sentence with one source sentence loses text when
+    # the model had merged two sentences into that one: the second clause was in
+    # the candidate and is now in neither. Silently shortening the writer's
+    # paragraph is worse than refusing, so check for it.
+    result_words = set(re.findall(r"[A-Za-z]{4,}", "".join(rebuilt).casefold()))
+    source_words = set(
+        re.findall(r"[A-Za-z]{4,}", "".join(source_pieces).casefold())
+    )
+    for value in re.findall(r"[A-Za-z]{4,}", "".join(candidate_pieces).casefold()):
+        if value not in result_words and value in source_words:
+            return []
+    return rebuilt
+
+
 def _restore_missing_immutable_tokens(
     source: str,
     candidate: str,
@@ -1723,13 +1784,25 @@ def _restore_missing_immutable_tokens(
         return ""
     source_pieces = _sentence_pieces(source)
     candidate_pieces = _sentence_pieces(candidate)
-    if len(source_pieces) != len(candidate_pieces):
-        return ""
-    rebuilt = list(candidate_pieces)
-    for index, piece in enumerate(source_pieces):
-        tokens = {match.group(0).upper() for match in _IMMUTABLE_TOKEN.finditer(piece)}
-        if tokens & missing:
-            rebuilt[index] = piece
+    if len(source_pieces) == len(candidate_pieces):
+        rebuilt = list(candidate_pieces)
+        for index, piece in enumerate(source_pieces):
+            tokens = {
+                match.group(0).upper() for match in _IMMUTABLE_TOKEN.finditer(piece)
+            }
+            if tokens & missing:
+                rebuilt[index] = piece
+    else:
+        # A correction that joins two run-on sentences or splits one changes the
+        # count, and requiring equal counts refused the whole section for a
+        # dropped token on exactly the text most likely to be run-on. Match by
+        # content instead: the source sentence holding the token is put back in
+        # place of the candidate sentence that clearly corresponds to it.
+        rebuilt = _restore_by_sentence_overlap(
+            source_pieces, candidate_pieces, missing
+        )
+        if not rebuilt:
+            return ""
     result = "".join(rebuilt)
     if result == source:
         # Every sentence had to be put back, so nothing the model produced

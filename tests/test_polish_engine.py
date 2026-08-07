@@ -2732,7 +2732,12 @@ def test_validator_rejects_dropped_modal_and_organizer_condition():
         grammar_mode=False,
     )
 
-    assert "modal meaning changed" in validation.failures
+    # The label now names the modal that moved ("modal meaning changed
+    # (missing can)"), so match the prefix rather than the whole string.
+    assert any(
+        failure.startswith("modal meaning changed")
+        for failure in validation.failures
+    )
     assert any(x.startswith("actor changed") for x in validation.failures)
     assert not validation.accepted
 
@@ -5229,3 +5234,194 @@ def test_a_broken_model_manifest_is_reported_not_swallowed(caplog):
     # Reported, and reported once rather than on every paragraph.
     assert len(warnings) == 1
     assert "signature failed" in warnings[0].getMessage()
+
+
+def _validator():
+    from echo_link_core.polish import PolishValidator
+    from echo_link_core.polish_classifier import MiniLMPolishClassifier
+
+    return PolishValidator(MiniLMPolishClassifier())
+
+
+def test_repaired_modal_typo_is_not_an_invented_modal():
+    """A misspelled modal the model spells correctly is not a meaning change.
+
+    "cud work real good" -> "could work really well" was refused as "modal
+    meaning changed (added could)". The speller declines "cud" on purpose - it
+    is a real word - so no dictionary can resolve it. The candidate is the
+    evidence instead.
+    """
+    from echo_link_core.polish import _reconcile_guard_vocabulary
+
+    source = "and why keepin one for wallking afer school cud work real good"
+    candidate = "And why keeping one for walking after school could work really well."
+    reconciled = _reconcile_guard_vocabulary(source, candidate)
+    assert "could" in reconciled
+    assert "after" in reconciled
+
+
+def test_guard_vocabulary_is_not_invented_when_the_candidate_never_uses_it():
+    """The candidate has to name the target, or nothing is rewritten.
+
+    An earlier version rewrote the source alone and turned "wether" into
+    "neither" and "lights" into "might", inventing the very negation and modal
+    it was meant to be checking.
+    """
+    from echo_link_core.polish import _reconcile_guard_vocabulary
+
+    source = "bath has its own wether streest noises and some habitats need lights"
+    candidate = "Bath has its own weather, streets, noises, and some habitats need lights."
+    assert _reconcile_guard_vocabulary(source, candidate) == source
+
+
+def test_split_word_negation_is_joined_before_counting():
+    """"with out proper care" is "without proper care", not a new negation."""
+    from echo_link_core.polish import _negation_count, _normalize_contractions
+
+    source = _normalize_contractions("with out proper cair the animal suffers")
+    candidate = _normalize_contractions("without proper care the animal suffers")
+    assert _negation_count(source) == _negation_count(candidate)
+
+
+def test_misspelled_function_word_is_not_a_named_entity():
+    """Correcting "Thier is" must not read as removing a name.
+
+    _named_entities reads any capitalized run as a name, so a capitalized typo
+    is one, and repairing it refused the whole paragraph.
+    """
+    from echo_link_core.polish import _named_entities
+
+    entities = _named_entities("Thier is emotional benefits as well and the dog waits.")
+    assert "Thier" not in entities
+    # A real name in the same position is still a name.
+    assert "Bakersfield" in _named_entities("Bakersfield is dusty in the summer.")
+
+
+def test_dropping_a_discourse_hedge_is_not_an_actor_change():
+    """"important in i guess every country" -> "important in every country".
+
+    The pronoun inside filler counted as an actor, so deleting the filler was
+    refused as "actor changed (missing i)".
+    """
+    from echo_link_core.polish import _actors_preserved
+
+    assert _actors_preserved(
+        "companionship is important in i guess every country",
+        "Companionship is important in every country.",
+        allow_redundant_pronoun=True,
+    )
+    # A real first-person actor still cannot be dropped.
+    assert not _actors_preserved(
+        "i walked the dog before school",
+        "The dog was walked before school.",
+        allow_redundant_pronoun=True,
+    )
+
+
+def test_repaired_typo_paragraph_is_accepted_end_to_end():
+    """The guards together accept a correct repair of badly misspelled text."""
+    validator = _validator()
+    source = (
+        "The OWNER in Bakersfield cud wriite a chhart ON the wall , set alarms "
+        "or ask a famly member to help and if nobody does the chores the pett "
+        "suffers, whicch IS bad."
+    )
+    candidate = (
+        "The owner in Bakersfield could write a chart on the wall, set alarms, "
+        "or ask a family member to help, and if nobody does the chores, the pet "
+        "suffers, which is bad."
+    )
+    result = validator.validate(
+        source,
+        candidate,
+        task=PolishTask.PROOFREAD,
+        grammar_mode=True,
+    )
+    assert result.accepted, result.failures
+
+
+def test_a_refused_correction_records_why_in_engine_terms():
+    """The reader-facing message hides the cause; the metrics must not.
+
+    Nine rules-only paragraphs were reported as nine successes because nothing
+    outside the engine could tell a refused section from a clean one.
+    """
+    from echo_link_core.polish import PolishValidator
+
+    engine = PolishEngine()
+
+    class RefusingValidator(PolishValidator):
+        def validate(self, source, candidate, **kwargs):
+            from echo_link_core.polish_types import ValidationResult
+
+            if candidate.strip() != source.strip():
+                return ValidationResult(
+                    accepted=False,
+                    semantic_similarity=1.0,
+                    failures=("negation changed (test)",),
+                )
+            return super().validate(source, candidate, **kwargs)
+
+    engine.validator = RefusingValidator(engine.classifier)
+    result = engine.analyze(
+        CorrectionRequest(
+            text="teh dog dont fit the situashun.",
+            task=PolishTask.PROOFREAD,
+            mode=PolishMode("balanced"),
+            command="Proofread",
+            download_consent=True,
+            manual=True,
+        )
+    )
+    assert not result.used_llm
+    assert result.metrics.get("refusal_reason")
+
+
+def test_dropping_a_redundant_it_subject_is_allowed_but_not_a_fragment():
+    """"and also it shows" -> "and also shows" is the tidy-up a proofread is for.
+
+    The mirror of the allowance for adding "it", which has been in place since
+    the fragment repair went in. "it" names nobody, so dropping it cannot lose
+    who acts - but it can leave a fragment, so some actor has to remain.
+    """
+    from echo_link_core.polish import _actors_preserved
+
+    assert _actors_preserved(
+        "and also it shows the pet is theirs",
+        "and also shows the pet is theirs",
+        allow_redundant_pronoun=True,
+    )
+    # Nothing is left to act, so this is a rewrite, not a tidy-up.
+    assert not _actors_preserved(
+        "which is why it is good but also not.",
+        "This is good but also not.",
+        allow_redundant_pronoun=True,
+    )
+    # A swap is still a swap.
+    assert not _actors_preserved(
+        "he closed the ticket",
+        "she closed the ticket",
+        allow_redundant_pronoun=True,
+    )
+
+
+def test_a_repeated_modal_may_be_reduced_but_not_lost():
+    """Multiplicity is not meaning; presence is.
+
+    "then maybe forgets their keys because the maybe morning got busy" loses the
+    stray second one when repaired. Losing the family outright is different: the
+    model dropping "its needs is maybe met" to "its needs are met" turns a hedge
+    into a claim, and that still fails.
+    """
+    from echo_link_core.polish import _modal_meaning_preserved
+
+    assert _modal_meaning_preserved(
+        "then may forgets their keys because the may morning got busy",
+        "then may forget their keys because the morning got busy",
+        grammar_mode=True,
+    )
+    assert not _modal_meaning_preserved(
+        "a pet can only be great when its needs is may met",
+        "a pet can only be great when its needs are met",
+        grammar_mode=True,
+    )

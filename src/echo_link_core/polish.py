@@ -160,7 +160,12 @@ _VERSIONED_NAME = re.compile(
 _IDENTIFIER = re.compile(
     r"\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b"
     r"|\b[A-Za-z]+_[A-Za-z0-9_]+\b"
-    r"|\b[a-z]+[A-Z][A-Za-z0-9]*\b"
+    # camelCase needs a lowercase letter after the first capital. A held shift
+    # key produces "tHE" and "iF", which matched the old pattern and made
+    # correcting them "code or identifiers changed" - a guard for source code
+    # refusing an ordinary typo. "getUser", "eBay" and "iPhone" still match; a
+    # word with an all-capital tail no longer does.
+    r"|\b[a-z]+[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*\b"
 )
 _NEGATION = re.compile(
     r"\b(?:no|not|never|none|nobody|nothing|neither|nor|without|cannot|can't|cant|"
@@ -739,8 +744,24 @@ class PolishValidator:
         # Normalize missing-apostrophe contractions first so that fixing
         # "cant" -> "can't" or "dont" -> "don't" is never read as a modal or
         # negation change. The counters below then compare like with like.
-        normalized_source = _normalize_contractions(meaning_reference)
-        normalized_candidate = _normalize_contractions(candidate)
+        # Filler is removed from both sides before anything is counted. It
+        # carries no meaning, and leaving it in split a modal from its negator:
+        # "a goat may to be honest NOT greet a person" has no prohibition to the
+        # counter, and the correction that removed the interjection was refused
+        # as "prohibition changed" for inventing one.
+        normalized_source = _normalize_contractions(
+            _strip_discourse_hedges(meaning_reference)
+        )
+        normalized_candidate = _normalize_contractions(
+            _strip_discourse_hedges(candidate)
+        )
+        # Spell the guards' own vocabulary in the source, using the candidate as
+        # the evidence for what each typo was. Only the source moves: the
+        # candidate is what is being judged, and rewriting it would hide a word
+        # the model really did invent.
+        normalized_source = _reconcile_guard_vocabulary(
+            normalized_source, normalized_candidate
+        )
         if not _negation_preserved(normalized_source, normalized_candidate):
             failures.append(
                 "negation changed"
@@ -763,9 +784,30 @@ class PolishValidator:
             if _negated_modal_count(normalized_source) != _negated_modal_count(
                 normalized_candidate
             ):
-                failures.append("prohibition changed")
+                # Name the modal here too. This branch fires for any modal that
+                # moves inside a negated sentence, and calling all of those
+                # "prohibition changed" hid a real defect: the model dropping
+                # the writer's "maybe" from "its needs is maybe met" turns a
+                # hedge into a claim, which is worth refusing and worth saying.
+                failures.append(
+                    "prohibition changed"
+                    + _counter_diff_label(
+                        _counter(_MODAL_MEANING, normalized_source),
+                        _counter(_MODAL_MEANING, normalized_candidate),
+                    )
+                )
             else:
-                failures.append("modal meaning changed")
+                # Name the modal that moved. "modal meaning changed" alone sent
+                # three separate investigations looking for a modal the model
+                # had invented, when the answer every time was a misspelled one
+                # in the writer's own text.
+                failures.append(
+                    "modal meaning changed"
+                    + _counter_diff_label(
+                        _counter(_MODAL_MEANING, normalized_source),
+                        _counter(_MODAL_MEANING, normalized_candidate),
+                    )
+                )
         source_obligation = _obligation_counter(normalized_source)
         candidate_obligation = _obligation_counter(normalized_candidate)
         if source_obligation != candidate_obligation:
@@ -825,12 +867,24 @@ class PolishValidator:
             and not _single_word_present(value, wording_reference)
             and not _named_entity_matches_source_phrase(value, source)
             and not _named_entity_matches_source_phrase(value, wording_reference)
+            # The mirror of the removal case below. Spelling a name the writer
+            # mistyped is not inventing one: "Csco" -> "Cusco" and "Utercht" ->
+            # "Utrecht" were refused as newly added entities, which is the model
+            # doing exactly the job asked of it.
+            and not _named_entity_respelled_in(value, source)
+            and not _named_entity_respelled_in(value, wording_reference)
         }
         removed_names = {
             value
             for value in _named_entities(source) - candidate_names
             if not _single_word_present(value, candidate)
             and not _named_entity_matches_source_phrase(value, candidate)
+            # _named_entities reads any capitalized run as a name, so a
+            # capitalized misspelling is one: correcting "Thier" to "Their"
+            # was refused as "named entity removed", and the rules layer's own
+            # output was refused for its own repair. A near-miss of the word in
+            # the candidate means it was respelled, not dropped.
+            and not _named_entity_respelled_in(value, candidate)
         }
         if new_names:
             failures.append("new named entity added")
@@ -843,15 +897,30 @@ class PolishValidator:
         # Lowered with the meaning gates above: this is now the main backstop
         # against a model that rewrites rather than repairs, so it has to leave
         # room for a genuine repair of badly broken text while still catching
-        # invention. It stays hard, and it is always measured against the
-        # writer's own text, never the prepared version.
+        # invention.
         if dense_source and grammar_mode:
             similarity_floor = 0.74
         elif grammar_mode:
             similarity_floor = 0.78
         else:
             similarity_floor = 0.88
-        if similarity < similarity_floor:
+        # The reported number is always measured against the writer's own text.
+        # But on text this broken the embedding of the source is close to noise,
+        # so a flawless repair scored 0.718 and was refused - a correction good
+        # enough to publish, thrown away for being unlike the typos it fixed.
+        #
+        # So the candidate is also measured against the deterministic repair,
+        # and the better of the two decides. That is not a weaker test: the
+        # prepared text is the rules layer's own output, differing from the
+        # source only in spelling, and the model has no influence over it. A
+        # model that rewrote the content would be far from it as well.
+        if similarity < similarity_floor and wording_reference != source:
+            against_prepared = self.classifier.semantic_similarity(
+                wording_reference, candidate
+            )
+        else:
+            against_prepared = similarity
+        if similarity < similarity_floor and against_prepared < similarity_floor:
             failures.append(
                 f"semantic similarity {similarity:.3f} is below "
                 f"{similarity_floor:.3f}"
@@ -866,10 +935,22 @@ class PolishValidator:
             )
             similarity = min(similarity, window_similarity)
             if window_similarity < similarity_floor:
-                failures.append(
-                    f"semantic similarity window {index} "
-                    f"{window_similarity:.3f} is below {similarity_floor:.3f}"
+                # Windows are cut from the source, so there is no prepared
+                # counterpart to compare them against. Measure the window
+                # against the whole prepared text instead: a window that is
+                # still recognisably part of the repaired paragraph is a repair.
+                window_against_prepared = (
+                    self.classifier.semantic_similarity(
+                        wording_reference, candidate_window
+                    )
+                    if wording_reference != source
+                    else window_similarity
                 )
+                if window_against_prepared < similarity_floor:
+                    failures.append(
+                        f"semantic similarity window {index} "
+                        f"{window_similarity:.3f} is below {similarity_floor:.3f}"
+                    )
         if grammar_mode:
             source_words = max(1, len(_WORD.findall(wording_reference)))
             candidate_words = len(_WORD.findall(candidate))
@@ -1644,6 +1725,7 @@ class PolishEngine:
                     classifier=classifier,
                     snapshot=snapshot,
                     cascade_state=cascade_state,
+                    dense_source=dense_source,
                 )
             )
             accepted_plan = cascade_state.plan
@@ -1785,6 +1867,20 @@ class PolishEngine:
             generation_seconds=generation_seconds,
             cold_load_seconds=cold_load_seconds,
             runtime_failure_kind=terminal_runtime_kind,
+            refusal_reason=(
+                ""
+                if used_llm
+                else (
+                    cascade_state.failure_message
+                    or "; ".join(validation.failures)
+                    # A candidate can also lose on quality rather than on
+                    # meaning, and that left the reason blank - "no recorded
+                    # reason" was the fifth most common entry in the corpus
+                    # report, which is a measurement gap, not a cause.
+                    or str(message).strip()
+                    or "no safe candidate and no recorded reason"
+                )
+            ),
         )
 
     def _recover_failed_generation(
@@ -1799,8 +1895,16 @@ class PolishEngine:
         classifier: ClassifierDecision | None = None,
         snapshot: HardwareSnapshot | None = None,
         cascade_state: _RuntimeCascadeState | None = None,
+        dense_source: bool = False,
     ) -> tuple[_SafeCandidate | None, int, float, float]:
-        """Repair a failed section in smaller, independently checked pieces."""
+        """Repair a failed section in smaller, independently checked pieces.
+
+        `dense_source` has to arrive from the caller. Error-saturated text
+        legitimately moves further from its source when it is repaired
+        correctly, which is why the similarity floor is lower for it - and the
+        main path already knew that while this path did not, so the same
+        paragraph was accepted whole and refused sentence by sentence.
+        """
         if cascade_state is None:
             cascade_state = _RuntimeCascadeState(
                 plan=plan,
@@ -1889,6 +1993,14 @@ class PolishEngine:
                 task=request.task,
                 grammar_mode=True,
                 protected_terms=request.protected_terms,
+                # Judge the cleanup against the text it cleaned, not the
+                # writer's typos. `repaired` is `deterministic` plus
+                # structural tidying, so without this the rules layer's own
+                # spelling repairs were charged to it: "shoud" -> "should"
+                # was refused as "obligation strength changed (added should)"
+                # and the paragraph lost its only fallback.
+                dense_source=dense_source,
+                prepared=deterministic,
             )
             if repaired_validation.accepted and repaired_quality.complete:
                 deterministic_recovery = _SafeCandidate(
@@ -1920,6 +2032,10 @@ class PolishEngine:
                     source,
                     user_terms=request.protected_terms,
                 ).text.strip()
+            # What the rules layer produced for this sentence, before any
+            # command-specific reduction. The guards below compare against it
+            # so a repaired misspelling is never counted as an invented word.
+            seed_reference = seed
             if request.command.strip().casefold() == "concise":
                 seed = _apply_safe_concise_reductions(seed)
             seed_quality = self._evaluate_quality(
@@ -1935,6 +2051,14 @@ class PolishEngine:
                 protected_terms=tuple(
                     value for value in request.protected_terms if value in source
                 ),
+                # Semantic similarity and protected facts are still measured
+                # against the writer's own sentence; only the word-counting
+                # guards move to the spelling-repaired reference. "befor" ->
+                # "before" was being refused as "date or ordering
+                # relationship changed (added before)", which left the
+                # sentence with no fallback and failed the whole paragraph.
+                dense_source=dense_source,
+                prepared=seed_reference,
             )
             seed_validation = _validate_rephrase_actions(
                 seed_validation,
@@ -2124,6 +2248,7 @@ class PolishEngine:
                 protected_terms=tuple(
                     value for value in request.protected_terms if value in source
                 ),
+                dense_source=dense_source,
                 # `seed` is what this sentence was actually handed to the model.
                 prepared=seed,
             )
@@ -2182,6 +2307,7 @@ class PolishEngine:
                                 classifier=classifier,
                                 snapshot=snapshot,
                                 cascade_state=cascade_state,
+                                dense_source=dense_source,
                             )
                         )
                         calls += nested_calls
@@ -2251,6 +2377,13 @@ class PolishEngine:
             task=request.task,
             grammar_mode=request.command.strip().casefold() == "proofread",
             protected_terms=request.protected_terms,
+            # Every sentence in `recovered_text` already passed its own
+            # validation. Re-judging the stitched paragraph against the raw
+            # source charged it once more for the spelling the rules layer had
+            # fixed, so a paragraph assembled entirely from accepted sentences
+            # could still be refused as a whole.
+            dense_source=dense_source,
+            prepared=deterministic,
         )
         recovered_validation = _validate_rephrase_actions(
             recovered_validation,
@@ -2789,6 +2922,7 @@ class PolishEngine:
         generation_seconds: float = 0.0,
         runtime_failure_kind: RuntimeFailureKind = RuntimeFailureKind.NONE,
         cold_load_seconds: float = 0.0,
+        refusal_reason: str = "",
     ) -> CorrectionResult:
         total_ms = (time.perf_counter() - started) * 1000.0
         quality = self._evaluate_quality(
@@ -2838,6 +2972,12 @@ class PolishEngine:
                 "review_ready": review_ready,
                 "backend": plan.backend.value,
                 "pack_id": plan.pack_id,
+                # Why the model's answer was not used, in engine terms rather
+                # than the reader-facing wording. Without this a refused
+                # section is indistinguishable from a clean one from the
+                # outside, which is how a run of nine rules-only paragraphs
+                # was reported as nine successes.
+                "refusal_reason": refusal_reason,
             },
         )
 
@@ -3237,6 +3377,11 @@ class PolishWritingAssistantAdapter:
                     task=result.plan.task,
                     grammar_mode=command.strip().casefold() == "proofread",
                     protected_terms=protected,
+                    # The cleanup edits an already-accepted correction. Judged
+                    # against the writer's raw text it was charged for every
+                    # repair the correction had legitimately made, and a
+                    # refusal here discards the finished correction.
+                    prepared=result.deterministic_text or None,
                 )
                 cleanup_validation = _validate_rephrase_actions(
                     cleanup_validation,
@@ -4850,6 +4995,30 @@ _CONTRACTION_NORMALIZE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Words the writer split in two. Only the joined form is meaning-bearing to the
+# counters, so joining one read as a word the model had invented. Kept to forms
+# whose split spelling has no other reading in running text.
+_SPLIT_WORD_NORMALIZE = {
+    "with out": "without",
+    "can not": "cannot",
+    "no body": "nobody",
+    "no thing": "nothing",
+    # "maybe", "may be" and "may" are one modality written three ways, and
+    # "companionshp maybe look different" -> "companionship may look different"
+    # is the repair being asked for - "maybe look" is not grammatical. Only the
+    # bare modal is a modal to the counters, so the repair read as "modal
+    # meaning changed (added may)". Folded on both sides, so a genuine modal
+    # change such as "must" -> "may" still fails. The dropped "be" does not
+    # matter: this text is only ever counted, never shown.
+    "may be": "may",
+    "maybe": "may",
+}
+_SPLIT_WORD_NORMALIZE_RE = re.compile(
+    r"\b(?:" + "|".join(key.replace(" ", r"\s+") for key in _SPLIT_WORD_NORMALIZE)
+    + r")\b",
+    re.IGNORECASE,
+)
+
 # Function words, pronouns, and contractions are never proper names. A
 # capitalized one at a sentence start is ordinary sentence casing, not a new
 # entity. Used to stop the validator from reading "Your"/"Don't" as invented
@@ -4884,7 +5053,17 @@ def _normalize_contractions(text: str) -> str:
     should fix. Counting "cant" as a different modal than "can't", or "dont"
     as a different negation than "don't", is what made the safety gate reject
     the very correction the user wanted.
+
+    A word split in two is the same class of error: "with out proper care" is
+    "without proper care", and only the joined form is a negation to the
+    counters, so joining it read as a negation the model had added.
     """
+    text = _SPLIT_WORD_NORMALIZE_RE.sub(
+        lambda match: _SPLIT_WORD_NORMALIZE[
+            re.sub(r"\s+", " ", match.group(0).casefold())
+        ],
+        text,
+    )
     return _CONTRACTION_NORMALIZE_RE.sub(
         lambda match: _CONTRACTION_NORMALIZE[match.group(0).casefold()],
         text,
@@ -4903,18 +5082,53 @@ def _added_actors_are_safe_subjects(source: str, candidate: str) -> bool:
     it->they, and invented owners remain blocked.
     """
     source_actors = _actor_counter(
-        _normalize_actor_homophones(_normalize_contractions(source))
+        _normalize_actor_homophones(
+            _normalize_contractions(_strip_discourse_hedges(source))
+        )
     )
     candidate_actors = _actor_counter(
-        _normalize_actor_homophones(_normalize_contractions(candidate))
+        _normalize_actor_homophones(
+            _normalize_contractions(_strip_discourse_hedges(candidate))
+        )
     )
+    # The same leniency _actors_preserved applies: a noun actor that only
+    # appears because a misspelling was fixed is not a new actor. The two
+    # functions decide the same question and disagreed about it, so "oner" ->
+    # "owner" was forgiven by one and counted as an invented owner by the
+    # other, which refused the paragraph.
+    for actor in list(candidate_actors - source_actors):
+        if actor not in _PRONOUN_ACTOR_KEYS and _noun_actor_misspelled_in(
+            actor, source
+        ):
+            candidate_actors[actor] = source_actors[actor]
+            if candidate_actors[actor] <= 0:
+                del candidate_actors[actor]
     if source_actors == candidate_actors:
         return True
     if (candidate_actors - source_actors) and not (source_actors - candidate_actors):
         added = candidate_actors - source_actors
         if set(added) <= {"i", "we", "you"}:
             return True
-        return added == Counter({"it": 1})
+        if added == Counter({"it": 1}):
+            return True
+        # A run-on split into sentences needs a pronoun for the noun the first
+        # sentence named: "the person for saying something awkward or wearing
+        # the same shirt" becomes "... or they wear the same shirt". Nothing was
+        # removed, so the noun the pronoun stands for is still there, and only
+        # "they" and "it" - which carry no new information about who acts - are
+        # allowed. "he" and "she" stay blocked, because choosing one invents a
+        # fact about a person the writer did not state.
+        # The noun may be recognisable only after correction: this paragraph
+        # opens "thier IS emotioonal benefits ... the oner has a bad day", where
+        # every noun actor is misspelled and so invisible on the source side.
+        # Looking at both sides asks the question that actually matters - is a
+        # noun named alongside the pronoun - rather than which side spelled it.
+        if set(added) <= {"it", "they"} and any(
+            actor not in _PRONOUN_ACTOR_KEYS
+            for actor in (*source_actors, *candidate_actors)
+        ):
+            return True
+        return False
     return False
 
 
@@ -5073,10 +5287,39 @@ def _normalize_actor_homophones(text: str) -> str:
 
 _PRONOUN_ACTOR_KEYS = frozenset({"i", "we", "you", "he", "she", "they", "it"})
 
+# Filler that carries a pronoun without naming anyone who acts. Deleting it is
+# ordinary proofreading, but the pronoun inside it counted as an actor, so
+# "important in i guess every country" -> "important in every country" was
+# refused as "actor changed (missing i)". Removed before the actor families are
+# compared, on both sides, so nothing is credited or charged for it.
+#
+# Deliberately short. Each entry is filler in any sentence it can appear in;
+# "I think" and "I believe" are claims by a real speaker and are not here.
+_DISCOURSE_HEDGE = re.compile(
+    r"(?:,\s*)?\b(?:i\s+guess|you\s+know|you\s+see|i\s+mean|to\s+be\s+honest)"
+    r"\b(?:\s*,)?",
+    re.IGNORECASE,
+)
+
+
+def _strip_discourse_hedges(text: str) -> str:
+    """Remove pronoun-bearing filler before actor families are compared."""
+    return _DISCOURSE_HEDGE.sub(" ", text)
+
 
 def _edit_distance_at_most(a: str, b: str, limit: int) -> bool:
+    """Damerau-Levenshtein: a swapped pair of letters counts as one edit.
+
+    Every caller asks the same question - is this word a misspelling of that
+    one - and transposition is the most common typo there is. Counting it as
+    two edits put "Utercht" out of reach of "Utrecht" at a limit of one, so
+    correcting the city's name was refused as "named entity removed" and the
+    paragraph lost its correction. The speller already treats transposition as
+    its own category for the same reason.
+    """
     if abs(len(a) - len(b)) > limit:
         return False
+    before_previous: list[int] | None = None
     previous = list(range(len(b) + 1))
     for i, ca in enumerate(a, start=1):
         current = [i]
@@ -5087,12 +5330,193 @@ def _edit_distance_at_most(a: str, b: str, limit: int) -> bool:
                 current[j - 1] + 1,
                 previous[j - 1] + (ca != cb),
             )
+            if (
+                before_previous is not None
+                and j >= 2
+                and ca == b[j - 2]
+                and a[i - 2] == cb
+            ):
+                value = min(value, before_previous[j - 2] + 1)
             current.append(value)
             best = min(best, value)
         if best > limit:
             return False
+        before_previous = previous
         previous = current
     return previous[-1] <= limit
+
+
+# Every closed-class word the meaning guards count. Derived from the guard
+# patterns themselves rather than hand-picked, so a guard and its vocabulary
+# cannot drift apart: if a word is added to _MODAL_MEANING it is respelled too.
+_GUARD_VOCABULARY: frozenset[str] = frozenset(
+    {
+        "cannot",
+        "could",
+        "may",
+        "might",
+        "must",
+        "shall",
+        "should",
+        "will",
+        "would",
+        "never",
+        "nobody",
+        "none",
+        "nothing",
+        "neither",
+        "without",
+        "required",
+        "requires",
+        "needs",
+        "needed",
+        "prohibited",
+        "forbidden",
+        "before",
+        "after",
+        "until",
+        "during",
+        "while",
+        "following",
+    }
+)
+
+
+def _reconcile_guard_vocabulary(source: str, candidate: str) -> str:
+    """Spell a guard word in the source when the candidate shows what it was.
+
+    The guards match exact words, so a misspelled one is invisible to them.
+    Judged against the writer's own typo, a model that spelled it correctly
+    looked like a model that invented it: "cud work real good" -> "could work
+    really well" was refused as "modal meaning changed", "befor" -> "before" as
+    "date or ordering relationship changed (added before)", and "shoud" ->
+    "should" as "obligation strength changed (added should)". Across the
+    twenty-essay corpus that class of refusal outnumbered every real meaning
+    error, and each one cost a whole paragraph its correction.
+
+    The rules layer repairs most of these before the model runs, which is why
+    comparing against the prepared text fixed the common cases. What is left is
+    what the speller deliberately declines to guess, and "cud" is the example:
+    it is a real word, so no dictionary check will ever call it a typo.
+
+    So the candidate supplies the evidence instead of a dictionary. A source
+    token is respelled only when the candidate actually uses that guard word,
+    the candidate has dropped the source token, and the two are close enough to
+    be the same word misspelled. An earlier version rewrote the source on its
+    own and turned "wether" into "neither" and "lights" into "might", inventing
+    the negation and modal it was supposed to be checking. Requiring the
+    candidate to name the target is what stops that: a word nobody wrote cannot
+    appear.
+
+    Words must also share a first letter. That is what separates a misspelling
+    from a different word, and it is why "wether" cannot reach "neither".
+    """
+    source_tokens = {value.casefold() for value in re.findall(r"[A-Za-z]+", source)}
+    candidate_tokens = {
+        value.casefold() for value in re.findall(r"[A-Za-z]+", candidate)
+    }
+    targets = tuple(
+        word
+        for word in _GUARD_VOCABULARY
+        if word in candidate_tokens and word not in source_tokens
+    )
+    if not targets:
+        return source
+
+    def replace(match: re.Match[str]) -> str:
+        token = match.group(0)
+        folded = token.casefold()
+        if folded in _GUARD_VOCABULARY or len(folded) < 3:
+            return token
+        if folded in candidate_tokens:
+            # The candidate kept this word, so it was not replaced by anything.
+            return token
+        matches = [
+            word
+            for word in targets
+            if word[:1] == folded[:1] and _edit_distance_at_most(folded, word, 2)
+        ]
+        if len(matches) != 1:
+            # No target, or an ambiguous one. Guessing here would invent a
+            # modal the writer never wrote, which is the failure the guards
+            # exist to catch.
+            return token
+        replacement = matches[0]
+        return replacement.upper() if token.isupper() else (
+            replacement.capitalize() if token[:1].isupper() else replacement
+        )
+
+    return re.sub(r"[A-Za-z]+", replace, source)
+
+
+def _misspelled_non_entity_starter(word: str) -> bool:
+    """True when a sentence-opening word is a typo of a known function word.
+
+    Real names are rarely within two edits of "their", "these" or "when", and a
+    name that is would be caught by every other guard in the validator. A typo
+    of one is common in exactly the text this product exists for.
+    """
+    if len(word) < 4:
+        return False
+    return any(
+        starter[:1] == word[:1]
+        and abs(len(starter) - len(word)) <= 2
+        and _edit_distance_at_most(word, starter, 2)
+        for starter in _NON_ENTITY_STARTERS
+        if len(starter) >= 4
+    )
+
+
+def _named_entity_respelled_in(entity: str, text: str) -> bool:
+    """True when every word of a "removed" name appears respelled in the text.
+
+    A real removal drops the name. A respelling keeps it one or two letters
+    different, which the exact-match entity check cannot tell apart, so
+    correcting a capitalized misspelling looked like deleting a name.
+
+    Every word has to be accounted for, so dropping one word of a two-word name
+    still fails.
+    """
+    words = [word for word in re.findall(r"[A-Za-z']+", entity) if len(word) >= 4]
+    if not words:
+        return False
+    tokens = re.findall(r"[A-Za-z']+", text)
+    for word in words:
+        folded = word.casefold()
+        limit = 1 if len(folded) < 8 else 2
+        if not any(
+            # Three, not four: the repair is often what shortens the word, and
+            # "Pett" -> "Pet" was missed because the fixed spelling fell under
+            # the floor that the misspelling cleared.
+            len(token) >= 3
+            and _same_name_respelled(token.casefold(), folded, limit)
+            for token in tokens
+        ):
+            return False
+    return True
+
+
+def _same_name_respelled(candidate: str, source: str, limit: int) -> bool:
+    """Whether two spellings are the same name, one of them mistyped.
+
+    Close is not enough on its own. "Malik" -> "Mali" is one edit and is a
+    different person; forgiving it let a model quietly shorten a name, which is
+    the exact failure the entity guard exists to catch. What separates a typo
+    from a different name here is the ending: a repair fixes a doubled letter or
+    a missing vowel inside the word ("Pett" -> "Pet", "Csco" -> "Cusco"), while
+    a truncation or an addition changes the last letter.
+    """
+    if candidate.rstrip("s") == source.rstrip("s") and candidate != source:
+        # An added or removed plural "s" is agreement, not identity: "Parrot
+        # Make" -> "Parrot Makes" is the subject-verb repair being asked for,
+        # and _named_entities reads any title-cased phrase as a name.
+        return True
+    if not _edit_distance_at_most(candidate, source, limit):
+        return False
+    if len(candidate) == len(source):
+        # Substitutions and swapped letters: "Utercht" -> "Utrecht".
+        return True
+    return candidate[-1:] == source[-1:]
 
 
 def _noun_actor_misspelled_in(actor: str, text: str) -> bool:
@@ -5119,8 +5543,8 @@ def _actors_preserved(
     allow_redundant_pronoun: bool = False,
 ) -> bool:
     """Keep every actor family while allowing safe proofread compression."""
-    source = _normalize_actor_homophones(source)
-    candidate = _normalize_actor_homophones(candidate)
+    source = _normalize_actor_homophones(_strip_discourse_hedges(source))
+    candidate = _normalize_actor_homophones(_strip_discourse_hedges(candidate))
     source_actors = _actor_counter(source)
     candidate_actors = _actor_counter(candidate)
     # A noun actor that only appears because a misspelling was fixed (or
@@ -5141,6 +5565,25 @@ def _actors_preserved(
             if source_actors[actor] <= 0:
                 del source_actors[actor]
     if set(source_actors) == set(candidate_actors):
+        return True
+    if (
+        allow_redundant_pronoun
+        and set(source_actors) - set(candidate_actors) == {"it"}
+        and not (set(candidate_actors) - set(source_actors))
+        and candidate_actors
+    ):
+        # The mirror of the allowance for adding "it": "and also it shows the pet
+        # is theirs" -> "and also shows the pet is theirs" drops a redundant
+        # placeholder subject, which is the tidy-up a proofread is for. Adding
+        # "it" has been allowed for the same reason since the fragment repair
+        # went in.
+        #
+        # "it" names nobody, so dropping it cannot lose who acts. What it can do
+        # is leave a fragment, and that is why some actor has to remain: "which
+        # is why it is good but also not" -> "This is good but also not" keeps
+        # none and still fails. Requiring a *noun* actor was too strict - the
+        # commonest case leaves only a pronoun ("they"), and it was refused.
+        # The literal-phrase rule below predates this and is its narrow version.
         return True
     if (
         source_actors - candidate_actors == Counter({"it": 1})
@@ -5571,6 +6014,15 @@ def _modal_meaning_preserved(
     candidate_modals = _modal_meaning_counter(candidate)
     if source_modals == candidate_modals:
         return True
+    if grammar_mode and set(source_modals) == set(candidate_modals):
+        # A modal's multiplicity is not meaning; its presence is. The writer
+        # wrote "then maybe forgets their keys because the maybe morning got
+        # busy" and the repair dropped the stray second one, which read as
+        # "modal meaning changed (missing may)". Every modal the writer used is
+        # still there, so nothing was permitted, required or made uncertain that
+        # was not before. Losing a modal family outright still fails, and so
+        # does gaining one, because both change what the sentence claims.
+        return True
     if (
         grammar_mode
         and candidate_modals - source_modals == Counter({"will": 1})
@@ -5804,9 +6256,27 @@ def _named_entities(text: str) -> set[str]:
             lowered_full = (
                 f"{lowered}'{trailing.group(1).casefold()}" if trailing else lowered
             )
-            if lowered in _NON_ENTITY_STARTERS or lowered_full in _NON_ENTITY_STARTERS:
+            if (
+                lowered in _NON_ENTITY_STARTERS
+                or lowered_full in _NON_ENTITY_STARTERS
+                # The multi-word check above already treats these as function
+                # words; the single-word check consulted a different set and
+                # disagreed. "With out proper cair" -> "Without proper care" was
+                # refused as "new named entity added" because "without" was in
+                # one set and not the other.
+                or lowered in common_words
+            ):
                 # Ordinary sentence casing of a pronoun, contraction, or
                 # function word ("Your", "Don't", "The") is not a new entity.
+                continue
+            if _misspelled_non_entity_starter(lowered):
+                # A typo of a function word is still not a name. "Thier is
+                # emotional benefits" starts with a misspelled "Their", and
+                # correcting it was refused as "named entity removed" - which
+                # cost the paragraph its whole correction. The set above already
+                # declares these words are never names; that has to survive the
+                # writer misspelling one, or the list grows a typo at a time
+                # ("Teh" is already in it).
                 continue
         repeated_lowercase = bool(
             re.search(
