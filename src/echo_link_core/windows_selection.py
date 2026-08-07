@@ -262,7 +262,21 @@ class WindowsSelectionReader:
                         SelectionRecord(
                             text,
                             window,
-                            "selection",
+                            # A caret that grew to the whole document *is* the
+                            # document, and saying "selection" here cost every
+                            # section after the first one.
+                            #
+                            # After inserting a correction the review has to
+                            # find its region again in the changed document.
+                            # For a real selection it does that by locating the
+                            # captured text verbatim - which is impossible once
+                            # an edit has changed it, so the search failed,
+                            # `require_recapture` ran, and it empties
+                            # `_suggestions`. Section 1 corrected, then the card
+                            # read "Fresh selection required" and sections 2
+                            # onward were gone. Scope "document" takes the
+                            # branch that simply re-reads the document instead.
+                            "document" if expanded_to_document else "selection",
                             document_digest,
                             runtime_id,
                             anchor if runtime_id else None,

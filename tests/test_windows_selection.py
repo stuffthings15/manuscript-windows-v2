@@ -1255,12 +1255,99 @@ def test_word_page_expansion_never_shrinks_a_larger_selection():
     assert "Third paragraph is on the next page." in detected.record.text
 
 
-# The bare-caret path is not unit-tested here. Driving it needs a fake that
-# implements paragraph expansion, endpoint moves and endpoint comparison well
-# enough for _sentence_range_at_caret, and a fixture that elaborate tests the
-# fake rather than the reader. The whole-document widening is verified in real
-# Word by tools/word_essay_session.py, which reports the captured character
-# count against the essay length - which is how the page cap was found.
+class _CaretRange(_Range):
+    """A caret that widens the way UI Automation widens one.
+
+    Enough of the text pattern for _sentence_range_at_caret to succeed:
+    expand to a paragraph, report an empty prefix so the caret sits at its
+    start, and accept endpoint moves. An earlier version of this fake left
+    TextUnit.Character off, which made the reader's own try/except swallow an
+    AttributeError and return None - the fixture failing, not the reader.
+    """
+
+    def __init__(self, page_text, paragraph_text, rectangles=None):
+        super().__init__("", rectangles)
+        self.page_text = page_text
+        self.paragraph_text = paragraph_text
+        self.expanded_unit = None
+
+    def Clone(self):
+        clone = _CaretRange(self.page_text, self.paragraph_text, self.rectangles)
+        clone.text = self.text
+        return clone
+
+    def ExpandToEnclosingUnit(self, unit, waitTime=None):
+        self.expanded_unit = unit
+        self.text = self.paragraph_text if unit == 5 else self.page_text
+        return True
+
+    def MoveEndpointByRange(self, _end, _other, _other_end, waitTime=None):
+        self.text = ""
+        return True
+
+    def MoveEndpointByUnit(self, _endpoint, _unit, _count, waitTime=None):
+        return True
+
+
+def _word_automation(control):
+    automation = _Automation(control)
+    automation.TextUnit = type(
+        "TextUnit", (), {"Page": 6, "Paragraph": 5, "Line": 4, "Character": 1}
+    )
+    automation.TextPatternRangeEndpoint = type(
+        "Endpoint", (), {"Start": 0, "End": 1}
+    )
+    return automation
+
+
+def test_word_caret_reviews_the_whole_document_not_one_page():
+    """A caret with no selection means the writer wants the document reviewed.
+
+    UI Automation cannot see Word's unrendered pages, so expanding a caret to
+    its enclosing page capped a 5203-character essay at 3522: paragraphs 9 and
+    10 were never offered, and the run still reported every section it did
+    offer as accepted. A skipped paragraph has to be impossible, not unlikely.
+    """
+    page_text = "Page one paragraph. Page one second paragraph."
+    document_text = f"{page_text} Paragraph nine. Paragraph ten."
+    caret = _CaretRange(page_text, "Page one paragraph.", [_Rect(10, 20, 300, 80)])
+    control = _Control(
+        [caret],
+        document_range=_Range(document_text),
+        control_type="DocumentControl",
+        runtime_id=(7, 8, 9),
+    )
+
+    detected = WindowsSelectionReader(
+        max_characters=5000,
+        automation_loader=lambda: _word_automation(control),
+        window_provider=lambda: WindowSnapshot(11, 222, "Essay - Word"),
+        own_process_id=999,
+        include_word_page=True,
+        include_caret_sentence=True,
+    ).read()
+
+    assert detected is not None
+    assert detected.record.text == document_text
+    assert "Paragraph ten." in detected.record.text
+
+
+def test_non_word_editor_caret_does_not_widen_to_the_document():
+    """Only Word gets this. Elsewhere a caret still reviews its own sentence."""
+    caret = _CaretRange("Whole page.", "Just this sentence.")
+    control = _Control([caret], document_range=_Range("Far more text than that."))
+
+    detected = WindowsSelectionReader(
+        max_characters=5000,
+        automation_loader=lambda: _word_automation(control),
+        window_provider=lambda: WindowSnapshot(11, 222, "Notepad"),
+        own_process_id=999,
+        include_word_page=True,
+        include_caret_sentence=True,
+    ).read()
+
+    assert detected is not None
+    assert "Far more text" not in detected.record.text
 
 
 def test_word_respects_a_selection_the_writer_made():
@@ -1286,3 +1373,115 @@ def test_word_respects_a_selection_the_writer_made():
     assert detected is not None
     assert "Earlier." not in detected.record.text
     assert "Later." not in detected.record.text
+
+
+def test_a_document_too_large_to_capture_whole_is_reported(caplog):
+    """A partial review has to be loud, whatever forces it.
+
+    An essay reviewed as 3522 of 5203 characters reported eight sections, every
+    one accepted, and paragraphs 9 and 10 came back untouched with nothing
+    logged anywhere. When the document is larger than one capture can hold the
+    review really does cover part of it, so say so.
+    """
+    import logging
+
+    caret = _CaretRange("Only this page.", "Only this page.")
+    control = _Control(
+        [caret],
+        document_range=_Range("x" * 5000),
+        control_type="DocumentControl",
+        runtime_id=(1, 2),
+    )
+    reader = WindowsSelectionReader(
+        max_characters=100,
+        automation_loader=lambda: _word_automation(control),
+        window_provider=lambda: WindowSnapshot(11, 222, "Essay - Word"),
+        own_process_id=999,
+        include_word_page=True,
+        include_caret_sentence=True,
+    )
+    with caplog.at_level(logging.WARNING, logger="echo_link_core.windows_selection"):
+        detected = reader.read()
+
+    assert detected is not None
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if "reviewing part of the document" in record.getMessage()
+    ]
+    assert warnings, caplog.records
+
+
+def test_a_caret_that_took_the_whole_document_is_scoped_as_a_document(monkeypatch):
+    """Saying "selection" here cost every section after the first one.
+
+    After inserting a correction the review has to find its region again in the
+    changed document. For a real selection it does that by locating the
+    captured text verbatim, which cannot succeed once an edit has changed that
+    text - so the search failed, `require_recapture` ran, and that empties
+    `_suggestions`. The writer saw section 1 corrected, then "Fresh selection
+    required", and sections 2 onward simply gone. Scope "document" takes the
+    branch that re-reads the document instead.
+    """
+    document_text = (
+        "First paragraph has one sentence.\rSecond paragraph has two.\r"
+        "Third paragraph is on the next page."
+    )
+    caret = _PageRange("", document_text, [_Rect(10, 20, 11, 40)])
+    sentence = _PageRange(
+        "First paragraph has one sentence.", document_text, [_Rect(10, 20, 300, 40)]
+    )
+    monkeypatch.setattr(
+        selection_module,
+        "_sentence_range_at_caret",
+        lambda current, automation, limit: sentence if current is caret else None,
+    )
+    control = _Control(
+        [caret],
+        document_range=_Range(document_text),
+        control_type="DocumentControl",
+        runtime_id=(7, 8, 9),
+    )
+    automation = _Automation(control)
+    automation.TextUnit = type("TextUnit", (), {"Page": 6})
+
+    detected = WindowsSelectionReader(
+        max_characters=500,
+        automation_loader=lambda: automation,
+        window_provider=lambda: WindowSnapshot(11, 222, "Draft - Word"),
+        own_process_id=999,
+        include_caret_sentence=True,
+        include_word_page=True,
+    ).read()
+
+    assert detected is not None
+    assert detected.record.text == document_text
+    assert detected.record.scope == "document"
+
+
+def test_a_selection_the_writer_made_is_still_scoped_as_a_selection():
+    """Only the caret-grown capture changes scope; a real selection does not."""
+    document_text = "First sentence here. Second sentence here. Third one."
+    chosen = _PageRange(
+        "Second sentence here.", document_text, [_Rect(10, 20, 300, 40)]
+    )
+    control = _Control(
+        [chosen],
+        document_range=_Range(document_text),
+        control_type="DocumentControl",
+        runtime_id=(7, 8, 9),
+    )
+    automation = _Automation(control)
+    automation.TextUnit = type("TextUnit", (), {"Page": 6})
+
+    detected = WindowsSelectionReader(
+        max_characters=500,
+        automation_loader=lambda: automation,
+        window_provider=lambda: WindowSnapshot(11, 222, "Draft - Word"),
+        own_process_id=999,
+        include_caret_sentence=True,
+        include_word_page=True,
+    ).read()
+
+    assert detected is not None
+    assert detected.record.scope == "selection"
