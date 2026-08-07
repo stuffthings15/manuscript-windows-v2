@@ -284,3 +284,92 @@ def test_repairing_a_typo_is_not_read_as_changing_the_meaning() -> None:
     assert any(
         "ordering relationship changed" in value for value in invented_result.failures
     ), invented_result.failures
+
+
+def _normalised(text: str) -> str:
+    from echo_link_core.polish import (
+        _normalize_contractions,
+        _strip_discourse_hedges,
+    )
+
+    return _normalize_contractions(_strip_discourse_hedges(text))
+
+
+def test_a_hedge_in_front_of_an_open_list_may_be_written_without_a_modal() -> None:
+    """The model preserved the hedge and was told it had not.
+
+    The writer put a hedge in front of an open-ended list - "some habitats does
+    need maybe lights heaters filters or other equipments" - where it hedges
+    which items the list holds, not whether the sentence is true. Repairs keep
+    that openness with "or other equipment" or "things like lights", and the
+    modal counter, which only recognises literal modals, called each one a lost
+    modal. Essay 8 paragraph 5 was refused four times over, including the
+    attempt that wrote the hedge back as "things like".
+    """
+    from echo_link_core.polish import _modal_meaning_preserved
+
+    source = (
+        "Its not a movie and it don't need batteries although some habitats "
+        "does need maybe lights heaters filters or other equipments."
+    )
+    for candidate in (
+        "It is not a movie, and it does not need batteries, although some "
+        "habitats do need lights, heaters, filters, or other equipment.",
+        "It is not a movie, and it does not need batteries, although some "
+        "habitats do need things like lights, heaters, filters, or other "
+        "equipment.",
+    ):
+        assert _modal_meaning_preserved(
+            _normalised(source), _normalised(candidate), grammar_mode=True
+        ), candidate
+
+
+def test_a_hedge_on_a_claim_is_still_refused_when_it_is_dropped() -> None:
+    """Essay 7 paragraph 5, which the exemption above must not reach.
+
+    "its needds is maybe MET" -> "its needs are met" turns a hedge into a
+    claim the writer did not make. There is no open-ended list in the source,
+    so the exemption cannot match it.
+    """
+    from echo_link_core.polish import _modal_meaning_preserved
+
+    source = (
+        "a pet basically can only be great when its needs is maybe met but "
+        "with out proper cair even the nicest animal becomes stressed."
+    )
+    candidate = (
+        "A pet can only be great when its needs are met, but without proper "
+        "care even the nicest animal becomes stressed."
+    )
+
+    assert not _modal_meaning_preserved(
+        _normalised(source), _normalised(candidate), grammar_mode=True
+    )
+
+
+def test_the_open_list_exemption_cannot_swallow_a_real_permission() -> None:
+    """A modal precedes its verb; a hedged object follows one.
+
+    Without that requirement the exemption accepted "students may use the lab
+    or other rooms" -> "students use the lab or other rooms", which is the
+    permission loss the modal guard exists to catch. "have", "has" and "had"
+    are auxiliaries and are deliberately not in the verb list, because "you
+    have may seen" is a garbled modal position rather than a hedged object.
+    """
+    from echo_link_core.polish import _modal_meaning_preserved
+
+    for source, candidate in (
+        ("students may use the lab or other rooms",
+         "students use the lab or other rooms"),
+        ("you have may seen the lab or other rooms",
+         "you have seen the lab or other rooms"),
+        # The list has to stay open for the hedge to survive in it.
+        ("habitats need maybe lights or other gear",
+         "habitats need lights and heaters"),
+        # A closed list was never hedged in this way.
+        ("habitats need maybe lights and heaters",
+         "habitats need lights and heaters"),
+    ):
+        assert not _modal_meaning_preserved(
+            _normalised(source), _normalised(candidate), grammar_mode=True
+        ), source

@@ -6011,6 +6011,31 @@ def _modal_subject_counter(text: str) -> Counter[str]:
         values.append(f"{subject}:{match.group('modal').casefold()}")
     return Counter(values)
 
+# A hedge standing in front of an open-ended list: "need maybe lights heaters
+# filters or other equipments". "maybe" folds to "may" before the counters see
+# it, so the modal spelling is what appears here. The list has to be open -
+# closed by "or other", "and so on", "etc" - because that openness is what the
+# hedge is doing, and it is what a repair can preserve without a modal.
+# The hedge must also sit *after* a finite verb, which is not a modal position:
+# a modal precedes its verb ("students may use the lab"), so one that follows
+# another verb ("habitats need maybe lights") is hedging the object, not the
+# action. Without that requirement this exemption let a genuine permission go -
+# "students may use the lab or other rooms" -> "students use the lab or other
+# rooms" - which is exactly what the modal guard exists to catch.
+_HEDGED_OPEN_LIST = re.compile(
+    # Lexical verbs only. "have", "has" and "had" are auxiliaries, so "you have
+    # may seen" is a garbled modal position rather than a hedged object, and
+    # listing them let a real modal loss through.
+    r"\b(?:need|needs|needed|require|requires|include|includes|want|wants"
+    r"|use|uses|get|gets|add|adds|buy|buys|bring|brings)\s+may(?:be)?\b"
+    r"[^.!?]{0,120}?\b(?:or\s+other|and\s+so\s+on|etc)\b",
+    re.IGNORECASE,
+)
+# The same openness written without a modal, which is how a correction keeps it.
+_OPEN_LIST_MARKER = re.compile(
+    r"\b(?:or\s+other|and\s+so\s+on|etc|such\s+as|(?:things|something)\s+like)\b",
+    re.IGNORECASE,
+)
 _BARE_TEMPORAL_CLAUSE = re.compile(
     r"\b(?:when|until|after|before|once)\s+(?:the|a|an|this|that|it|they)\b",
     re.IGNORECASE,
@@ -6035,6 +6060,29 @@ def _modal_meaning_preserved(
         # still there, so nothing was permitted, required or made uncertain that
         # was not before. Losing a modal family outright still fails, and so
         # does gaining one, because both change what the sentence claims.
+        return True
+    if (
+        grammar_mode
+        and not (candidate_modals - source_modals)
+        and set(source_modals - candidate_modals) <= {"may", "might"}
+        and _HEDGED_OPEN_LIST.search(source)
+        and _OPEN_LIST_MARKER.search(candidate)
+    ):
+        # The hedge is still there; it is just not spelled as a modal. The
+        # writer put one in front of an open-ended list - "some habitats does
+        # need maybe lights heaters filters or other equipments" - where it
+        # hedges which items the list contains, not whether the sentence is
+        # true. Repairs keep that openness with "or other equipment" or "things
+        # like lights", and the counter, which only recognises literal modals,
+        # called every one of them a lost modal. One paragraph was refused four
+        # times over, including the attempt that wrote the hedge back as "things
+        # like" - the model preserving the meaning exactly and being told it had
+        # not.
+        #
+        # A hedge on a predicate is a different thing and is deliberately not
+        # covered: "its needds is maybe MET" -> "its needs are met" turns a
+        # hedge into a claim, and that stays refused because there is no open
+        # list in the source for this to match.
         return True
     if (
         grammar_mode
