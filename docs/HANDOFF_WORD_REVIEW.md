@@ -211,6 +211,35 @@ and it may rely on the same whole-text scope, so a clause-scoped rewrite could
 silently lose it. Run `tools/refusal_evidence_probe.py --essays 7,8` and
 confirm 7 still refuses and 8 no longer does, before and after.
 
+### The actor refusals, examined one by one
+
+All six were read against the writer's text. **Five are the guard working.**
+Do not "fix" them:
+
+- `essay-6 p6`, `essay-17 p8`, `essay-19 p4` are the *same sentence*: "which is
+  why it is good but also not" -> "This is good but also not". The repair drops
+  the causal link back to the paragraph. The label says "missing it", which is
+  the wrong reason for the right answer, but the answer is right.
+- `essay-14 p9`: the writer's "thier IS emotioonal benefits" is existential -
+  they meant "There are emotional benefits". The model wrote "Their emotional
+  benefits are as well", a possessive. `_normalize_actor_homophones` reads the
+  source correctly as "there IS" and the candidate as "Their", so the added
+  actor is real and the refusal is correct.
+- `essay-11 p4` carries two flags. The actor one is a genuine false positive -
+  "would be exagerating it" -> "would be an exaggeration" drops a dummy object,
+  not an actor - but the modal flag on the same paragraph is defensible, so
+  clearing the actor half alone would not release it. Left alone.
+
+One was a real defect, fixed in `38225c9`:
+
+- `essay-19 p6`, `modal actor changed`. `_modal_subject_counter` was the one
+  counter in the validator still reading `meaning_reference` instead of the
+  reconciled source. "cud" is an ordinary English word, so no speller repairs
+  it and `prepared` keeps it; the source then has no modal beside its subject,
+  the candidate has "the owner could write", and repairing the spelling read as
+  a modal attached to a new actor. Same class as the four validate call sites
+  fixed earlier. Corpus: **187 of 200, errors 622 -> 10.**
+
 ### Two refusals that are correct, and one that is not
 
 Do not "fix" these two. They are the guards working:
