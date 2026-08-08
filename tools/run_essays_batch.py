@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -123,6 +124,59 @@ def outcome(row: dict) -> str:
     return "complete"
 
 
+LOG = Path(os.environ.get("LOCALAPPDATA", "")) / "ManuscriptWindowsV2" / "echo-link.log"
+
+
+def log_tail(lines: int = 60) -> list[str]:
+    """The app's own account of the window that just failed."""
+    try:
+        text = LOG.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:  # noqa: BLE001 - the diagnosis says so itself
+        return [f"<could not read {LOG}: {type(exc).__name__}: {exc}>"]
+    kept = [
+        line
+        for line in text.splitlines()
+        if "faster_whisper" not in line and "VAD filter" not in line
+    ]
+    return kept[-lines:]
+
+
+def hud_tree(hud, limit: int = 60) -> list[str]:
+    """Every control the HUD is showing, named and enabled-or-not."""
+    if hud is None:
+        return ["<no Writing HUD window>"]
+    from repro_accept_advance import _descend
+
+    rows: list[str] = []
+    for control in _descend(hud):
+        try:
+            rows.append(
+                f"{control.ControlTypeName:<22} enabled={str(control.IsEnabled):<5} "
+                f"name={str(control.Name or '')[:90]!r}"
+            )
+        except Exception as exc:  # noqa: BLE001 - a repainting control is data too
+            rows.append(f"<unreadable control: {type(exc).__name__}: {exc}>")
+        if len(rows) >= limit:
+            rows.append(f"<truncated at {limit} controls>")
+            break
+    return rows
+
+
+def diagnose(reason: str, hud) -> list[str]:
+    """Capture why a run failed, at the moment it failed.
+
+    A bare "dead" in the table is unreproducible by the time anyone reads it.
+    Four essays were recorded that way in the full batch and each had to be
+    chased by hand afterwards. Every timeout now carries its own evidence.
+    """
+    block = [f"### {reason}", "", "**HUD controls at the moment of failure**", ""]
+    block += [f"    {row}" for row in hud_tree(hud)]
+    block += ["", "**Application log**", ""]
+    block += [f"    {row}" for row in log_tail()]
+    block += [""]
+    return block
+
+
 def open_in_word(path: Path):
     import comtypes.client
 
@@ -155,11 +209,23 @@ def review_one(path: Path, *, max_presses: int = 30) -> dict:
         report["after"] = str(word.ActiveDocument.Content.Text or "")
         return report
 
+    report["diagnosis"] = []
     deadline = time.monotonic() + 120.0
+    reviewed = False
     while time.monotonic() < deadline:
         if counter_text(hud) not in ("<none>", "0 of 0", ""):
+            reviewed = True
             break
         time.sleep(1.0)
+    if not reviewed:
+        # The failure that killed essays 5, 7, 11 and 20, and essay 18 on a
+        # freshly restarted app. Record it here rather than leaving a bare
+        # "dead" that has to be reproduced by hand later.
+        report["timed_out"] = True
+        report["diagnosis"] = diagnose(
+            "First review never appeared within 120 seconds",
+            hud_window(5.0) or hud,
+        )
 
     for press in range(1, max_presses + 1):
         hud = hud_window(10.0)
@@ -182,6 +248,9 @@ def review_one(path: Path, *, max_presses: int = 30) -> dict:
                     time.sleep(4.0)
                     continue
                 report["stalled_at"] = before
+                report["diagnosis"] = diagnose(
+                    f"Replace and Dismiss both unavailable at {before}", hud
+                )
                 break
         if not invoke(button):
             break
@@ -196,7 +265,16 @@ def review_one(path: Path, *, max_presses: int = 30) -> dict:
             time.sleep(10.0)
             again = counter_text(hud_window(8.0) or hud)
             if again == before:
+                # Do NOT dismiss here, although the captured evidence shows
+                # Dismiss enabled at this moment. Measured over three runs,
+                # dismissing on a counter that has merely paused threw away
+                # eight sections whose corrections were still arriving and
+                # turned complete 2/3 into partial 2/3, dead 1/3. A paused
+                # counter means wait; only a disabled Replace means skip.
                 report["stalled_at"] = before
+                report["diagnosis"] = diagnose(
+                    f"Counter stopped advancing at {before}", hud
+                )
                 break
 
     document = word.ActiveDocument
@@ -294,6 +372,7 @@ def main() -> int:
                 "dismissed": result.get("dismissed", 0),
                 "stalled_at": result.get("stalled_at"),
                 "error": result.get("error"),
+                "timed_out": bool(result.get("timed_out")),
                 **judged,
             }
             row["outcome"] = outcome(row)
@@ -318,6 +397,11 @@ def main() -> int:
             print(f"   -> {source.stem[:30]:<30} {summary_line}", flush=True)
 
         lines = [f"# {source.stem}", ""]
+        diagnosis = result.get("diagnosis") or []
+        if diagnosis:
+            # Put it first. A failure the reader has to scroll past the whole
+            # document to find is a failure nobody reads.
+            lines += ["## Why this run failed", ""] + diagnosis
         b = paragraphs(before_text)
         a = paragraphs(result.get("after", ""))
         for index in range(max(len(b), len(a))):
