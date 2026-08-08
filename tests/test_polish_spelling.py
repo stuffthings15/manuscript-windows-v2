@@ -159,3 +159,85 @@ def test_the_measured_list_wins_over_the_common_list():
     for word in _SUBJECT_SENSITIVE_MISSPELLINGS:
         assert word not in _COMMON_MISSPELLINGS, word
     assert "wether" not in _COMMON_MISSPELLINGS
+
+
+def test_the_bundled_corpus_holds_the_validated_pairs():
+    from echo_link_core.polish_spelling import _bundled_misspellings
+
+    pairs = _bundled_misspellings()
+    assert len(pairs) > 24000
+    assert pairs["ceasar"] == "caesar"
+    assert pairs["massachussets"] == "massachusetts"
+    # Transpositions and keyboard slips survive the plausibility gate.
+    assert pairs["ocuntries"] == "countries"
+    assert pairs["vetween"] == "between"
+
+
+def test_the_bundled_corpus_never_rewrites_a_real_word():
+    """The gate that matters: the raw dataset would have "corrected" about,
+    accept and 2,055 other perfectly good words."""
+    from echo_link_core.polish_spelling import EnglishDictionary, _bundled_misspellings
+
+    dictionary = EnglishDictionary()
+    dictionary.warm()
+    offenders = [word for word in _bundled_misspellings() if dictionary.contains(word)]
+    assert not offenders, offenders[:20]
+
+
+def test_common_real_words_survive_the_bundled_corpus():
+    for text in ("it is about time", "please accept this", "sponges absorb water"):
+        assert _repairs(text) == {}, text
+
+
+def test_the_bundled_corpus_never_outranks_a_context_rule():
+    """A flat lookup must not overrule logic that reads the sentence."""
+    from echo_link_core.polish_spelling import (
+        _bundled_misspellings,
+        _MEASURED_MISSPELLINGS,
+        _SUBJECT_SENSITIVE_MISSPELLINGS,
+    )
+
+    pairs = _bundled_misspellings()
+    for word in (*_SUBJECT_SENSITIVE_MISSPELLINGS, "wether"):
+        assert word not in pairs, word
+    for word, expected in _MEASURED_MISSPELLINGS.items():
+        assert pairs.get(word, expected) == expected, word
+
+
+def test_a_missing_corpus_file_loses_coverage_not_the_review(monkeypatch):
+    from echo_link_core import polish_spelling
+
+    polish_spelling._bundled_misspellings.cache_clear()
+    monkeypatch.setattr(
+        polish_spelling, "resource_path", lambda *parts: "no-such-file.txt"
+    )
+    assert polish_spelling._bundled_misspellings() == {}
+    polish_spelling._bundled_misspellings.cache_clear()
+
+
+def test_implausible_pairs_are_not_in_the_corpus():
+    """The source data maps "aacock" to "helicopter". Validity is not enough:
+    a pair can pass both dictionary gates and still be nonsense, so the
+    correction must also resemble the misspelling."""
+    from difflib import SequenceMatcher
+
+    from echo_link_core.polish_spelling import _bundled_misspellings
+
+    for wrong, right in _bundled_misspellings().items():
+        ratio = SequenceMatcher(a=wrong, b=right, autojunk=False).ratio()
+        assert ratio >= 0.65, f"{wrong} -> {right} at {ratio:.2f}"
+
+
+def test_the_corpus_cannot_answer_for_a_word_the_speller_declines():
+    """"esay" is one edit from both "essay" and "easy". The speller refuses to
+    choose and leaves it to the model, which reads the sentence; a flat corpus
+    lookup must not override that decision."""
+    from echo_link_core.polish_spelling import (
+        _AMBIGUOUS_LEAVE_TO_MODEL,
+        _bundled_misspellings,
+    )
+
+    pairs = _bundled_misspellings()
+    for word in _AMBIGUOUS_LEAVE_TO_MODEL:
+        assert word not in pairs, word
+    assert "esay" not in _repairs("the adress is wrong in esay 1 with a pett")

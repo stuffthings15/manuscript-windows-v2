@@ -42,3 +42,19 @@
 - File: `frequency_dictionary_en_82_765.txt`
 - License: MIT; bundled as `LICENSE`
 - Source: https://github.com/wolfgarbe/SymSpell
+
+## English misspelling corpus
+
+- Project: Misspelled Words, by Fazil B Topal
+- File: `misspellings/misspellings-en.txt`
+- License: MIT
+- Source: https://www.kaggle.com/datasets/fazilbtopal/misspelled-words
+- Modifications: derived, not verbatim. 36,960 unique source pairs were filtered
+  to 24,691 against the bundled dictionary. Removed: 2,057 whose "misspelling"
+  is a real English word (`about`, `accept`, `absorb`), 1,826 ambiguous pairs
+  mapping one typo to several corrections, 1,325 non-alphabetic entries such as
+  `liason` -> `Mara_Liasson`, 674 shorter than four characters, 464 whose
+  correction the dictionary does not know, and 150 already handled by
+  context-aware rules in `polish_spelling.py`, and 5,773 implausible pairs
+  whose correction bears no resemblance to the misspelling, such as
+  `aacock` -> `helicopter`.

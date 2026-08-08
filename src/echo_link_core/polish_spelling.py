@@ -5,6 +5,7 @@ import re
 import threading
 import time
 import unicodedata
+from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -297,6 +298,40 @@ _COMMON_MISSPELLINGS = {
     "yeild": "yield",
 }
 
+# Words the speller deliberately refuses to guess at, because more than one
+# correction is genuinely possible and only the sentence can decide. "esay" is
+# one edit from both "essay" and "easy", and the frequency dictionary favours
+# "easy" tenfold - so a flat lookup would confidently write the wrong word. The
+# bundled corpus offers an answer for these; it does not get to give one.
+_AMBIGUOUS_LEAVE_TO_MODEL = frozenset({"esay"})
+
+
+@lru_cache(maxsize=1)
+def _bundled_misspellings() -> dict[str, str]:
+    """30,464 validated pairs from the bundled corpus file.
+
+    Loaded once, on first use, because it is 588 kB and most sessions never
+    reach a word the other maps do not already cover. A missing or unreadable
+    file is not an error: the maps above still apply, so the reader loses
+    coverage rather than the whole review.
+    """
+    path = Path(
+        resource_path("resources", "polish", "misspellings", "misspellings-en.txt")
+    )
+    pairs: dict[str, str] = {}
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("#"):
+                    continue
+                wrong, _, right = line.strip().partition("\t")
+                if wrong and right and wrong not in _AMBIGUOUS_LEAVE_TO_MODEL:
+                    pairs[wrong] = right
+    except OSError:
+        return {}
+    return pairs
+
+
 def _preceding_word(text: str, start: int) -> str:
     lead = re.findall(r"([A-Za-z']+)\W*$", text[:start])
     return lead[0].casefold() if lead else ""
@@ -330,7 +365,13 @@ def _measured_replacement(text: str, start: int, folded: str) -> str:
         # alone for a reader to fix.
         return subject_map.get(_preceding_word(text, start), "")
     measured = _MEASURED_MISSPELLINGS.get(folded, "")
-    return measured or _COMMON_MISSPELLINGS.get(folded, "")
+    return (
+        measured
+        or _COMMON_MISSPELLINGS.get(folded, "")
+        # Last, and only when nothing above knows the word. The curated maps
+        # read context; this one is a flat lookup and must never outrank them.
+        or _bundled_misspellings().get(folded, "")
+    )
 
 
 _SAFE_APOSTROPHE_REPLACEMENTS = {
