@@ -41,6 +41,40 @@ from repro_zero_of_zero import (  # noqa: E402
 )
 
 WORD = re.compile(r"[A-Za-z][A-Za-z']*")
+
+
+def dismiss_button(hud):
+    """The control a reader uses when a section has no finished correction.
+
+    The HUD disables Replace for such a section and enables Dismiss, telling
+    the reader that later sections keep processing. This harness only knew
+    about Replace, so it sat on that one section until it timed out and
+    reported the essay as stalled - essays 13 and 18 were called a
+    reproducible app defect on that evidence, and they are not one.
+    """
+    from repro_accept_advance import _descend
+
+    for control in _descend(hud):
+        try:
+            if control.ControlTypeName != "ButtonControl":
+                continue
+            if str(control.Name or "").startswith("Dismiss"):
+                return control
+        except Exception:  # noqa: BLE001 - the HUD may be repainting
+            continue
+    return None
+
+
+def invoke(control) -> bool:
+    try:
+        control.GetInvokePattern().Invoke()
+        return True
+    except Exception:  # noqa: BLE001 - fall back to a real click
+        try:
+            control.Click(simulateMove=False)
+            return True
+        except Exception:  # noqa: BLE001 - the HUD may have closed
+            return False
 ARTEFACT = re.compile(r"[.!?]\s*,|,\s*,|\s+,|\(\s|\s\)")
 
 
@@ -105,15 +139,18 @@ def review_one(path: Path, *, max_presses: int = 30) -> dict:
             time.sleep(12.0)
             button = replace_button(hud)
             if button is None or not button.IsEnabled:
+                # No correction to apply here. Do what a reader does rather
+                # than calling the essay stalled: dismiss and keep going.
+                skip = dismiss_button(hud)
+                if skip is not None and skip.IsEnabled and invoke(skip):
+                    report["dismissed"] = report.get("dismissed", 0) + 1
+                    report["counters"].append(f"{before}->dismissed")
+                    time.sleep(4.0)
+                    continue
                 report["stalled_at"] = before
                 break
-        try:
-            button.GetInvokePattern().Invoke()
-        except Exception:  # noqa: BLE001 - fall back to a real click
-            try:
-                button.Click(simulateMove=False)
-            except Exception:  # noqa: BLE001 - the HUD may have closed
-                break
+        if not invoke(button):
+            break
         report["presses"] = press
         time.sleep(6.0)
         hud = hud_window(8.0)
@@ -204,6 +241,7 @@ def main() -> int:
             "number": number,
             "seconds": elapsed,
             "presses": result.get("presses", 0),
+            "dismissed": result.get("dismissed", 0),
             "stalled_at": result.get("stalled_at"),
             "error": result.get("error"),
             **judged,
@@ -227,6 +265,7 @@ def main() -> int:
         print(
             f"{number:>2} {source.stem[:34]:<34} "
             f"{elapsed:>6}s presses={row['presses']:>2} "
+            f"dismissed={row['dismissed']:>2} "
             f"unchanged={len(row['unchanged']):>2} "
             f"unknown={len(row['unknown_words']):>3} "
             f"artefacts={len(row['artefacts']):>2} "
