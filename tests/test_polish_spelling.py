@@ -46,3 +46,61 @@ def test_affix_conditions_are_honoured_rather_than_applied_blindly() -> None:
     assert _apply_affix("play", "SFX", "y", "iest", "[^aeiou]y") == ""
     # Prefixes attach to the front.
     assert _apply_affix("check", "PFX", "", "re", ".") == "recheck"
+
+
+def _repairs(text: str):
+    """What the deterministic speller would change, as original -> replacement."""
+    from echo_link_core.polish_spelling import PolishRuleEngine
+
+    engine = PolishRuleEngine()
+    engine.warm()
+    return {s.original.casefold(): s.replacement for s in engine.analyze_spelling(text)}
+
+
+def test_the_measured_misspellings_are_repaired():
+    """Each appeared in 13 to 20 of the 20 corpus essays after the speller ran."""
+    cases = {
+        "proper cair": ("cair", "care"),
+        "pay atenshun": ("atenshun", "attention"),
+        "becuz of rain": ("becuz", "because"),
+        "the oner left": ("oner", "owner"),
+        "probly true": ("probly", "probably"),
+        "agin and agin": ("agin", "again"),
+        "sumtimes it rains": ("sumtimes", "sometimes"),
+        "an edjucashunal toy": ("edjucashunal", "educational"),
+        "not avalible": ("avalible", "available"),
+        "buying equipments": ("equipments", "equipment"),
+        "even worser": ("worser", "worse"),
+    }
+    for text, (word, expected) in cases.items():
+        assert _repairs(text).get(word) == expected, text
+
+
+def test_the_speller_no_longer_turns_school_into_a_drinking_toast():
+    """Measured: "skool" resolved to "skol", a Nordic toast, in 13 essays."""
+    assert _repairs("go to skool")["skool"] == "school"
+
+
+def test_british_forms_are_americanised():
+    """Both the misspelling and the correct British spelling land on "learned"."""
+    assert _repairs("she lernt it")["lernt"] == "learned"
+    assert _repairs("she learnt it")["learnt"] == "learned"
+
+
+def test_wether_becomes_whether_only_as_a_conjunction():
+    assert _repairs("wether or not it rains")["wether"] == "whether"
+    assert "wether" not in _repairs("the wether was sheared")
+    assert "wether" not in _repairs("a wether in the field")
+
+
+def test_aint_expands_to_match_its_subject():
+    assert _repairs("it aint ready")["aint"] == "is not"
+    assert _repairs("they aint ready")["aint"] == "are not"
+    assert _repairs("I aint ready")["aint"] == "am not"
+    assert _repairs("forgetting aint good")["aint"] == "is not"
+
+
+def test_aint_is_left_alone_when_the_subject_is_unclear():
+    """Writing the wrong verb is worse than leaving the word for a reader."""
+    assert "aint" not in _repairs("the dogs aint ready")
+    assert "aint" not in _repairs("a king aint here")

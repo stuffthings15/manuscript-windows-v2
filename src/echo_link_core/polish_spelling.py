@@ -42,6 +42,93 @@ _APPLICATION_WORDS = frozenset(
         "Chromebook",
     }
 )
+# Measured across the twenty-essay corpus: after the rules and the bundled
+# dictionary have run, 106 distinct words remain unresolved, and these account
+# for nearly all of them - each appears in 13 to 20 of the 20 essays. The
+# speller declines them for good reasons that will not change: "cair" is one
+# edit from "chair" and two from "care", so distance ranking picks the
+# furniture; "edjucashunal" is six edits from "educational"; "equipments" and
+# "worser" are real-looking morphology rather than typos.
+#
+# Every entry is a word with exactly one sensible English reading. Words whose
+# correction depends on the sentence around them are NOT here - see
+# _SUBJECT_SENSITIVE_MISSPELLINGS below.
+_MEASURED_MISSPELLINGS = {
+    "agin": "again",
+    "atenshun": "attention",
+    "avalible": "available",
+    "becuz": "because",
+    "cair": "care",
+    "edjucashunal": "educational",
+    "equipments": "equipment",
+    "learnt": "learned",  # Americanise, per the corpus's US setting
+    # Measured: the speller turns "skool" into "skol", a Nordic drinking toast,
+    # and "lernt" into the British "learnt". Both are one pass, so nothing gets
+    # a second chance to repair them - they must be right the first time.
+    "skool": "school",
+    "lernt": "learned",
+    "oner": "owner",
+    "oners": "owners",
+    "probly": "probably",
+    "skol": "school",
+    "sumtimes": "sometimes",
+    "worser": "worse",
+}
+
+# "aint" is not a spelling mistake with one answer; it is a contraction whose
+# expansion depends on its subject. Writing "isn't" after "they" would be a
+# worse error than leaving the word alone, so an unrecognised subject is left
+# untouched rather than guessed at.
+_SUBJECT_SENSITIVE_MISSPELLINGS = {
+    "aint": {
+        "i": "am not",
+        "they": "are not",
+        "we": "are not",
+        "you": "are not",
+        "he": "is not",
+        "she": "is not",
+        "it": "is not",
+        "that": "is not",
+        "this": "is not",
+        "there": "is not",
+    },
+}
+
+def _preceding_word(text: str, start: int) -> str:
+    lead = re.findall(r"([A-Za-z']+)\W*$", text[:start])
+    return lead[0].casefold() if lead else ""
+
+
+# The conjunction "whether" never takes an article, number or possessive; the
+# castrated ram almost always does. Same discriminator the LLM path already
+# uses, so both paths agree rather than fighting each other.
+_WETHER_ANIMAL_LEAD = frozenset(
+    {"a", "an", "the", "this", "that", "one", "two", "three", "each", "every",
+     "my", "our", "his", "her", "their", "its", "young", "castrated"}
+)
+
+
+def _measured_replacement(text: str, start: int, folded: str) -> str:
+    """The correction for a word the speller cannot resolve, or "" for none."""
+    if folded == "wether":
+        if _preceding_word(text, start) in _WETHER_ANIMAL_LEAD:
+            return ""  # the animal, not the conjunction
+        return "whether"
+    subject_map = _SUBJECT_SENSITIVE_MISSPELLINGS.get(folded)
+    if subject_map is not None:
+        lead = _preceding_word(text, start)
+        if lead not in subject_map and lead.endswith("ing") and len(lead) > 4:
+            # A gerund subject takes a singular verb: "forgetting aint" ->
+            # "forgetting is not". Measured, this is the only unhandled subject
+            # left in the corpus, at 12 of the 13 remaining occurrences.
+            return "is not"
+        # No recognised subject means no correction. Guessing here writes the
+        # wrong verb into the sentence, which is worse than leaving the word
+        # alone for a reader to fix.
+        return subject_map.get(_preceding_word(text, start), "")
+    return _MEASURED_MISSPELLINGS.get(folded, "")
+
+
 _SAFE_APOSTROPHE_REPLACEMENTS = {
     "arent": "aren't",
     "cant": "can't",
@@ -358,6 +445,32 @@ class PolishRuleEngine:
                         explanation=(
                             f'Context-safe English form uses "{replacement}" '
                             f'instead of "{word}".'
+                        ),
+                        start=match.start(),
+                        end=match.end(),
+                        original=word,
+                        replacement=replacement,
+                    )
+                )
+                continue
+            measured = _measured_replacement(text, match.start(), folded)
+            if measured:
+                replacement = _match_case(word, measured)
+                material = (
+                    f"measured\0{match.start()}\0{match.end()}\0"
+                    f"{word}\0{replacement}"
+                )
+                candidate_digest = hashlib.sha256(
+                    material.encode("utf-8")
+                ).hexdigest()[:16]
+                suggestions.append(
+                    WritingSuggestion(
+                        suggestion_id=f"ws:{source_digest}:{candidate_digest}",
+                        category=SuggestionCategory.SPELLING,
+                        title="Correct spelling",
+                        explanation=(
+                            f'"{word}" is not an English word; the word meant '
+                            f'here is "{replacement}".'
                         ),
                         start=match.start(),
                         end=match.end(),
