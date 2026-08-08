@@ -41,6 +41,7 @@ from repro_zero_of_zero import (  # noqa: E402
 )
 
 WORD = re.compile(r"[A-Za-z][A-Za-z']*")
+ARTEFACT = re.compile(r"[.!?]\s*,|,\s*,|\s+,|\(\s|\s\)")
 
 
 def dismiss_button(hud):
@@ -75,7 +76,6 @@ def invoke(control) -> bool:
             return True
         except Exception:  # noqa: BLE001 - the HUD may have closed
             return False
-ARTEFACT = re.compile(r"[.!?]\s*,|,\s*,|\s+,|\(\s|\s\)")
 
 
 def close_word() -> None:
@@ -87,6 +87,40 @@ def close_word() -> None:
         check=False,
     )
     time.sleep(2.0)
+
+
+def restart_app() -> bool:
+    """Start a fresh app before each essay, and wait for the model to load.
+
+    The Writing HUD carried one document's review into the next document's run
+    and reported "4 of 11" for a ten-section essay. Essay 18 was called a
+    reproducible defect on that evidence and completes perfectly against a
+    freshly started app. Sharing one process across a batch measures the batch,
+    not the essay.
+    """
+    import subprocess
+
+    done = subprocess.run(
+        [sys.executable, str(ROOT / "tools" / "restart_app_and_wait.py")],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if done.returncode != 0:
+        print(f"   restart failed: {done.stdout.strip()[-200:]}", flush=True)
+        return False
+    return True
+
+
+def outcome(row: dict) -> str:
+    """One word for what happened, so repeats can be counted rather than read."""
+    if row.get("error"):
+        return "error"
+    if row["presses"] == 0:
+        return "dead"
+    if row["unchanged"] or row["stalled_at"]:
+        return "partial"
+    return "complete"
 
 
 def open_in_word(path: Path):
@@ -204,6 +238,17 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--from", dest="start", type=int, default=2)
     parser.add_argument("--to", dest="end", type=int, default=20)
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="runs per essay; one run is a hypothesis, not a result",
+    )
+    parser.add_argument(
+        "--no-restart",
+        action="store_true",
+        help="do not restart the app between essays (measures the batch, not the essay)",
+    )
     args = parser.parse_args()
 
     from echo_link_core.polish_spelling import EnglishDictionary
@@ -224,29 +269,53 @@ def main() -> int:
             break
         source = essays[number - 1]
         target = work / source.name
-        shutil.copy2(source, target)
         before_text = str(corpus_text[number - 1])
 
-        close_word()
-        started = time.monotonic()
-        try:
-            result = review_one(target)
-        except Exception as exc:  # noqa: BLE001 - keep going through the corpus
-            result = {"error": f"{type(exc).__name__}: {exc}", "after": ""}
-        elapsed = round(time.monotonic() - started, 1)
+        outcomes: list[str] = []
+        for attempt in range(1, max(1, args.repeat) + 1):
+            close_word()  # release the previous run's lock before copying
+            shutil.copy2(source, target)  # every run starts from the original
+            if not args.no_restart:
+                restart_app()
+            started = time.monotonic()
+            try:
+                result = review_one(target)
+            except Exception as exc:  # noqa: BLE001 - keep going through the corpus
+                result = {"error": f"{type(exc).__name__}: {exc}", "after": ""}
+            elapsed = round(time.monotonic() - started, 1)
 
-        judged = score(before_text, result.get("after", ""), dictionary)
-        row = {
-            "essay": source.stem,
-            "number": number,
-            "seconds": elapsed,
-            "presses": result.get("presses", 0),
-            "dismissed": result.get("dismissed", 0),
-            "stalled_at": result.get("stalled_at"),
-            "error": result.get("error"),
-            **judged,
-        }
-        summary.append(row)
+            judged = score(before_text, result.get("after", ""), dictionary)
+            row = {
+                "essay": source.stem,
+                "number": number,
+                "attempt": attempt,
+                "seconds": elapsed,
+                "presses": result.get("presses", 0),
+                "dismissed": result.get("dismissed", 0),
+                "stalled_at": result.get("stalled_at"),
+                "error": result.get("error"),
+                **judged,
+            }
+            row["outcome"] = outcome(row)
+            outcomes.append(row["outcome"])
+            summary.append(row)
+            print(
+                f"{number:>2} {source.stem[:30]:<30} run{attempt} "
+                f"{elapsed:>6}s {row['outcome']:<8} presses={row['presses']:>2} "
+                f"dismissed={row['dismissed']:>2} "
+                f"unchanged={len(row['unchanged']):>2} "
+                f"unknown={len(row['unknown_words']):>3} "
+                f"artefacts={len(row['artefacts']):>2} "
+                f"stalled={row['stalled_at']} err={row['error']}",
+                flush=True,
+            )
+
+        if args.repeat > 1:
+            tally = {name: outcomes.count(name) for name in sorted(set(outcomes))}
+            summary_line = "  ".join(
+                f"{name} {count}/{len(outcomes)}" for name, count in tally.items()
+            )
+            print(f"   -> {source.stem[:30]:<30} {summary_line}", flush=True)
 
         lines = [f"# {source.stem}", ""]
         b = paragraphs(before_text)
@@ -260,17 +329,6 @@ def main() -> int:
             lines.append("")
         (out_dir / f"{source.stem}.review.md").write_text(
             "\n".join(lines), encoding="utf-8"
-        )
-
-        print(
-            f"{number:>2} {source.stem[:34]:<34} "
-            f"{elapsed:>6}s presses={row['presses']:>2} "
-            f"dismissed={row['dismissed']:>2} "
-            f"unchanged={len(row['unchanged']):>2} "
-            f"unknown={len(row['unknown_words']):>3} "
-            f"artefacts={len(row['artefacts']):>2} "
-            f"stalled={row['stalled_at']} err={row['error']}",
-            flush=True,
         )
 
     (ROOT / "build" / "batch-summary.json").write_text(
