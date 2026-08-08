@@ -67,6 +67,28 @@ def dismiss_button(hud):
     return None
 
 
+def badge_button(hud):
+    """The badge the HUD shows before anyone opens the review.
+
+    Captured at the moment of a "timeout": the only control present was
+    'Manuscript, 11 reviews ready. Click for writing suggestions.' The reviews
+    were ready and the HUD was waiting to be clicked, while this harness
+    watched for a section counter that only exists once the card is open. Every
+    essay recorded dead today failed this way - the app was working.
+    """
+    from repro_accept_advance import _descend
+
+    for control in _descend(hud):
+        try:
+            if control.ControlTypeName != "ButtonControl":
+                continue
+            if "reviews ready" in str(control.Name or ""):
+                return control
+        except Exception:  # noqa: BLE001 - the HUD may be repainting
+            continue
+    return None
+
+
 def invoke(control) -> bool:
     try:
         control.GetInvokePattern().Invoke()
@@ -216,6 +238,14 @@ def review_one(path: Path, *, max_presses: int = 30) -> dict:
         if counter_text(hud) not in ("<none>", "0 of 0", ""):
             reviewed = True
             break
+        badge = badge_button(hud)
+        if badge is not None and badge.IsEnabled and invoke(badge):
+            # Open the review, the way a reader does. Without this the wait
+            # could never end: the counter it watches for does not exist until
+            # the badge is clicked.
+            report["opened_badge"] = report.get("opened_badge", 0) + 1
+            time.sleep(3.0)
+            hud = hud_window(8.0) or hud
         time.sleep(1.0)
     if not reviewed:
         # The failure that killed essays 5, 7, 11 and 20, and essay 18 on a
