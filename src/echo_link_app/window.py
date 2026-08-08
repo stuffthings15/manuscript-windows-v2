@@ -2223,6 +2223,26 @@ class EchoLinkWindow(QMainWindow):
             self._installed_writing_models = names
 
     def _accepted_writing_model(self) -> str:
+        """The model that is actually loaded, not the one settings remember.
+
+        These two drifted apart: settings held gemma4:e2b-it-qat while the
+        runtime had prewarmed the e4b pack, and every Writing HUD request named
+        the smaller model. It could not finish the repair, so section 3 of
+        essay 13 burned four retries and still came back with subject-verb
+        agreement unfixed - the section was then discarded, Replace stayed
+        disabled, and the review died with eight sections untouched. Passing no
+        model at all corrected the same text flawlessly with zero retries.
+
+        The accepted lease is the only record of what was really loaded, so it
+        decides. The stored name remains the fallback for the case where
+        nothing has been accepted yet.
+        """
+        lease = self.ai_coordinator.lease()
+        accepted = str(
+            getattr(getattr(lease, "plan", None), "model", "") or ""
+        ).strip()
+        if accepted:
+            return accepted
         return str(self.engine.settings.ollama_model or "").strip()
 
     def _dictation_ai_plan_is_current(
