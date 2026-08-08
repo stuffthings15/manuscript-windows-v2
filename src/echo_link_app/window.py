@@ -1686,6 +1686,13 @@ class EchoLinkWindow(QMainWindow):
                     self.rewrite_palette.view != "badge"
                     or not self.rewrite_palette.automatic
                 )
+                # ...but only while the review on screen still has a document
+                # behind it. A card whose source window is gone blocked every
+                # later focus signal, so the next document opened into the
+                # previous one's review: an eleven-section job was served to a
+                # ten-section document and the counter read "4 of 11" for text
+                # it had never seen.
+                and self._hud_source_window_alive()
             )
         ):
             return
@@ -1765,6 +1772,25 @@ class EchoLinkWindow(QMainWindow):
             self.rewrite_palette.x(),
             self.rewrite_palette.y(),
         )
+
+    def _hud_source_window_alive(self) -> bool:
+        """Does the review currently on screen still have a source document?
+
+        Only a real, observable dead window counts. Without a record, without a
+        handle, or if the check itself fails, say yes - that keeps the existing
+        behaviour and never discards a live review on a guess.
+        """
+        record = self.selected_text_record
+        if record is None:
+            return True
+        handle = int(getattr(record.window, "handle", 0) or 0)
+        if handle <= 0:
+            return True
+        try:
+            return bool(ctypes.windll.user32.IsWindow(handle))
+        except Exception:  # noqa: BLE001 - never drop a review on a failed probe
+            logger.debug("Writing HUD source window probe failed", exc_info=True)
+            return True
 
     def _close_hud_if_source_gone(self) -> None:
         record = self.selected_text_record
