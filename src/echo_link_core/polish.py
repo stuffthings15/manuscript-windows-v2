@@ -6269,6 +6269,48 @@ def _capitalised_ordinary_word(value: str, document: str) -> bool:
         return False
 
 
+# Measured over 35 real names and 12 typos. The closest a real name comes to
+# looking like a typo is Almeria, one edit from a word of frequency 6.4 million;
+# the least typo-like typo is "Learniing", one edit from "learning" at 118
+# million. The threshold sits in the middle of that gap, so both sides have
+# roughly a fourfold margin. Being too conservative only leaves a typo frozen,
+# which is the behaviour we already had; being too loose unprotects a name.
+_TYPO_CORRECTION_FREQUENCY = 25_000_000
+
+
+@lru_cache(maxsize=2048)
+def _capitalised_misspelling(value: str) -> bool:
+    """Is this capitalised word a misspelling rather than a name?
+
+    Essays 4, 8 and 15 died in three consecutive runs on "Afer", "Educcation",
+    "Peeple" and "Learniing". Each is capitalised at a clause opening, so it
+    reads as a name, gets frozen as an opaque immutable token, and the model
+    cannot spell it correctly because it cannot touch it. The section then
+    falls back to the rules with every other typo in it left standing.
+
+    A real name is either known to the speller outright (Cusco, Aarhus, Colmar
+    all resolve at distance 0) or has no near neighbour at all (Csco, Sanjay,
+    Kenji). A typo has exactly one edit between it and a word the language uses
+    constantly. That is the whole test.
+    """
+    if len(value) < 4:
+        # Too short to tell apart. "Ann" is one edit from "and"; the existing
+        # three-letter rule in _misspelled_non_entity_starter handles that case
+        # with a much narrower test.
+        return False
+    try:
+        dictionary = _entity_dictionary()
+        if dictionary.contains(value.casefold()):
+            return False
+        suggestion = dictionary.suggestion(value.casefold())
+    except Exception:  # noqa: BLE001 - a missing dictionary must not unprotect names
+        return False
+    if suggestion is None:
+        return False
+    _word, distance, frequency = suggestion
+    return distance == 1 and frequency >= _TYPO_CORRECTION_FREQUENCY
+
+
 def _named_entities(text: str, document: str = "") -> set[str]:
     ignored = {
         "A",
@@ -6445,6 +6487,10 @@ def _named_entities(text: str, document: str = "") -> set[str]:
             suffix = value.split(None, 1)[1] if " " in value else ""
             if len(suffix.split()) >= 2:
                 values.add(suffix)
+            continue
+        if " " not in value and _capitalised_misspelling(value):
+            # A misspelling is not a name wherever it appears, so this is not
+            # limited to sentence openings the way the frequency rule above is.
             continue
         values.add(value)
     return values

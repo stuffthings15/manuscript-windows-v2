@@ -5610,3 +5610,38 @@ def test_a_capitalised_word_used_twice_is_still_treated_as_a_name():
     document = "Weather is hard on animals. Weather also changes their walks."
     section = "Weather is hard on animals."
     assert "Weather" in _runtime_opaque_entities(section, document)
+
+
+def test_a_capitalised_misspelling_is_not_frozen_as_a_name():
+    """Essays 4, 8 and 15 died in three consecutive runs on exactly these."""
+    from echo_link_core.polish import _runtime_opaque_entities
+
+    for typo in ("Afer", "Educcation", "Peeple", "Learniing"):
+        section = f"{typo} the walk we feed her."
+        assert typo not in _runtime_opaque_entities(section), typo
+
+
+def test_names_the_speller_cannot_place_are_still_frozen():
+    """Csco, Sanjay and Kenji have no near neighbour, so they stay protected."""
+    from echo_link_core.polish import _runtime_opaque_entities
+
+    for name in ("Csco", "Sanjay", "Kenji", "Comar", "Sumtimes"):
+        section = f"{name} is where we live now."
+        assert name in _runtime_opaque_entities(section), name
+
+
+def test_a_name_one_edit_from_a_common_word_is_still_frozen():
+    """Almeria and Malik sit closest to the typo side and must not cross it."""
+    from echo_link_core.polish import _runtime_opaque_entities
+
+    for name in ("Almeria", "Malik", "Priya", "Elif", "Aiko"):
+        section = f"{name} came with us to the shelter."
+        assert name in _runtime_opaque_entities(section), name
+
+
+def test_place_names_the_speller_knows_are_still_frozen():
+    from echo_link_core.polish import _runtime_opaque_entities
+
+    for name in ("Cusco", "Aarhus", "Colmar", "Valletta", "Leipzig"):
+        section = f"{name} is a good place for a pet."
+        assert name in _runtime_opaque_entities(section), name
