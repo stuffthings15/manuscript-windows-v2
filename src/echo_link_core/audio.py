@@ -44,6 +44,35 @@ def list_microphones() -> list[MicrophoneInfo]:
     return result
 
 
+def resolve_microphone(index: int | None, name: str = "") -> int | None:
+    """Turn a saved microphone choice into an index that is valid right now.
+
+    sounddevice indices are positional, so they move whenever a device appears
+    or disappears: a Bluetooth headset connecting or disconnecting renumbers
+    every device after it. A saved index then points at a different microphone,
+    or at nothing at all, and the stream fails to open - the app reports no
+    microphone while a healthy built-in array sits unused. The name is the
+    stable half of the choice, so it decides, and anything unresolvable falls
+    back to the system default rather than to failure.
+    """
+    devices = list_microphones()
+    if not devices:
+        return None
+    wanted = (name or "").strip().casefold()
+    if wanted:
+        for device in devices:
+            if device.name.strip().casefold() == wanted:
+                return device.index
+        # The chosen device is not connected right now. Its old index belongs to
+        # some other microphone today, so using it would record the wrong one.
+        return None
+    if index is None:
+        return None
+    # A settings file written before names were stored. Honour the bare index
+    # only while it still points at an input device.
+    return int(index) if any(device.index == int(index) for device in devices) else None
+
+
 def play_pcm16(audio_pcm: bytes, sample_rate: int, device_index: int | None = None) -> None:
     """Play decrypted speech-log audio from memory without creating a file."""
     audio = np.frombuffer(audio_pcm, dtype=np.int16)

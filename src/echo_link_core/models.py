@@ -38,6 +38,9 @@ class SessionState(str, Enum):
 class DictationSettings:
     hotkey: str = "ctrl+win"
     microphone_index: int | None = None
+    # The device name decides which microphone is opened; the index above is
+    # only a hint, because sounddevice renumbers devices as they come and go.
+    microphone_name: str = ""
     mode: DictationMode = DictationMode.FAST
     model_name: str = "base.en"
     device: str = "cpu"

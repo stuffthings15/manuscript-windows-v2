@@ -105,7 +105,18 @@ class SettingsDialog(QDialog):
         self.microphone_combo.addItem("System default", None)
         for microphone in list_microphones():
             self.microphone_combo.addItem(microphone.name, microphone.index)
-        _select_data(self.microphone_combo, self.settings.microphone_index)
+        # Select by name where one was stored, so reopening Settings shows the
+        # microphone actually in use rather than whatever now holds its index.
+        saved_name = (self.settings.microphone_name or "").strip()
+        by_name = (
+            self.microphone_combo.findText(saved_name) if saved_name else -1
+        )
+        if by_name >= 0:
+            self.microphone_combo.setCurrentIndex(by_name)
+        elif saved_name:
+            self.microphone_combo.setCurrentIndex(0)  # named device not connected
+        else:
+            _select_data(self.microphone_combo, self.settings.microphone_index)
         input_form.addRow("Microphone", self.microphone_combo)
 
         self.hotkey_edit = QLineEdit(self.settings.hotkey)
@@ -942,6 +953,14 @@ class SettingsDialog(QDialog):
         self.settings = DictationSettings(
             hotkey=hotkey,
             microphone_index=self.microphone_combo.currentData(),
+            # Store the name too. The index alone goes stale as soon as a
+            # headset connects or disconnects, which is what left dictation
+            # reporting no microphone with a working array attached.
+            microphone_name=(
+                ""
+                if self.microphone_combo.currentData() is None
+                else self.microphone_combo.currentText()
+            ),
             mode=DictationMode(self.mode_combo.currentData()),
             model_name=str(self.model_combo.currentData() or "base.en"),
             device=str(self.device_combo.currentData()),

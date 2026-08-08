@@ -9,7 +9,7 @@ from typing import Callable
 
 import numpy as np
 
-from .audio import MicrophoneRecorder
+from .audio import MicrophoneRecorder, resolve_microphone
 from .accepted_inference import (
     AcceptedInferenceCoordinator,
     AcceptedInferenceLease,
@@ -458,7 +458,13 @@ class DictationEngine:
         if not hasattr(self.recorder, "arm"):
             return False
         try:
-            self.recorder.arm(self.settings.microphone_index, self.settings.pre_roll_ms)
+            self.recorder.arm(
+                resolve_microphone(
+                    self.settings.microphone_index,
+                    self.settings.microphone_name,
+                ),
+                self.settings.pre_roll_ms,
+            )
             return self.settings.pre_roll_ms > 0
         except Exception:
             logger.warning("Microphone pre-roll could not be started", exc_info=True)
@@ -498,7 +504,10 @@ class DictationEngine:
             )
             try:
                 self.recorder.start(
-                    settings_snapshot.microphone_index,
+                    resolve_microphone(
+                        settings_snapshot.microphone_index,
+                        settings_snapshot.microphone_name,
+                    ),
                     level_callback=self._emit_level,
                 )
             except Exception as exc:
