@@ -104,3 +104,58 @@ def test_aint_is_left_alone_when_the_subject_is_unclear():
     """Writing the wrong verb is worse than leaving the word for a reader."""
     assert "aint" not in _repairs("the dogs aint ready")
     assert "aint" not in _repairs("a king aint here")
+
+
+def test_the_common_misspelling_list_is_internally_valid():
+    """The check that must hold for every entry, now and after any addition.
+
+    A misspelling that is really a word would corrupt correct English, and a
+    correction the dictionary does not know would trade one unknown word for
+    another. This check rejected "defiantly", "florescent" and "therefor" when
+    the list was first assembled.
+    """
+    from echo_link_core.polish_spelling import (
+        _COMMON_MISSPELLINGS,
+        _MEASURED_MISSPELLINGS,
+        EnglishDictionary,
+    )
+
+    dictionary = EnglishDictionary()
+    dictionary.warm()
+    for wrong, right in {**_COMMON_MISSPELLINGS, **_MEASURED_MISSPELLINGS}.items():
+        assert not dictionary.contains(wrong), f"{wrong!r} is a real word"
+        for part in right.split():
+            assert dictionary.contains(part), f"{right!r} is not in the dictionary"
+
+
+def test_common_misspellings_are_repaired():
+    for text, wrong, right in (
+        ("definately going", "definately", "definitely"),
+        ("please seperate them", "seperate", "separate"),
+        ("recieve the calender", "recieve", "receive"),
+        ("accomodate my freind", "accomodate", "accommodate"),
+        ("goverment enviroment", "goverment", "government"),
+    ):
+        assert _repairs(text).get(wrong) == right, text
+
+
+def test_words_that_only_look_like_misspellings_are_untouched():
+    """Each is correct English that a naive list maps onto something else."""
+    for text, word in (
+        ("a defiantly rude reply", "defiantly"),
+        ("the florescent stage of the plant", "florescent"),
+        ("the sum reserved therefor", "therefor"),
+    ):
+        assert word not in _repairs(text), text
+
+
+def test_the_measured_list_wins_over_the_common_list():
+    """Context-aware entries must never be overridden by a general one."""
+    from echo_link_core.polish_spelling import (
+        _COMMON_MISSPELLINGS,
+        _SUBJECT_SENSITIVE_MISSPELLINGS,
+    )
+
+    for word in _SUBJECT_SENSITIVE_MISSPELLINGS:
+        assert word not in _COMMON_MISSPELLINGS, word
+    assert "wether" not in _COMMON_MISSPELLINGS

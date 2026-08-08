@@ -257,6 +257,19 @@ def review_one(path: Path, *, max_presses: int = 30) -> dict:
             hud_window(5.0) or hud,
         )
 
+    if reviewed:
+        # Clicking the badge opens the card at once, but the sections behind it
+        # are still being prepared. Pressing into that half-built review made
+        # essay 15 dismiss FOURTEEN sections whose corrections were still
+        # arriving. Wait for the first correction to actually be offered.
+        settle = time.monotonic() + 90.0
+        while time.monotonic() < settle:
+            hud = hud_window(8.0) or hud
+            button = replace_button(hud)
+            if button is not None and button.IsEnabled:
+                break
+            time.sleep(2.0)
+
     for press in range(1, max_presses + 1):
         hud = hud_window(10.0)
         if hud is None:
@@ -266,8 +279,15 @@ def review_one(path: Path, *, max_presses: int = 30) -> dict:
         if button is None:
             break
         if not button.IsEnabled:
-            time.sleep(12.0)
-            button = replace_button(hud)
+            # Poll rather than sleeping once. A single 12-second wait was too
+            # short for a section still generating, and every premature give-up
+            # became a dismissal that threw away a correction.
+            wait_until = time.monotonic() + 45.0
+            while time.monotonic() < wait_until:
+                time.sleep(3.0)
+                button = replace_button(hud_window(8.0) or hud)
+                if button is not None and button.IsEnabled:
+                    break
             if button is None or not button.IsEnabled:
                 # No correction to apply here. Do what a reader does rather
                 # than calling the essay stalled: dismiss and keep going.
