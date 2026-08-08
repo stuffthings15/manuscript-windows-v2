@@ -923,6 +923,7 @@ class LocalWritingAssistant:
             candidate = _apply_safe_caveman_splits(candidate)
         candidate = _repair_stranded_terminator(candidate)
         candidate = _repair_wether(candidate)
+        candidate = _repair_cair(candidate)
         candidate = _restore_ui_label_case(source, candidate)
         if command in _PROOFREAD_CLEANUP_COMMANDS:
             candidate = _restore_proofread_style_options(source, candidate)
@@ -1914,6 +1915,20 @@ def _repair_wether(text: str) -> str:
         return f"{lead}{fixed}"
 
     return _WETHER.sub(repair, text)
+
+
+# "cair" survived in ten of the corrected essays - more than any other word.
+# The speller declines it correctly: it is one edit from "chair" and two from
+# "care", so ranking by distance picks the furniture. Context settles it, and
+# every occurrence in the corpus is one of these shapes ("proper cair", "cair
+# routines", "taking cair of"). Only the lowercase form is repaired, because
+# capitalised Cair is a name in places and a name is not ours to respell.
+_CAIR = re.compile(r"(?<!\w)cair(?!\w)")
+
+
+def _repair_cair(text: str) -> str:
+    """Write "care" where the writer typed "cair"."""
+    return _CAIR.sub("care", text)
 
 
 def _canonicalize_immutable_tokens(

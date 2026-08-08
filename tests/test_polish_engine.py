@@ -5645,3 +5645,25 @@ def test_place_names_the_speller_knows_are_still_frozen():
     for name in ("Cusco", "Aarhus", "Colmar", "Valletta", "Leipzig"):
         section = f"{name} is a good place for a pet."
         assert name in _runtime_opaque_entities(section), name
+
+
+def test_cair_becomes_care():
+    """Survived in ten corrected essays - more than any other single word."""
+    from echo_link_core.selected_text import _repair_cair
+
+    assert _repair_cair("proper cair for a pet") == "proper care for a pet"
+    assert _repair_cair("cair routines help") == "care routines help"
+    assert _repair_cair("taking cair of it") == "taking care of it"
+
+
+def test_capitalised_cair_is_left_alone():
+    """Cair is a place name; a name is not ours to respell."""
+    from echo_link_core.selected_text import _repair_cair
+
+    assert _repair_cair("We sailed to Cair Paravel") == "We sailed to Cair Paravel"
+
+
+def test_cair_inside_a_longer_word_is_untouched():
+    from echo_link_core.selected_text import _repair_cair
+
+    assert _repair_cair("haircair cairo") == "haircair cairo"
