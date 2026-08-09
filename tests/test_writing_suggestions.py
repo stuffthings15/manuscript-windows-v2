@@ -169,3 +169,61 @@ def test_three_parallel_predicates_keep_the_serial_comma():
     result = apply_all_suggestions(source, WritingSuggestionEngine().analyze(source))
 
     assert result == source
+
+
+def _applied(text: str) -> str:
+    from echo_link_core.writing_suggestions import (
+        WritingSuggestionEngine,
+        apply_all_suggestions,
+    )
+
+    engine = WritingSuggestionEngine()
+    return apply_all_suggestions(text, engine.analyze(text))
+
+
+def test_doubled_commas_are_collapsed():
+    """The last remaining artefact in eight of nine otherwise clean essays."""
+    assert ",," not in _applied("In Utrecht, the Netherlands,, this is true.")
+    assert ",," not in _applied("Feeding the fish, replacing water,, cleaning it.")
+
+
+def test_a_comma_left_after_a_full_stop_is_removed():
+    assert "." in _applied("or other equipment., but the animal is fine.")
+    assert ".," not in _applied("or other equipment., but the animal is fine.")
+    assert ". ," not in _applied("We saw it. , then left.")
+
+
+def test_abbreviations_keep_the_comma_that_punctuates_their_sentence():
+    """The guard that matters: "p.m.," is punctuating, not doubled. A lookback
+    that only reads the final letters sees "m" and strips a correct comma."""
+    for text in (
+        "At 12:40 p.m., observers arrived.",
+        "The team met at 9 a.m., then left.",
+        "Etc., and so on.",
+    ):
+        assert text == _applied(text), text
+
+
+def test_a_word_repeated_with_a_stray_comma_is_collapsed():
+    """The corrector produced "replacing water,, water,, cleaning" - a repeated
+    word carrying a doubled comma, which the whitespace-only rule never saw."""
+    assert _applied("replacing water,, water,, cleaning it.") == (
+        "Replacing water, cleaning it."
+    )
+    assert _applied("land beyond the city,, city,, and more.") == (
+        "Land beyond the city, and more."
+    )
+
+
+def test_a_single_comma_between_repeats_is_left_alone():
+    """"New York, New York" is correct English. A rule that flattened it would
+    be worse than the defect it fixes."""
+    for text in (
+        "We moved to New York, New York last year.",
+        "The town of Puebla, Puebla is large.",
+    ):
+        assert _applied(text) == text, text
+
+
+def test_plain_repeated_words_still_collapse():
+    assert _applied("the the pet needs care.") == "the pet needs care."

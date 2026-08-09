@@ -118,8 +118,17 @@ _COMMON_GRAMMAR_PHRASES = {
 }
 
 _WORD = re.compile(r"\b[A-Za-z][A-Za-z'-]*\b")
+# The corrector produced "replacing water,, water,, cleaning" and "beyond the
+# city,, city,, and" - a repeated word carrying a stray comma with it. Plain
+# whitespace was the only separator this matched, so those survived.
+#
+# A run of two or more commas is the marker. A SINGLE comma between repeats is
+# deliberately not matched: "New York, New York" and "Puebla, Puebla" are
+# correct English, and a rule that flattened them would be worse than the
+# defect it fixes.
 _DUPLICATE_WORD = re.compile(
-    r"(?=\b(?P<first>[A-Za-z][A-Za-z'-]*)[ \t]+"
+    r"(?=\b(?P<first>[A-Za-z][A-Za-z'-]*)"
+    r"(?:[ \t]+|[ \t]*,[\s,]*,[ \t]*)"
     r"(?P<second>[A-Za-z][A-Za-z'-]*)\b)",
     re.IGNORECASE,
 )
@@ -195,6 +204,7 @@ class WritingSuggestionEngine:
         candidates.extend(_grammar_phrase_candidates(text, protected))
         candidates.extend(_lowercase_i_candidates(text, protected))
         candidates.extend(_structural_punctuation_candidates(text, protected))
+        candidates.extend(_doubled_punctuation_candidates(text, protected))
         candidates.extend(_punctuation_spacing_candidates(text, protected))
         candidates.extend(_declarative_question_candidates(text, protected))
         candidates.extend(_repeated_terminal_punctuation_candidates(text, protected))
@@ -466,6 +476,61 @@ def _punctuation_spacing_candidates(
         for match in _SPACE_BEFORE_PUNCTUATION.finditer(text)
         if not _is_protected(match.start(), match.end(), protected)
     ]
+
+
+# Doubled commas were the last remaining artefact in eight of nine otherwise
+# clean essays - "in Utrecht, the Netherlands,, this can be", "replacing
+# water,, cleaning". A stray comma after a full stop is the same defect from
+# the other side ("or other equipment., but the animal").
+_DOUBLED_COMMA = re.compile(r",[\s,]*,")
+_TERMINATOR_THEN_COMMA = re.compile(r"([.!?])\s*,")
+# "At 12:40 p.m., observers" must keep its full stop. An abbreviation before
+# the comma is punctuating normally, not a doubled terminator.
+_TERMINATOR_ABBREVIATIONS = frozenset(
+    {"al", "am", "cf", "dr", "eg", "etc", "ie", "inc", "jr", "lt", "ltd",
+     "mr", "mrs", "ms", "no", "pm", "prof", "sr", "st", "vs"}
+)
+
+
+def _doubled_punctuation_candidates(
+    text: str,
+    protected: tuple[tuple[int, int], ...],
+) -> list[_Candidate]:
+    candidates = [
+        _Candidate(
+            "doubled-comma",
+            SuggestionCategory.FORMATTING,
+            "Remove the repeated comma",
+            "One comma separates the clause; the extra one is a typing slip.",
+            match.start(),
+            match.end(),
+            ",",
+        )
+        for match in _DOUBLED_COMMA.finditer(text)
+        if not _is_protected(match.start(), match.end(), protected)
+    ]
+    for match in _TERMINATOR_THEN_COMMA.finditer(text):
+        if _is_protected(match.start(), match.end(), protected):
+            continue
+        # Take the whole dotted token, not just its last letters: "p.m." has to
+        # be recognised as "pm", or the guard sees "m" and strips a comma that
+        # was punctuating the sentence correctly.
+        lead = re.findall(r"([A-Za-z][A-Za-z.]*)$", text[: match.start() + 1])
+        token = lead[0].replace(".", "").casefold() if lead else ""
+        if token in _TERMINATOR_ABBREVIATIONS:
+            continue
+        candidates.append(
+            _Candidate(
+                "terminator-then-comma",
+                SuggestionCategory.FORMATTING,
+                "Remove the comma after the full stop",
+                "A sentence ends with its full stop; the comma is left over.",
+                match.start(),
+                match.end(),
+                match.group(1),
+            )
+        )
+    return candidates
 
 
 def _declarative_question_candidates(
