@@ -2526,10 +2526,39 @@ class EchoLinkWindow(QMainWindow):
                 polish_result is not None
                 and not _polish_result_ready_for_review(polish_result)
             ):
-                raise RuntimeError(
-                    str(getattr(polish_result, "message", "")).strip()
-                    or "Full AI correction did not pass final quality checks."
-                )
+                # The AI answer is not offerable - it still disagrees with
+                # itself, and test_incomplete_fact_safe_ai_correction_is_not_
+                # review_ready is right that it must not be shown. But failing
+                # the whole section throws away the deterministic repair too,
+                # with every spelling, punctuation and agreement fix already
+                # applied. That is what stalled essays 5, 7, 13, 18 and 19 at
+                # one section each, leaving the rest of the document
+                # uncorrected, and it is inconsistent: when the AI answer is
+                # *rejected* the rules repair is shown, so the better outcome
+                # was being treated worse than the worse one.
+                repaired = str(
+                    getattr(polish_result, "deterministic_text", "") or ""
+                ).strip()
+                if repaired and repaired != source.strip():
+                    logger.info(
+                        "Writing HUD offering the deterministic repair for a "
+                        "section the AI could not finish characters=%d",
+                        len(repaired),
+                    )
+                    payload = (
+                        request_id,
+                        attempt_id,
+                        suggestion_id,
+                        True,
+                        repaired,
+                        "Rules correction ready; the AI could not finish this "
+                        "section.",
+                    )
+                else:
+                    raise RuntimeError(
+                        str(getattr(polish_result, "message", "")).strip()
+                        or "Full AI correction did not pass final quality checks."
+                    )
             logger.info(
                 "Writing HUD adaptive Polish completed command=%s characters=%d backend=%s",
                 command,
