@@ -774,3 +774,62 @@ def test_partial_insert_exposes_and_saves_only_unsent_suffix(tmp_path):
     assert len(rows) == 1
     assert rows[0]["final_text"].strip() == "partial."
     assert "Hello partial" not in rows[0]["final_text"]
+
+
+class SlowStreamingTranscriber(StreamingTranscriber):
+    """A preview pass that takes far longer than the interval between passes.
+
+    This is what a real one becomes as an utterance grows: every pass
+    re-transcribes the whole recording from the start, so a thirteen second
+    sentence was measured producing six passes of 2.4 seconds each.
+    """
+
+    def __init__(self, final_text, delay=0.12):
+        super().__init__(final_text)
+        self.delay = delay
+        self.starts = []
+
+    def transcribe_partial(self, audio):
+        self.starts.append(time.monotonic())
+        time.sleep(self.delay)
+        return super().transcribe_partial(audio)
+
+
+def test_a_preview_pass_slower_than_the_interval_backs_off(tmp_path):
+    """A pass slower than the gap between passes must widen the gap.
+
+    Every pass holds the transcription lock the final text needs, so passes
+    issued as fast as the interval allows land directly on the delay the
+    speaker feels after they stop talking - measured around twenty seconds on
+    a long sentence.
+
+    Measured directly rather than by counting passes. With a 0.01s interval
+    and a 0.4s pass, no back-off gives roughly a 0.55s cycle and back-off
+    roughly 0.95s, once the pipeline's own ~0.14s per cycle is included. A
+    count-based bound could not tell those apart, and neither could a smaller
+    delay - both were tried.
+    """
+    store = EchoLinkStore(tmp_path / "echo-link.db")
+    settings = store.get_settings()
+    settings.streaming_enabled = True
+    settings.streaming_interval_seconds = 0.01
+    store.save_settings(settings)
+    transcriber = SlowStreamingTranscriber("hello final text", delay=0.4)
+    engine = DictationEngine(
+        store,
+        recorder=StreamingRecorder(),
+        transcriber=transcriber,
+        correction=CorrectionPipeline(store.vocabulary_map, settings),
+        inserter=FakeInserter(),
+        event_callback=lambda _event: None,
+    )
+    assert engine.start_recording(insert_result=False)
+    time.sleep(2.6)
+    assert engine.stop_recording()
+    _wait(engine)
+
+    starts = transcriber.starts
+    assert len(starts) >= 3, starts
+    gaps = [second - first for first, second in zip(starts, starts[1:])]
+    typical = sorted(gaps)[len(gaps) // 2]
+    assert typical >= 0.75, gaps

@@ -768,13 +768,40 @@ class DictationEngine:
                 capture = self._active_capture
                 if capture is None or session_id != capture.session_id:
                     return
+            if stop.is_set():
+                # Recording has finished. Do not start another preview pass:
+                # the final transcription waits on the same lock, so one more
+                # pass over the whole utterance is added directly to the delay
+                # the speaker experiences after they stop talking.
+                return
             try:
                 audio = self.recorder.snapshot()
+                started = time.monotonic()
                 with self._transcription_lock:
+                    if stop.is_set():
+                        return
                     partial = self.transcriber.transcribe_partial(audio)
+                elapsed = time.monotonic() - started
             except Exception:
                 logger.debug("Live transcription preview failed", exc_info=True)
                 continue
+            if elapsed > interval:
+                # Each pass re-transcribes the whole utterance from the start,
+                # so its cost grows with how long the speaker has been going.
+                # Once a pass takes longer than the gap between passes they
+                # queue up, every one holding the lock the final transcription
+                # needs, and a long sentence arrives many seconds late.
+                # Measured: a 13 second utterance produced six passes of 2.4
+                # seconds each. Backing off keeps the preview honest about what
+                # the machine can actually keep up with.
+                logger.debug(
+                    "Live preview pass took %.1fs against a %.1fs interval; "
+                    "backing off",
+                    elapsed,
+                    interval,
+                )
+                if stop.wait(min(elapsed - interval, 5.0)):
+                    return
             with self._lock:
                 capture = self._active_capture
                 if capture is None or session_id != capture.session_id:
