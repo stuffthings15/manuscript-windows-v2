@@ -1775,6 +1775,28 @@ class RewritePalette(QDialog):
             )
         )
 
+    def _review_readiness_label(self) -> str:
+        """Whether every section in this review has a correction yet.
+
+        Sections are prepared in the background, so a review can be open with
+        most of it still being worked on. Anything waiting on the review -
+        a reader, a screen reader, or automation - previously had to infer that
+        from which buttons happened to be enabled.
+        """
+        total = len(self._suggestions)
+        if not total:
+            return "no sections"
+        ready = sum(
+            1
+            for suggestion in self._suggestions
+            if str(getattr(suggestion, "suggestion_id", ""))
+            in self._ai_completed_ids
+            or str(getattr(suggestion, "suggestion_id", "")) in self._ai_failed_ids
+        )
+        if ready >= total:
+            return "all sections ready"
+        return f"preparing, {ready} of {total} sections ready"
+
     def _available_suggestions(self) -> tuple[object, ...]:
         return tuple(
             suggestion
@@ -1960,10 +1982,18 @@ class RewritePalette(QDialog):
                 self._review_progress_total,
             )
         self.card_position.setText(progress)
+        # Say whether the review is still loading. A reader using a screen
+        # reader could not otherwise tell a section that has no correction yet
+        # from one that has finished, and neither could anything driving the
+        # HUD: automation had to infer readiness from button states and counter
+        # text, sampling an asynchronous pipeline at fixed moments. Four
+        # separate timing patches later, a different three or four documents
+        # failed every run. This states the fact instead of leaving it guessed.
+        readiness = self._review_readiness_label()
         self.card_position.setAccessibleName(
-            f"Current writing suggestion position, {progress}"
+            f"Current writing suggestion position, {progress}, {readiness}"
         )
-        self.card_position.setAccessibleDescription(progress)
+        self.card_position.setAccessibleDescription(f"{progress}, {readiness}")
         self.card_position.setVisible(overall_total > 1)
         self.card_position.adjustSize()
         self.card_position.updateGeometry()

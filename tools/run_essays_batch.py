@@ -89,6 +89,31 @@ def badge_button(hud):
     return None
 
 
+def review_readiness(hud) -> str:
+    """What the HUD says about its own readiness, or "" if it is not saying.
+
+    The counter's accessible name now carries it, so this waits on a stated
+    fact instead of inferring readiness from which buttons happen to be
+    enabled. Every timing patch in this file before now was a guess at that.
+    """
+    if hud is None:
+        return ""
+    from repro_accept_advance import _descend
+
+    for control in _descend(hud):
+        try:
+            name = str(control.Name or "")
+        except Exception:  # noqa: BLE001 - the HUD may be repainting
+            continue
+        if "Current writing suggestion position" in name:
+            if "all sections ready" in name:
+                return "ready"
+            if "preparing" in name:
+                return "preparing"
+            return "unknown"
+    return ""
+
+
 def invoke(control) -> bool:
     try:
         control.GetInvokePattern().Invoke()
@@ -262,13 +287,21 @@ def review_one(path: Path, *, max_presses: int = 30) -> dict:
         # are still being prepared. Pressing into that half-built review made
         # essay 15 dismiss FOURTEEN sections whose corrections were still
         # arriving. Wait for the first correction to actually be offered.
-        settle = time.monotonic() + 90.0
+        settle = time.monotonic() + 180.0
         while time.monotonic() < settle:
             hud = hud_window(8.0) or hud
-            button = replace_button(hud)
-            if button is not None and button.IsEnabled:
+            state = review_readiness(hud)
+            if state == "ready":
                 break
+            if state == "":
+                # The HUD is not reporting readiness (older build, or the card
+                # is not up yet). Fall back to the old signal rather than
+                # waiting out the whole timeout for a fact nobody is stating.
+                button = replace_button(hud)
+                if button is not None and button.IsEnabled:
+                    break
             time.sleep(2.0)
+        report["settled"] = review_readiness(hud_window(8.0) or hud)
 
     for press in range(1, max_presses + 1):
         hud = hud_window(10.0)
