@@ -994,6 +994,14 @@ class EchoLinkWindow(QMainWindow):
         self.category_combo.setEditable(True)
         self.category_combo.addItems(["custom", "name", "product", "technical"])
         self.category_combo.setAccessibleName("Vocabulary category")
+        # An editable combo box exposes its own line edit as a separate control,
+        # and that child inherits nothing. A UI sweep of every tab found it as
+        # the one control on any page with no accessible name: focus lands
+        # there while typing a category and a screen reader announces nothing.
+        category_field = self.category_combo.lineEdit()
+        if category_field is not None:
+            category_field.setAccessibleName("Vocabulary category")
+            category_field.setPlaceholderText("custom")
         entry_layout.addWidget(self.category_combo, 1)
         add_button = QPushButton("Add")
         add_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))

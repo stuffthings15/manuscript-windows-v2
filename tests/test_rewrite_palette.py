@@ -3134,3 +3134,65 @@ def test_clean_text_says_there_is_nothing_to_correct(app):
         return
     assert "Nothing to correct" in palette.suggestion_title.text()
     assert palette.before_text.toPlainText() == "The dog waits by the door."
+
+
+def test_the_counter_does_not_move_when_a_section_is_only_deferred(app):
+    """Watched live, the counter went 4 -> 5 with completed stuck at 3.
+
+    It showed completed + cursor index + 1, so the review stepping over a
+    section whose correction had not arrived made the number climb while
+    nothing had been decided. A reader cannot tell from that whether their
+    essay was corrected. Deferred sections come back; they are not progress.
+    """
+    palette = RewritePalette(
+        suggestion_engine=_SuggestionEngine(),
+        ai_proofread=True,
+    )
+    palette.show_capture(
+        "Echo-Link are ready. Clean sentence. Third sentence.\nAnother sentence."
+    )
+    app.processEvents()
+    palette.badge_button.click()
+    app.processEvents()
+
+    before = palette.card_position.text()
+
+    # The review moves the cursor on by itself, exactly as it does when the
+    # section in front of it has no finished correction yet.
+    palette._review_index = 1
+    palette._show_review_suggestion()
+    app.processEvents()
+
+    assert palette.card_position.text() == before
+    palette.finish_choice()
+
+
+def test_dismissing_a_section_does_count_as_progress(app):
+    """A dismissal is the reader's decision, unlike an automatic step-over."""
+    palette = RewritePalette(
+        suggestion_engine=_SuggestionEngine(),
+        ai_proofread=True,
+    )
+    requests = []
+    palette.sentence_rewrite_requested.connect(lambda *args: requests.append(args))
+    palette.show_capture(
+        "Echo-Link are ready. Clean sentence. Third sentence.\nAnother sentence."
+    )
+    app.processEvents()
+    palette.badge_button.click()
+    app.processEvents()
+
+    # Dismiss is disabled until the section's AI step finishes, so finish it.
+    attempt, suggestion_id, *_ = requests[0]
+    palette.show_sentence_result(
+        attempt, suggestion_id, "Echo-Link is ready.", "AI proofread ready."
+    )
+    app.processEvents()
+
+    before = palette.card_position.text()
+    assert palette.dismiss_suggestion_button.isEnabled()
+    palette.dismiss_suggestion_button.click()
+    app.processEvents()
+
+    assert palette.card_position.text() != before
+    palette.finish_choice()

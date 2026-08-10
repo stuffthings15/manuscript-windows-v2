@@ -141,6 +141,20 @@ class RewritePalette(QDialog):
         self._ai_requested_ids: set[str] = set()
         self._ai_completed_ids: set[str] = set()
         self._ai_failed_ids: set[str] = set()
+        # Sections resolved by the reader in THIS review: dismissed, or stepped
+        # past deliberately with Next. An automatic step over a section whose
+        # correction has not arrived is NOT resolution - it is deferral, and the
+        # section comes back. Nothing distinguished the two, because both were
+        # _review_index += 1, so the counter showed a cursor rather than
+        # progress and climbed while nothing had been decided.
+        self._review_resolved: set[str] = set()
+        # Sections resolved by the reader in THIS review: dismissed, or stepped
+        # past deliberately with Next. An automatic step over a section whose
+        # correction has not arrived is NOT resolution - it is deferral, and
+        # the section comes back. Nothing distinguished the two, because both
+        # were _review_index += 1, so the counter showed a cursor rather than
+        # progress and climbed while nothing had been decided.
+        self._review_resolved: set[str] = set()
         self._ai_auto_retry_counts: dict[str, int] = {}
         self._ai_attempt_counter = 0
         self._active_ai_attempt_id = 0
@@ -530,6 +544,8 @@ class RewritePalette(QDialog):
         self.previous_button.hide()
         self.next_button = QPushButton("Next", page)
         self.next_button.hide()
+
+
         self.apply_changes_button = QPushButton("Apply changes", page)
         self.apply_changes_button.setObjectName("primaryButton")
         self.apply_changes_button.setEnabled(False)
@@ -785,6 +801,8 @@ class RewritePalette(QDialog):
         self._ai_request_started.clear()
         self._ai_duration_samples.clear()
         self._ai_failed_ids.clear()
+        self._review_resolved.clear()
+        self._review_resolved.clear()
         self._ai_auto_retry_counts.clear()
         self._ai_ready_messages.clear()
         self._ai_failure_messages.clear()
@@ -1300,6 +1318,8 @@ class RewritePalette(QDialog):
         self._ai_request_started.clear()
         self._ai_duration_samples.clear()
         self._ai_failed_ids.clear()
+        self._review_resolved.clear()
+        self._review_resolved.clear()
         self._ai_auto_retry_counts.clear()
         self._ai_ready_messages.clear()
         self._ai_failure_messages.clear()
@@ -1829,6 +1849,14 @@ class RewritePalette(QDialog):
         self._update_badge()
 
     def _show_review_suggestion(self) -> None:
+        # A section back under review is no longer resolved. Accepting one
+        # removes it and returns the reader to the section they had stepped
+        # past, and that section is in play again - counting it as done would
+        # overstate progress by exactly one for the rest of the review.
+        current = self._current_review_suggestion()
+        current_id = str(getattr(current, "suggestion_id", ""))
+        if current_id:
+            self._review_resolved.discard(current_id)
         self.after_heading.setText("Suggested text")
         self.rewrite_sentence_button.setText("Regenerate")
         total = len(self._review_suggestions)
@@ -1909,7 +1937,9 @@ class RewritePalette(QDialog):
         )
         overall_position = min(
             overall_total,
-            self._review_progress_completed + self._review_index + 1,
+            self._review_progress_completed
+            + len(self._review_resolved)
+            + 1,
         )
         progress = f"{overall_position} of {overall_total}"
         if progress != self._logged_progress:
@@ -2168,6 +2198,12 @@ class RewritePalette(QDialog):
     def _step_suggestion(self, offset: int) -> None:
         if self._busy or not self._review_suggestions:
             return
+        if int(offset) > 0:
+            # Moving on by choice counts; the review doing it for you does not.
+            current = self._current_review_suggestion()
+            current_id = str(getattr(current, "suggestion_id", ""))
+            if current_id:
+                self._review_resolved.add(current_id)
         self._review_index = min(
             max(0, self._review_index + int(offset)),
             len(self._review_suggestions) - 1,
@@ -2329,6 +2365,10 @@ class RewritePalette(QDialog):
         current_id = str(getattr(current, "suggestion_id", ""))
         if self._active_ai_suggestion_id in {"", current_id}:
             self._cancel_active_ai_request()
+        if current_id:
+            self._review_resolved.add(current_id)
+        if current_id:
+            self._review_resolved.add(current_id)
         if self._review_index + 1 < len(self._review_suggestions):
             self._review_index += 1
             self._show_review_suggestion()

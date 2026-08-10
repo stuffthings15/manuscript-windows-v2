@@ -58,14 +58,17 @@ def main() -> int:
     print(f"tabs found: {[t.Name for t in tabs]}\n")
 
     problems: list[str] = []
+    counts: list[int] = []
     for tab in tabs:
         name = tab.Name
         try:
-            try:
-                tab.GetSelectionItemPattern().Select()
-            except Exception:  # noqa: BLE001 - list items may need a click
-                tab.Click(simulateMove=False)
-            time.sleep(0.9)
+            # Click, do NOT use SelectionItemPattern.Select(). Select() moves
+            # the highlight without changing the current row, so the page never
+            # switches and every tab appears to hold identical controls. That
+            # made an earlier run of this probe report the app as broken when
+            # mouse and keyboard both work correctly.
+            tab.Click(simulateMove=False)
+            time.sleep(1.2)
         except Exception as exc:  # noqa: BLE001 - an unselectable tab is a finding
             problems.append(f"{name}: cannot be selected ({type(exc).__name__})")
             continue
@@ -86,12 +89,18 @@ def main() -> int:
                     offscreen += 1
             except Exception:  # noqa: BLE001 - counted as unreadable below
                 offscreen += 1
+        counts.append(len(controls))
         print(f"{name:<22} controls={len(controls):>3}  disabled={len(disabled):>2}  "
               f"unnamed={unnamed:>2}  zero-size={offscreen:>2}")
         if disabled:
             print(f"    disabled: {disabled[:6]}")
         if unnamed:
             problems.append(f"{name}: {unnamed} controls with no accessible name")
+    if len(set(counts)) == 1 and len(counts) > 1:
+        problems.append(
+            f"every tab reported the same {counts[0]} controls - the pages did "
+            "not switch, so this run verified nothing"
+        )
     print()
     if problems:
         print("FINDINGS:")
