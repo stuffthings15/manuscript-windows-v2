@@ -312,8 +312,21 @@ def review_one(path: Path, *, max_presses: int = 30) -> dict:
         after = counter_text(hud)
         report["counters"].append(f"{before}->{after}")
         if after == before:
-            time.sleep(10.0)
-            again = counter_text(hud_window(8.0) or hud)
+            # Poll rather than checking once more after a fixed pause. Six
+            # seconds plus ten was not enough for a section whose correction
+            # was still being generated, so essays 2, 11, 13 and 15 were
+            # recorded as stalled at "1 of 11" after a single press, in 40 to
+            # 46 seconds, with ~90 unknown words - the untouched original.
+            # Essay 2 had been clean on the previous run. That is the harness
+            # giving up on the app, not the app failing.
+            patient = time.monotonic() + 60.0
+            while time.monotonic() < patient:
+                time.sleep(4.0)
+                again = counter_text(hud_window(8.0) or hud)
+                if again != before:
+                    break
+            else:
+                again = before
             if again == before:
                 # Do NOT dismiss here, although the captured evidence shows
                 # Dismiss enabled at this moment. Measured over three runs,
