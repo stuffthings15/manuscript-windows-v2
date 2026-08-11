@@ -1519,9 +1519,23 @@ def test_palette_requests_local_ai_for_each_review_chunk(app):
     palette.finish_choice()
 
 
-def test_window_hud_keeps_writing_model_warm_with_small_bounded_request(
+def test_window_hud_sends_the_section_with_no_instruction_of_its_own(
     app, tmp_path, monkeypatch
 ):
+    """This asserted keep_alive, context_window, max_tokens and require_gpu.
+
+    All four went into **_ignored in PolishWritingAssistantAdapter.run and
+    never reached the engine, so the "small bounded request" the old name
+    promised was never actually bounded by them - the test verified the shape
+    of a call rather than any effect of it. The bounds are real, but they come
+    from the ExecutionPlan the hardware policy builds (context_window,
+    max_output_tokens, require_full_gpu), not from the caller.
+
+    What is left is what genuinely reaches the engine and matters: the section
+    text, the timeout, and an empty instruction. That last one is load bearing -
+    putting the correction contract here made the model drop immutable tokens
+    on full-page reviews.
+    """
     monkeypatch.delenv("ECHOLINK_DISABLE_PALETTE_AI", raising=False)
     window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
     window.selected_text_record = _selection("teh draft")
@@ -1539,11 +1553,10 @@ def test_window_hud_keeps_writing_model_warm_with_small_bounded_request(
     assert called.wait(2.0)
     assert captured["source"] == "teh draft"
     assert captured["timeout"] == 120.0
-    assert captured["keep_alive"] == "300s"
-    assert captured["context_window"] == 4096
-    assert captured["max_tokens"] == 768
-    assert captured["require_gpu"] is True
     assert captured["instruction"] == ""
+    assert captured["document"] == "teh draft"
+    for dead in ("keep_alive", "context_window", "max_tokens", "require_gpu"):
+        assert dead not in captured, f"{dead} is discarded by the adapter"
     window._quitting = True
     window.close()
 

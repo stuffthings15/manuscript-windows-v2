@@ -79,7 +79,6 @@ from echo_link_core.insertion import (
 from echo_link_core.models import (
     DictationMode,
     InsertionMode,
-    OLLAMA_KEEP_ALIVE,
     SessionEvent,
     SessionState,
 )
@@ -2498,10 +2497,16 @@ class EchoLinkWindow(QMainWindow):
                 # capitalised, not a place; a section on its own cannot tell.
                 "document": document_text,
                 "timeout": hud_timeout,
-                "keep_alive": OLLAMA_KEEP_ALIVE,
-                "context_window": 4096,
-                "max_tokens": 768,
-                "require_gpu": True,
+                # keep_alive, context_window, max_tokens and require_gpu used to
+                # be passed here. They went straight into **_ignored in
+                # PolishWritingAssistantAdapter.run and never reached the
+                # engine. The hardware policy decides all four on the
+                # ExecutionPlan - context_window, max_output_tokens and
+                # require_full_gpu - so app-level constants would be fighting it
+                # even if they were read. Four settings that look load-bearing
+                # and do nothing cost an investigation earlier: they were the
+                # first suspect for a correction failure and took a while to
+                # rule out.
                 "plan_callback": plan_ready,
             }
             result = self.writing_assistant.run(
