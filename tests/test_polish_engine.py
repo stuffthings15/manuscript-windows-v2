@@ -5462,7 +5462,7 @@ def test_three_letter_function_word_typo_is_not_a_protected_name():
     section was refused as changed protected content and fell back to the
     deterministic rules with every typo in it intact.
     """
-    from echo_link_core.polish import (
+    from echo_link_core.polish_entities import (
         _misspelled_non_entity_starter,
         _runtime_opaque_entities,
     )
@@ -5489,7 +5489,7 @@ def test_short_real_names_are_still_protected_entities():
     dropped from the function word counts, and no deletion from "and" spells
     "ann".
     """
-    from echo_link_core.polish import _misspelled_non_entity_starter
+    from echo_link_core.polish_entities import _misspelled_non_entity_starter
 
     for name in ("ann", "tom", "ian", "bob", "joe", "sue", "kim", "mia", "amy"):
         assert _misspelled_non_entity_starter(name) is False, name
