@@ -8,7 +8,6 @@ from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
-from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -6081,10 +6080,6 @@ def _obligation_counter(text: str) -> Counter[str]:
     return Counter(values)
 
 
-@lru_cache(maxsize=1)
-
-
-@lru_cache(maxsize=512)
 
 
 
@@ -6095,17 +6090,6 @@ def _obligation_counter(text: str) -> Counter[str]:
 # million. The threshold sits in the middle of that gap, so both sides have
 # roughly a fourfold margin. Being too conservative only leaves a typo frozen,
 # which is the behaviour we already had; being too loose unprotects a name.
-
-
-@lru_cache(maxsize=2048)
-
-
-
-
-
-
-
-
 
 
 def _runtime_negation_literals(text: str) -> tuple[str, ...]:

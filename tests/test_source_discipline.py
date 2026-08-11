@@ -68,6 +68,31 @@ def test_no_function_body_is_implemented_twice():
     )
 
 
+def test_no_decorator_is_left_without_the_function_it_decorated():
+    """Moving a decorated function is where this breaks.
+
+    Python's AST puts a definition's line number after its decorators, so a
+    script that moves lineno..end_lineno takes the body and leaves the
+    decorator behind. That happened: three @lru_cache lines stayed in polish.py
+    and stacked onto the next function, while the three entity helpers that
+    needed them lost their caching. Nothing failed - caching is invisible to a
+    correctness test - so only reading the file found it.
+    """
+    stacked: list[str] = []
+    for path in _modules():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            decorators = getattr(node, "decorator_list", [])
+            names = [
+                getattr(getattr(d, "func", d), "id", getattr(getattr(d, "func", d), "attr", ""))
+                for d in decorators
+            ]
+            if names.count("lru_cache") > 1:
+                stacked.append(f"{path.name}:{node.lineno} {getattr(node, 'name', '?')}")
+
+    assert not stacked, "a function carries more than one lru_cache: " + ", ".join(stacked)
+
+
 def _broad(handler: ast.ExceptHandler) -> bool:
     node = handler.type
     if node is None:

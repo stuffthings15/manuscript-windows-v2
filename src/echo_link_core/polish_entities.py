@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from difflib import SequenceMatcher
+from functools import lru_cache
 
 
 
@@ -194,6 +195,7 @@ def _same_name_respelled(candidate: str, source: str, limit: int) -> bool:
     return candidate[-1:] == source[-1:]
 
 
+@lru_cache(maxsize=1)
 def _entity_dictionary():
     """One shared dictionary. Warming it is expensive; this is called per name."""
     from .polish_spelling import EnglishDictionary
@@ -201,6 +203,7 @@ def _entity_dictionary():
     return EnglishDictionary()
 
 
+@lru_cache(maxsize=512)
 def _document_occurrences(word: str, document: str) -> int:
     return len(re.findall(rf"(?<!\w){re.escape(word)}(?!\w)", document, re.IGNORECASE))
 
@@ -229,6 +232,7 @@ def _capitalised_ordinary_word(value: str, document: str) -> bool:
 _TYPO_CORRECTION_FREQUENCY = 25_000_000
 
 
+@lru_cache(maxsize=2048)
 def _capitalised_misspelling(value: str) -> bool:
     """Is this capitalised word a misspelling rather than a name?
 
