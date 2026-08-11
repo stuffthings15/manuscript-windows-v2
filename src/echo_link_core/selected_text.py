@@ -4166,10 +4166,6 @@ def _apply_fast_proofread_rules(text: str) -> str:
             lambda match: f"{match.group(1)}-{match.group(2)} ",
         ),
         (
-            r"\broute syncing offline notes photo uploads and emergency escalation\b",
-            "route syncing, offline notes, photo uploads, and emergency escalation",
-        ),
-        (
             r"\bSeveral instruction is written\b",
             "Several instructions are written",
         ),
@@ -4332,10 +4328,6 @@ def _apply_fast_proofread_rules(text: str) -> str:
         (
             r"\brisks\.\s+While making clear that emergency procedures remain unchanged\b",
             "risks while making clear that emergency procedures remain unchanged",
-        ),
-        (
-            r"\bestimate includes staffing, security, utilities and transit\b",
-            "estimate includes staffing, security, utilities, and transit",
         ),
         (
             r"(\$[\d,]+ for utilities)\s+and\s+(\$[\d,]+ for transit coordination)\b",

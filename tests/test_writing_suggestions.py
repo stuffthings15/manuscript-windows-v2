@@ -171,6 +171,53 @@ def test_three_parallel_predicates_keep_the_serial_comma():
     assert result == source
 
 
+def test_a_hand_punctuated_list_missing_only_its_last_comma_gets_one():
+    """The rule this replaces was memorized, not general.
+
+    "staffing, security, utilities and transit" was corrected because that exact
+    sentence was written into the proofread table from a benchmark page, while
+    the identical defect in any other sentence was left alone.
+    """
+    assert _applied("The estimate includes staffing, security, utilities and transit.") == (
+        "The estimate includes staffing, security, utilities, and transit."
+    )
+    assert _applied("We reviewed the logs, the alerts, the queue and the archive.") == (
+        "We reviewed the logs, the alerts, the queue, and the archive."
+    )
+
+
+def test_a_single_comma_is_not_enough_to_call_something_a_list():
+    """The false positive that set the threshold at two commas.
+
+    "Visitors will not pay, although the city continues to provide staffing and
+    security" has one comma, before a subordinate clause. Reading that as a list
+    produced "provide staffing, and security". One comma cannot distinguish a
+    list from a clause boundary here, so "apples, pears and plums" is knowingly
+    left alone: a wrong comma is worse than a missing one.
+    """
+    for text in (
+        "Visitors will not pay, although the city continues to provide staffing and security.",
+        "She bought apples, pears and plums.",
+        "The red and blue house is ours.",
+        "Keep customer names gate codes and service notes private.",
+        "He left and she stayed.",
+    ):
+        assert _applied(text) == text
+
+
+def test_an_appositive_is_left_for_a_human():
+    """"Ann, my manager, my mentor and my friend" may be one person or four."""
+    source = "I spoke to Ann, my manager, my mentor and my friend."
+
+    assert _applied(source) == source
+
+
+def test_a_trailing_clause_is_not_treated_as_a_list_item():
+    source = "We reviewed the logs, the alerts, the queue and the archive, which we kept."
+
+    assert _applied(source) == source
+
+
 def _applied(text: str) -> str:
     from echo_link_core.writing_suggestions import (
         WritingSuggestionEngine,

@@ -375,6 +375,32 @@ _TITLE_NAME_COMMAS = re.compile(
     r"(?=[ \t]+(?:said|asked|explained|reported|confirmed|noted)\b)",
     re.IGNORECASE,
 )
+# A list that already punctuates its earlier items but drops the comma before
+# the final "and": "staffing, security, utilities and transit".
+#
+# TWO preceding commas are required, not one. One comma is not evidence of a
+# list: "Visitors will not pay, although the city continues to provide staffing
+# and security" has a comma before a subordinate clause, and a rule that read it
+# as a list wrote "provide staffing, and security". Two commas mean the writer
+# has already separated at least three items by hand, and only the last
+# separator is missing.
+#
+# The cost is that "apples, pears and plums" is left alone. That is deliberate:
+# with one comma there is no way here to tell a list from a clause boundary, and
+# a wrong comma is worse than a missing one.
+#
+# The match must reach the end of the sentence, so a trailing clause
+# ("..., the alerts and the queue, which we archived") is left alone: that comma
+# belongs to the clause, not to the list.
+_SERIAL_COMMA = re.compile(
+    r",[ \t]+[^,;:.!?()]{2,60},[ \t]+(?P<middle>[^,;:.!?()]{2,60}?)[ \t]+and[ \t]+"
+    r"(?P<last>[^,;:.!?()]{2,60}?)(?=[.;:!?]|\Z)"
+)
+# An appositive wears the same punctuation as a two-item list: "Ann, my manager
+# and my mentor" describes one person, and inserting a comma silently turns her
+# into three. A proper noun immediately before the comma is the signal, so those
+# are left for a human to judge.
+_APPOSITIVE_LEAD = re.compile(r"\b[A-Z][A-Za-z'-]+[ \t]*,[ \t]*$")
 _SENTENCE_START = re.compile(
     r"(?:\A|[.!?][\"'\u201d\u2019)\]]*[ \t\r\n]+)(?P<letter>[a-z])"
 )
@@ -671,6 +697,25 @@ def _structural_punctuation_candidates(
                 start,
                 end,
                 "on",
+            )
+        )
+    for match in _SERIAL_COMMA.finditer(text):
+        start = match.start("middle")
+        end = match.end("last")
+        if _is_protected(start, end, protected):
+            continue
+        if _APPOSITIVE_LEAD.search(text[: match.start() + 1]):
+            continue
+        found.append(
+            _Candidate(
+                "serial-comma",
+                SuggestionCategory.GRAMMAR,
+                "Add the missing serial comma",
+                "A list that punctuates its earlier items needs a comma before "
+                "the final and.",
+                start,
+                end,
+                f"{match.group('middle')}, and {match.group('last')}",
             )
         )
     for match in _TITLE_NAME_COMMAS.finditer(text):
