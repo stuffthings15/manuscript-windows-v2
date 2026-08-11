@@ -16,7 +16,6 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
-import re
 import sys
 import xml.etree.ElementTree as ET
 import zipfile

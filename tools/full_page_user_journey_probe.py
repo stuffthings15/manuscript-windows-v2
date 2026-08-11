@@ -34,7 +34,6 @@ from writing_hud_apply_probe import (  # noqa: E402
     _dismiss_existing_hud,
     _document_text,
     _editable_control,
-    _window_with_prefix,
 )
 
 from curtis_dogs_essay import (  # noqa: E402

@@ -30,7 +30,6 @@ for entry in (ROOT / "src", ROOT / "tools"):
 
 from animal_essay_corpus_probe import CORPUS, _essay_files, load_essays  # noqa: E402
 from repro_accept_advance import (  # noqa: E402
-    card_text,
     counter_text,
     hud_window,
     replace_button,

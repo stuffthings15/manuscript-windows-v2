@@ -28,6 +28,7 @@ dependencies = [
 [project.optional-dependencies]
 build = ["Pillow==12.3.0", "pyinstaller==6.20.0"]
 test = ["pytest==9.1.1"]
+lint = ["ruff==0.14.6"]
 
 [project.scripts]
 manuscript = "echo_link_app.main:main"
@@ -42,3 +43,28 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+# Deliberately narrow. These are the checks that catch the defects this
+# repository has actually shipped: dead imports and variables (a scripted
+# deletion once left two constants unreferenced), and blind excepts (a
+# swallowed error hid a real insertion failure). Style-only rules are left off
+# so that a lint run means something.
+select = ["F", "BLE", "T20"]
+# BLE001 currently reports 152 existing blind excepts, concentrated in engine.py,
+# windows_selection.py and insertion.py. Auditing them is its own work item; each
+# site has to be narrowed, handled, logged with context, or kept broad with a
+# written reason. Ignored so that a non-zero exit means a NEW defect rather than
+# a known backlog. Remove this line when that audit lands; it is the last step
+# of it. Tracked in docs/ARCHITECTURE.md.
+ignore = ["BLE001"]
+
+[tool.ruff.lint.per-file-ignores]
+# Probes and harnesses report to a human on stdout; that is their interface.
+"tools/*" = ["T201", "T203"]
+"tests/*" = ["T201", "T203"]
+

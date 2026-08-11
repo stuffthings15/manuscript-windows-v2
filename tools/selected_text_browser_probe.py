@@ -165,7 +165,6 @@ let repeats = 0; const timer = setInterval(() => {{ selectTarget(); if (++repeat
             if not handle:
                 print("Chrome probe window not found.")
                 return 3
-            user32 = ctypes.windll.user32
             if not force_foreground(handle):
                 print("Chrome probe could not take foreground focus.")
                 return 5

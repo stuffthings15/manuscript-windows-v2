@@ -10,7 +10,6 @@ unnamed, or unreachable.
 """
 from __future__ import annotations
 
-import sys
 import time
 
 import uiautomation as auto

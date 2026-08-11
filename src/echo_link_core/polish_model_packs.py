@@ -8,7 +8,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request

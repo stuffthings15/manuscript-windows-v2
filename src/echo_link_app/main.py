@@ -235,10 +235,11 @@ def _run_application(args: argparse.Namespace) -> int:
     locked = lock.tryLock(100)
     if args.diagnostics:
         if not locked:
-            print(json.dumps({"app": APP_NAME, "error": f"{APP_NAME} is already running."}))
+            # stdout is the documented interface of --diagnostics; callers parse it.
+            print(json.dumps({"app": APP_NAME, "error": f"{APP_NAME} is already running."}))  # noqa: T201
             return 1
         try:
-            print(json.dumps(diagnostics(), indent=2))
+            print(json.dumps(diagnostics(), indent=2))  # noqa: T201
             return 0
         finally:
             lock.unlock()

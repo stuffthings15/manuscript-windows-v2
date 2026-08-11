@@ -26,7 +26,9 @@ from tools.full_page_tone_quality_probe import (
 
 
 def test_probe_covers_every_visible_hud_tone():
-    app = QApplication.instance() or QApplication([])
+    # Bound to keep the QApplication alive for the duration of the test; Qt
+    # tears down widgets when the last reference to it is dropped.
+    app = QApplication.instance() or QApplication([])  # noqa: F841
     palette = RewritePalette()
     visible = tuple(
         palette.tone_combo.itemText(index)

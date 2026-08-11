@@ -47,7 +47,6 @@ for entry in (ROOT / "src", ROOT / "tools"):
 
 from echo_link_core.meaning_diff import (  # noqa: E402
     describe_losses,
-    unexplained_losses,
 )
 from echo_link_core.polish import PolishEngine  # noqa: E402
 from echo_link_core.polish_error_score import error_score  # noqa: E402

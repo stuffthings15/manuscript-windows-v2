@@ -23,7 +23,6 @@ from .paths import data_root, resource_path
 from .polish_model_packs import (
     TRUSTED_KEY_ID,
     TRUSTED_PUBLIC_KEY_FINGERPRINT,
-    ModelPackSecurityError,
     _public_key_fingerprint,
     _verify_rsa_sha256,
 )

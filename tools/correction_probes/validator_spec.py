@@ -137,7 +137,6 @@ def new_validate(source: str, candidate: str, *, grammar_mode: bool = True):
 
 
 def run(title, validate_fn):
-    from echo_link_core.polish import PolishValidator
     print(f"\n########## {title} ##########")
     acc_ok = rej_ok = 0
     print("-- MUST ACCEPT (want ACCEPT) --")

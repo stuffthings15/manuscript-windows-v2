@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import copy
 import shutil
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest

@@ -643,7 +643,6 @@ def main(argv: list[str] | None = None) -> int:
         for cycle in range(maximum_ai_cycles):
             deadline = time.monotonic() + 15.0
             accept_button = dismiss_button = rewrite_button = None
-            observed_ai_busy = False
             while time.monotonic() < deadline:
                 rectangle = hud.BoundingRectangle
                 current_size = [
@@ -651,7 +650,6 @@ def main(argv: list[str] | None = None) -> int:
                     round(rectangle.height() / scale),
                 ]
                 if current_size[0] <= 292 and current_size[1] <= 108:
-                    observed_ai_busy = True
                     if not loading_sizes or loading_sizes[-1] != current_size:
                         loading_sizes.append(current_size)
                 accept_button = _accept_button(hud)
@@ -664,8 +662,6 @@ def main(argv: list[str] | None = None) -> int:
                     "Rewrite the current sentence locally",
                     "Rewrite tone",
                 )
-                if accept_button is not None and not accept_button.IsEnabled:
-                    observed_ai_busy = True
                 if accept_button and dismiss_button and rewrite_button:
                     break
                 time.sleep(0.05)

@@ -51,7 +51,6 @@ from full_page_user_journey_probe import (  # noqa: E402
     _hud_window,
 )
 from word_essay_probe import (  # noqa: E402
-    focus_word,
     press_hud_hotkey,
     select_whole_story,
     skip_button,

@@ -960,7 +960,9 @@ def run_probe(
                 ),
             ]
             shorten_ceiling = 0.995 if source_text == QUICK_SOURCE_TEXT else 0.93
-            length_ok = 0.35 <= ratio <= shorten_ceiling if tone == "Shorten" else ratio >= 0.65
+            # Computed but never recorded. The length check this probe was meant
+            # to apply was lost; see the debt register in docs/ARCHITECTURE.md.
+            length_ok = 0.35 <= ratio <= shorten_ceiling if tone == "Shorten" else ratio >= 0.65  # noqa: F841
             cases.append(
                 {
                     "tone": tone,
