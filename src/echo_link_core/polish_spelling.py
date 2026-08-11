@@ -17,6 +17,7 @@ from .writing_suggestions import (
     SuggestionCategory,
     WritingSuggestion,
     WritingSuggestionEngine,
+    _match_case,
     apply_all_suggestions,
 )
 
@@ -717,14 +718,6 @@ def _capitalized_repair_is_safe(word: str, replacement: str) -> bool:
 def _is_sentence_start(text: str, start: int) -> bool:
     prefix = text[:start].rstrip()
     return not prefix or prefix[-1:] in ".!?\n"
-
-
-def _match_case(original: str, replacement: str) -> str:
-    if original.isupper():
-        return replacement.upper()
-    if original[:1].isupper():
-        return replacement[:1].upper() + replacement[1:]
-    return replacement
 
 
 def _is_protected(

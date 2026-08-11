@@ -44,6 +44,19 @@ class RuntimeBackend(str, Enum):
     SYCL = "sycl"
 
 
+# Which backends mean "the work is on the GPU". This is a fact about
+# RuntimeBackend, so it belongs beside it: two modules held their own copy, and
+# adding a backend to one would have silently left the other treating it as CPU.
+GPU_BACKENDS = frozenset(
+    {
+        RuntimeBackend.CUDA,
+        RuntimeBackend.HIP,
+        RuntimeBackend.VULKAN,
+        RuntimeBackend.SYCL,
+    }
+)
+
+
 class RuntimeFailureKind(str, Enum):
     NONE = "none"
     CONNECTION_FAILURE = "connection_failure"

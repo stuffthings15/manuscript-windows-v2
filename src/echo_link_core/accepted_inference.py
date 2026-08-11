@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from typing import Callable, Iterable
 
 from .polish_types import (
+    GPU_BACKENDS,
     ExecutionPlan,
     GenerationRequest,
     GenerationResult,
@@ -25,14 +26,6 @@ _RUNTIME_FAILURES = frozenset(
     }
 )
 
-_GPU_BACKENDS = frozenset(
-    {
-        RuntimeBackend.CUDA,
-        RuntimeBackend.HIP,
-        RuntimeBackend.VULKAN,
-        RuntimeBackend.SYCL,
-    }
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -483,7 +476,7 @@ class AcceptedInferenceCoordinator:
     ) -> ExecutionPlan:
         model = str(actual_model or plan.model).strip()
         backend = RuntimeBackend(actual_backend or plan.backend)
-        if plan.require_full_gpu and backend not in _GPU_BACKENDS:
+        if plan.require_full_gpu and backend not in GPU_BACKENDS:
             raise RuntimeError("Local AI spilled to the CPU and was not accepted.")
         if model == plan.model:
             return replace(plan, backend=backend)

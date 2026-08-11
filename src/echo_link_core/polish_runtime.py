@@ -28,6 +28,7 @@ from .polish_runtime_packs import (
     RuntimePackManager,
 )
 from .polish_types import (
+    GPU_BACKENDS,
     AcceptanceProbeResult,
     GenerationRequest,
     GenerationResult,
@@ -38,14 +39,6 @@ from .selected_text import LocalWritingAssistant
 from .writing_models import LocalWritingModelManager
 
 
-_GPU_BACKENDS = frozenset(
-    {
-        RuntimeBackend.CUDA,
-        RuntimeBackend.HIP,
-        RuntimeBackend.VULKAN,
-        RuntimeBackend.SYCL,
-    }
-)
 
 
 def _same_model_identity(left: object, right: object) -> bool:
@@ -541,7 +534,7 @@ class NamedPipeLlamaRuntime:
         if backend is not self.backend or backend is not request.plan.backend:
             raise RuntimeError("llama.cpp host returned the wrong backend identity.")
         if (
-            backend in _GPU_BACKENDS
+            backend in GPU_BACKENDS
             and payload.get("full_gpu_resident") is not True
         ):
             raise RuntimeError("AI left the GPU. GPU-only correction stopped.")
@@ -577,7 +570,7 @@ class NamedPipeLlamaRuntime:
         loaded = bool(payload.get("loaded"))
         if (
             loaded
-            and self.backend in _GPU_BACKENDS
+            and self.backend in GPU_BACKENDS
             and payload.get("full_gpu_resident") is not True
         ):
             raise RuntimeError("llama.cpp host did not prove full GPU residency.")
@@ -612,7 +605,7 @@ class NamedPipeLlamaRuntime:
             reported_backend = RuntimeBackend.RULES
         backend_ok = reported_backend is self.backend and reported_backend is plan.backend
         residency_ok = (
-            reported_backend not in _GPU_BACKENDS
+            reported_backend not in GPU_BACKENDS
             or payload.get("full_gpu_resident") is True
         )
         reasons = [str(payload.get("reason") or "").strip()]

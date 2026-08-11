@@ -10,7 +10,11 @@ import time
 from collections import Counter
 from dataclasses import dataclass
 
-from .writing_suggestions import repair_cair, repair_wether
+from .writing_suggestions import (
+    _TERMINATOR_ABBREVIATIONS,
+    repair_cair,
+    repair_wether,
+)
 from .correction import (
     _PROTECTED_PATTERN,
     _protect_text,
@@ -1862,13 +1866,10 @@ def _missing_immutable_tokens(source: str, candidate: str) -> tuple[str, ...]:
 
 
 # Abbreviations that legitimately end in a full stop and are then followed by a
-# comma: "etc., and", "e.g., a dog", "Mr. Smith, who". These must survive.
-_TERMINATOR_ABBREVIATIONS = frozenset(
-    {
-        "al", "am", "cf", "dr", "eg", "etc", "ie", "inc", "jr", "lt", "ltd",
-        "mr", "mrs", "ms", "no", "pm", "prof", "sr", "st", "vs",
-    }
-)
+# comma ("etc., and", "e.g., a dog", "Mr. Smith, who") come from
+# writing_suggestions, which owns the same guard for the same reason. Two copies
+# of this set meant adding an abbreviation to one left the other stripping a
+# correct comma.
 _STRANDED_TERMINATOR = re.compile(r"([.!?])\s*,")
 
 
