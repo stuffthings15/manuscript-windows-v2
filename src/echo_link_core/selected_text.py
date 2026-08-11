@@ -3041,7 +3041,6 @@ def _apply_fast_proofread_rules(text: str) -> str:
             r"\b((?:say|state)(?: that)? [A-Z][A-Za-z0-9_-]*(?: \d+(?:\.\d+)*)?) and does not\b",
             r"\1 does not",
         ),
-        (r"\bdoes not follow followed from\b", "does not follow from"),
         (
             r"\bsource ledger\s+Incident commander\b",
             "source ledger. Incident commander",
@@ -3410,7 +3409,6 @@ def _apply_fast_proofread_rules(text: str) -> str:
             r"closed \1",
         ),
         (r"\bthe no server\b", "no server"),
-        (r"\bdoes not follow stemmed from\b", "does not follow from"),
         (r"\bhigher compared to\b", "higher than"),
         (
             r"\bhigher revenue compared to\b",
@@ -3559,24 +3557,6 @@ def _apply_fast_proofread_rules(text: str) -> str:
             "The support team marked the issue as",
         ),
         (
-            r"\bMarcus must not overwrite needs the earlier backup for the "
-            r"quarterly audit\b",
-            "Marcus must not overwrite the earlier backup because finance "
-            "needs it for the quarterly audit",
-        ),
-        (
-            r"\bmust not overwrite (?:needs|needed) the earlier backup\b",
-            "must not overwrite the earlier backup",
-        ),
-        (
-            r"\bmust not overwrite (?:used|kept|accessed|referenced|requested) the (earlier|older) backup\b",
-            r"must not overwrite the \1 backup",
-        ),
-        (
-            r"\bMarcus must not overwrite requested the earlier backup\b",
-            "Marcus must not overwrite the earlier backup",
-        ),
-        (
             r"\bThe team also has to ensure\b",
             "The team also must ensure",
         ),
@@ -3599,10 +3579,6 @@ def _apply_fast_proofread_rules(text: str) -> str:
         (
             r"\bpoor vocabulary as it implies\b",
             "poor wording because it implies",
-        ),
-        (
-            r"\bdoes not follow follows from\b",
-            "does not follow from",
         ),
         (
             r"\bBy (\d{2}:\d{2} UTC),\s+queue ([A-Z][A-Z0-9-]+)\b",
@@ -3736,10 +3712,6 @@ def _apply_fast_proofread_rules(text: str) -> str:
             "poor wording because",
         ),
         (
-            r"\bdoes not follow comes from\b",
-            "does not follow from",
-        ),
-        (
             r"\bshould explain to explain\b",
             "should explain",
         ),
@@ -3750,10 +3722,6 @@ def _apply_fast_proofread_rules(text: str) -> str:
         (
             r"\bwithout as an exception\b",
             "without exception",
-        ),
-        (
-            r"\bmust not overwrite retained the earlier backup\b",
-            "must not overwrite the earlier backup",
         ),
         (
             r"\bThe caption file ceased after\b",
@@ -4358,10 +4326,6 @@ def _apply_fast_proofread_rules(text: str) -> str:
             "; however, ",
         ),
         (
-            r"\bmust not overwrite accessed the earlier backup\b",
-            "must not overwrite the earlier backup",
-        ),
-        (
             r"\bmust not be presented these findings as evidence\b",
             "must not be presented as evidence",
         ),
@@ -4384,10 +4348,6 @@ def _apply_fast_proofread_rules(text: str) -> str:
         (
             r"\bAmina requested Owen to verify\b",
             "Amina asked Owen to verify",
-        ),
-        (
-            r"\bmust not overwrite referenced the earlier backup\b",
-            "must not overwrite the earlier backup",
         ),
         (
             r"\bmust not be presented this as evidence\b",

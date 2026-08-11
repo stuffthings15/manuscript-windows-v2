@@ -554,6 +554,14 @@ def test_final_cleanup_repairs_rephrase_page_five_latest_live_variants():
 
 
 def test_final_cleanup_repairs_shorten_page_two_live_variants():
+    """The backup sentence expectation changed, and the old one was wrong.
+
+    It required "because finance needs it" - a causal clause that appears
+    nowhere in the source. A memorized rule for this one benchmark sentence
+    fabricated it. Proofreading must not invent a reason the writer did not
+    give, which is what the meaning guards exist to prevent, so the expectation
+    is now the honest repair: drop the leftover verb and leave the rest alone.
+    """
     source = (
         "No personal email address can be used. Support team marked issue as "
         "cosmetic. Marcus must not overwrite needs the earlier backup for the "
@@ -564,8 +572,8 @@ def test_final_cleanup_repairs_shorten_page_two_live_variants():
 
     assert _apply_fast_proofread_rules(source) == (
         "No personal email address can be used. The support team marked the "
-        "issue as cosmetic. Marcus must not overwrite the earlier backup because "
-        "finance needs it for the quarterly audit. Finance will test while safety "
+        "issue as cosmetic. Marcus must not overwrite the earlier backup for "
+        "the quarterly audit. Finance will test while safety "
         "staff verify whether emergency jobs remain prioritized in each queue. "
         "The note lists the responsible person, the next review time, and whether "
         "service was interrupted."

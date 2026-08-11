@@ -205,6 +205,39 @@ def test_a_single_comma_is_not_enough_to_call_something_a_list():
         assert _applied(text) == text
 
 
+def test_a_verb_left_behind_by_an_unfinished_edit_is_removed():
+    """This replaced eleven rules that each memorized one sentence.
+
+    Six spelled out the backup sentence and five the evidence sentence. None
+    fired on any other text, so the same defect in a student essay was ignored.
+    """
+    for stray in ("needs", "needed", "retained", "accessed", "referenced", "requested"):
+        assert _applied(f"Marcus must not overwrite {stray} the earlier backup.") == (
+            "Marcus must not overwrite the earlier backup."
+        )
+    assert _applied("The claim does not follow stemmed from the report.") == (
+        "The claim does not follow from the report."
+    )
+    assert _applied("She should not delete kept the file.") == (
+        "She should not delete the file."
+    )
+
+
+def test_a_plural_noun_after_a_modal_is_never_mistaken_for_a_stray_verb():
+    """The reason the verb list is closed rather than keyed on the -s ending.
+
+    "Residents must pay taxes the council sets" has the identical shape, and
+    deleting "taxes" would destroy the sentence.
+    """
+    for text in (
+        "Residents must pay taxes the council sets.",
+        "We must keep tracking the changes.",
+        "They must not overwrite the earlier backup.",
+        "He will need the earlier backup.",
+    ):
+        assert _applied(text) == text
+
+
 def test_an_appositive_is_left_for_a_human():
     """"Ann, my manager, my mentor and my friend" may be one person or four."""
     source = "I spoke to Ann, my manager, my mentor and my friend."

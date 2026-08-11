@@ -401,6 +401,33 @@ _SERIAL_COMMA = re.compile(
 # into three. A proper noun immediately before the comma is the signal, so those
 # are left for a human to judge.
 _APPOSITIVE_LEAD = re.compile(r"\b[A-Z][A-Za-z'-]+[ \t]*,[ \t]*$")
+# A second finite verb left behind where a rewrite spliced one phrasing into
+# another: "Marcus must not overwrite retained the earlier backup". After a
+# modal or do-support English allows a bare infinitive and nothing else, so an
+# inflected verb sitting between that infinitive and its object is debris.
+#
+# This replaced eleven separate rules that each memorized one sentence - six
+# spellings of the backup sentence and five of the evidence sentence - none of
+# which fired on any other text.
+#
+# The verb list is closed on purpose. "Residents must pay taxes the council
+# sets" has the same shape, but "taxes" is a plural noun and deleting it would
+# destroy the sentence; a rule keyed on the -s ending alone would do exactly
+# that. A following determiner or preposition is required for the same reason.
+_STRAY_VERB_FORMS = (
+    "accessed|based|came|comes|drawn|followed|follows|kept|keeps|needed|needs|"
+    "referenced|requested|retained|stemmed|used|wanted|wants"
+)
+_MODAL_STRAY_VERB = re.compile(
+    r"\b(?:must|should|shall|will|would|can|could|may|might|does|do|did)[ \t]+"
+    # The negation must not be mistaken for the verb. Without this guard
+    # "does not follows from" matched with "not" as the verb and deleted
+    # "follows", which is the word the sentence needs.
+    r"(?:not[ \t]+)?(?!not\b)[a-z]+[ \t]+"
+    r"(?P<stray>" + _STRAY_VERB_FORMS + r")[ \t]+"
+    r"(?=(?:the|a|an|this|that|these|those|his|her|their|its|our|my|your"
+    r"|from|on|of)\b)"
+)
 _SENTENCE_START = re.compile(
     r"(?:\A|[.!?][\"'\u201d\u2019)\]]*[ \t\r\n]+)(?P<letter>[a-z])"
 )
@@ -697,6 +724,23 @@ def _structural_punctuation_candidates(
                 start,
                 end,
                 "on",
+            )
+        )
+    for match in _MODAL_STRAY_VERB.finditer(text):
+        start = match.start("stray")
+        end = match.end()
+        if _is_protected(start, end, protected):
+            continue
+        found.append(
+            _Candidate(
+                "stray-verb-after-modal",
+                SuggestionCategory.GRAMMAR,
+                "Remove the leftover verb",
+                "A modal takes a plain verb; the second one is left over from an "
+                "unfinished edit.",
+                start,
+                end,
+                "",
             )
         )
     for match in _SERIAL_COMMA.finditer(text):
