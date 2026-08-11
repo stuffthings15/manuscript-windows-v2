@@ -17,7 +17,7 @@ refactoring survivable.
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-Baseline is 2025 passed, 2 skipped, 9 to 17 minutes. A drop is a regression, not
+Baseline is 2032 passed, 2 skipped, 9 to 25 minutes. A drop is a regression, not
 a cleanup, unless it is an intentional known defect recorded in
 `docs/ARCHITECTURE.md`.
 
@@ -55,11 +55,18 @@ These are not preferences. Breaking one has already cost a session's work.
 
 Never hard-code test-specific values into production code.
 
-`_apply_fast_proofread_rules` accumulated roughly 30 memorized sentences from
-the test corpus, strings like `RB-SYNC-64` and `gardens raise rent`, each
-existing only in that function and the test asserting it. Those tests were green
-and proved nothing, and a new essay with the same grammar defect got no
-correction because the fix was pinned to one sentence.
+`_apply_fast_proofread_rules`, now in `polish_proofread.py`, accumulated 149
+memorized sentences from the benchmark fixtures out of 512 rules: strings like
+`RB-SYNC-64` and `gardens raise rent`, each existing only in that table and the
+test asserting it. Those tests were green and proved nothing, and a new essay
+with the same grammar defect got no correction because the fix was pinned to one
+sentence.
+
+Do not try to delete them in bulk. The rules chain, so a rule can fire on an
+intermediate string that appears in no test file; removing 85 that looked
+unasserted failed 309 tests. What works is finding a cluster that shares one
+grammatical defect and writing the general rule for it. Two such rules have
+replaced 13 memorized ones so far.
 
 When a corpus essay corrects badly, the fix is the general rule that failed to
 fire. If you find yourself writing a regex that matches one specific sentence,

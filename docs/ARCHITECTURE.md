@@ -96,7 +96,7 @@ surprise waiting for the next reader.
 | Debt | Impact | Remediation |
 |---|---|---|
 | 149 memorized test-corpus literals remain in `polish_proofread.py`, out of 512 rules | corrections do not transfer to new essays; a green test on one of them proves only that the sentence is memorized | 13 replaced so far by two general rules. Deleting the rest is not free: the rules chain, so a rule can fire on an intermediate string that appears in no test, and removing 85 that looked unasserted failed 309 tests. The method that works is finding a cluster sharing one grammatical defect and writing the rule for it |
-| `polish.py` 6,300 lines, `window.py` 4,349, `rewrite_palette.py` 3,241, `selected_text.py` 3,332 | still the largest files; a change to any of them needs a large read | two splits done (polish_proofread, polish_entities). The remaining seams: tone and style rewriting out of polish.py, and the review state machine out of rewrite_palette.py |
+| `EchoLinkWindow` is 4,017 lines and `RewritePalette` 2,616 | the two remaining oversized units are single Qt classes | four splits done: `polish_proofread`, `polish_entities`, `review_spans`, `polish_readiness`. What is left is not a move but a design change - the HUD job queue and AI worker loop are domain logic inside a `QMainWindow` and need an owner object, not a new file. Attempt it with a clear run and a green suite, not at the end of a long session |
 | 137 broad `except Exception` in `src`, of which 88 log or re-raise and 5 swallow silently | a swallowed error hides a real defect | audited. The five silent ones were each read and justified, and `tests/test_source_discipline.py` now fails if a sixth appears. `BLE001` stays ignored in `pyproject.toml` so a non-zero ruff exit means a new defect rather than this backlog |
 | `length_ok` in `tools/full_page_tone_quality_probe.py` is computed and never recorded | the probe's length check silently does nothing | decide what it should assert, then wire it into the case record |
 | Text-to-speech playback speed | reported slightly slow, never investigated | unmeasured |
@@ -109,7 +109,7 @@ surprise waiting for the next reader.
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-Baseline 2031 passed, 2 skipped.
+Baseline 2032 passed, 2 skipped.
 
 ```bash
 .venv/Scripts/python.exe -m ruff check src tests tools
