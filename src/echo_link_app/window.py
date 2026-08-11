@@ -2514,13 +2514,23 @@ class EchoLinkWindow(QMainWindow):
                 **request_options,
             )
             if result is None or not getattr(result, "text", "").strip():
-                raise RuntimeError("Adaptive Polish did not return corrected text.")
+                # An empty answer is still a finished section. Returning the
+                # writer's text keeps the review moving; raising here stranded
+                # the paragraph behind a disabled Replace.
+                logger.warning(
+                    "Writing HUD adaptive Polish returned no text; keeping the "
+                    "section unchanged characters=%d",
+                    len(source),
+                )
+                answer = source
+            else:
+                answer = result.text
             payload = (
                 request_id,
                 attempt_id,
                 suggestion_id,
                 True,
-                result.text,
+                answer,
                 (
                     getattr(
                         getattr(self.writing_assistant, "last_correction_result", None),
@@ -2568,14 +2578,30 @@ class EchoLinkWindow(QMainWindow):
                         "section.",
                     )
                 else:
-                    raise RuntimeError(
-                        str(getattr(polish_result, "message", "")).strip()
-                        or "Full AI correction did not pass final quality checks."
+                    # Nothing safe to change, which is not the same as a
+                    # failure. Refusing the section here disabled Replace and
+                    # reported "could not be corrected", leaving the reader a
+                    # dead card and no way to move that paragraph forward. A
+                    # section must always come back; returning the writer's own
+                    # text says "nothing to change" honestly, and the rejected
+                    # AI answer is still never shown.
+                    logger.info(
+                        "Writing HUD returning the section unchanged; no safe "
+                        "correction was available characters=%d",
+                        len(source),
+                    )
+                    payload = (
+                        request_id,
+                        attempt_id,
+                        suggestion_id,
+                        True,
+                        source,
+                        "No changes to suggest for this section.",
                     )
             logger.info(
                 "Writing HUD adaptive Polish completed command=%s characters=%d backend=%s",
                 command,
-                len(result.text),
+                len(answer),
                 "adaptive",
             )
             if polish_result is not None and not polish_result.used_llm:
@@ -2637,7 +2663,23 @@ class EchoLinkWindow(QMainWindow):
                 message = "AI took too long. Showing the instant local correction."
             elif "too long for one local ai request" in message.casefold():
                 message = "Text is too long for one AI check. Showing the instant local correction."
-            payload = (request_id, attempt_id, suggestion_id, False, "", message)
+            # A section must always come back with something the reader can
+            # act on. The rules repair if the engine produced one, otherwise
+            # the writer's own text. Only a failure with neither - no capture
+            # to fall back to - still reports an error.
+            repaired = str(getattr(failed_result, "deterministic_text", "") or "").strip()
+            recovered = repaired or source.strip()
+            if recovered:
+                payload = (
+                    request_id,
+                    attempt_id,
+                    suggestion_id,
+                    True,
+                    recovered,
+                    message,
+                )
+            else:
+                payload = (request_id, attempt_id, suggestion_id, False, "", message)
         finally:
             runtime_done.set()
         with self._palette_ai_lock:

@@ -3209,3 +3209,102 @@ def test_dismissing_a_section_does_count_as_progress(app):
 
     assert palette.card_position.text() != before
     palette.finish_choice()
+
+
+def _run_section_job(window, source: str) -> tuple:
+    """Run one HUD section job synchronously and return the payload it emits."""
+    emitted: list[tuple] = []
+    window.bridge.palette_sentence_result.connect(emitted.append)
+    window.selected_text_record = _selection(source)
+    job = (
+        window._palette_request_id,
+        1,
+        "sentence-1",
+        source,
+        "Proofread",
+        "test-model",
+        "General",
+        (),
+        source,
+    )
+    window._execute_palette_sentence_job(job)
+    return emitted[0]
+
+
+def test_a_section_the_ai_cannot_correct_still_returns_the_text(app, tmp_path, monkeypatch):
+    """A refused section is the worst outcome, worse than an imperfect one.
+
+    When the AI answer cannot be shown and the rules pass finds nothing to
+    change, the section used to raise, which disabled Replace and reported
+    "could not be corrected". The reader was left with a dead card and no way
+    to move that paragraph forward. Returning the text unchanged processes the
+    section honestly instead.
+
+    The answer that was rejected is never what comes back: only the rules
+    repair, or the original text.
+    """
+    monkeypatch.delenv("ECHOLINK_DISABLE_PALETTE_AI", raising=False)
+    window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
+    source = "The reports is ready."
+    monkeypatch.setattr(
+        window.writing_assistant,
+        "run",
+        lambda _source, **_options: SimpleNamespace(text="Something invented."),
+    )
+    monkeypatch.setattr(window_module, "_polish_result_ready_for_review", lambda _result: False)
+    # The AI answer was rejected and the rules pass changed nothing: the exact
+    # combination that used to raise.
+    monkeypatch.setattr(
+        window.writing_assistant,
+        "_delegate",
+        SimpleNamespace(
+            run=lambda _source, **_options: SimpleNamespace(text="Something invented."),
+            last_correction_result=SimpleNamespace(
+                used_llm=False,
+                deterministic_text="",
+                message="did not pass final quality checks",
+                metrics={},
+                plan=None,
+            ),
+        ),
+        raising=False,
+    )
+
+    _request, _attempt, _suggestion, ok, text, message = _run_section_job(window, source)
+
+    assert ok, "the section must be delivered, not refused"
+    assert "Something invented." not in text
+    assert text.strip() == source
+    assert message
+    window._quitting = True
+    window.close()
+
+
+def test_a_section_that_raises_still_returns_the_text(app, tmp_path, monkeypatch):
+    """The same guarantee on the failure path, not just the quality path.
+
+    A provider fault used to emit an empty failure payload, which is the state
+    the reader experiences as a section that cannot be corrected. The rules
+    repair is offered when the engine produced one; otherwise the original.
+    """
+    monkeypatch.delenv("ECHOLINK_DISABLE_PALETTE_AI", raising=False)
+    window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
+    source = "The reports is ready."
+
+    def explode(_source, **_options):
+        raise RuntimeError("local runtime unavailable")
+
+    monkeypatch.setattr(
+        window.writing_assistant,
+        "_delegate",
+        SimpleNamespace(run=explode, last_correction_result=None),
+        raising=False,
+    )
+
+    _request, _attempt, _suggestion, ok, text, message = _run_section_job(window, source)
+
+    assert ok, "a provider fault must not strand the section"
+    assert text.strip() == source
+    assert "local runtime unavailable" in message
+    window._quitting = True
+    window.close()
