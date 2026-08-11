@@ -16,7 +16,8 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 import echo_link_app.window as window_module
-from echo_link_app.rewrite_palette import RewritePalette, _review_spans, _sentence_spans
+from echo_link_app.review_spans import _review_spans, _sentence_spans
+from echo_link_app.rewrite_palette import RewritePalette
 from echo_link_app.target_underline import TargetUnderline, _safe_line_rectangles
 from echo_link_app.theme import COLORS, apply_dark_theme
 from echo_link_app.window import EchoLinkWindow, _same_document_text, _unique_document_text

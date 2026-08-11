@@ -18,7 +18,7 @@ if str(Path(__file__).resolve().parent) not in sys.path:
 
 from echo_link_core.local_transport import LoopbackJSONTransport
 from echo_link_core.selected_text import LocalWritingAssistant
-from echo_link_app.rewrite_palette import _review_spans
+from echo_link_app.review_spans import _review_spans
 
 
 TONES = (

@@ -23,7 +23,7 @@ from echo_link_core.polish import (
 )
 from echo_link_core.polish_types import PolishMode
 from echo_link_core.writing_suggestions import WritingSuggestionEngine
-from echo_link_app.rewrite_palette import _group_sentence_suggestions
+from echo_link_app.review_spans import _group_sentence_suggestions
 from full_page_tone_quality_probe import TONES, TONE_COMMANDS
 
 

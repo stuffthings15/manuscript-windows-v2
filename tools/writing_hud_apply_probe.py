@@ -21,7 +21,7 @@ if str(ROOT / "src") not in sys.path:
 if str(ROOT / "tools") not in sys.path:
     sys.path.insert(0, str(ROOT / "tools"))
 
-from echo_link_app.rewrite_palette import _sentence_spans
+from echo_link_app.review_spans import _sentence_spans
 from echo_link_core.windows_selection import WindowsSelectionReader
 from echo_link_core.insertion import active_window
 from selected_text_live_probe import (

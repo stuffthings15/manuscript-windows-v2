@@ -5,7 +5,8 @@ from types import SimpleNamespace
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from echo_link_app.rewrite_palette import RewritePalette, _review_spans
+from echo_link_app.review_spans import _review_spans
+from echo_link_app.rewrite_palette import RewritePalette
 from echo_link_core.polish_quality import TONE_CONTRACTS
 from echo_link_core.selected_text import COMMANDS
 from tools.full_page_tone_quality_probe import (
