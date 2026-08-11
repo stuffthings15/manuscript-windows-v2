@@ -107,7 +107,7 @@ surprise waiting for the next reader.
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-Baseline 2021 passed, 2 skipped.
+Baseline 2025 passed, 2 skipped.
 
 ```bash
 .venv/Scripts/python.exe -m ruff check src tests tools

@@ -17,7 +17,7 @@ refactoring survivable.
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-Baseline is 2021 passed, 2 skipped, about 9 minutes. A drop is a regression, not
+Baseline is 2025 passed, 2 skipped, 9 to 17 minutes. A drop is a regression, not
 a cleanup, unless it is an intentional known defect recorded in
 `docs/ARCHITECTURE.md`.
 
