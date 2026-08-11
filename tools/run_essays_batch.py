@@ -315,15 +315,19 @@ def review_one(path: Path, *, max_presses: int = 30) -> dict:
         if button is None:
             break
         if not button.IsEnabled:
-            # Poll rather than sleeping once. A single 12-second wait was too
-            # short for a section still generating, and every premature give-up
-            # became a dismissal that threw away a correction.
-            wait_until = time.monotonic() + 45.0
-            while time.monotonic() < wait_until:
-                time.sleep(3.0)
-                button = replace_button(hud_window(8.0) or hud)
-                if button is not None and button.IsEnabled:
-                    break
+            # Only wait while the app might still produce a correction. Once it
+            # reports every section finished, a disabled Replace means this one
+            # has none, and polling for 45 seconds waits for something the app
+            # has already said will not happen - that cost essay 19 most of its
+            # 356 seconds. Before the readiness signal existed this poll was the
+            # only way to tell the two apart.
+            if review_readiness(hud) not in {"ready", "finished"}:
+                wait_until = time.monotonic() + 45.0
+                while time.monotonic() < wait_until:
+                    time.sleep(3.0)
+                    button = replace_button(hud_window(8.0) or hud)
+                    if button is not None and button.IsEnabled:
+                        break
             if button is None or not button.IsEnabled:
                 # No correction to apply here. Do what a reader does rather
                 # than calling the essay stalled: dismiss and keep going.
