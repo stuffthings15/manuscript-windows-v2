@@ -9,7 +9,8 @@ from enum import Enum
 from typing import Iterable
 
 from .local_transport import LocalTransportError, LoopbackJSONTransport
-from .models import OLLAMA_KEEP_ALIVE
+from .correction import _PROTECTED_PATTERN
+from .models import OLLAMA_KEEP_ALIVE, SAFE_MODEL_TAG
 
 
 MAX_FACTS_CHARS = 16_000
@@ -20,15 +21,6 @@ MAX_MODEL_NAME_CHARS = 200
 MAX_PROTECTED_TERMS = 128
 MAX_PROTECTED_TERM_CHARS = 256
 
-_MODEL_NAME = re.compile(
-    r"[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*(?::[a-z0-9][a-z0-9._-]*)?",
-    re.IGNORECASE,
-)
-_AUTOMATIC_PROTECTED = re.compile(
-    r"(?:https?://\S+|www\.\S+|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|"
-    r"(?:[A-Za-z]:\\|/)[^\s]+|\b[\w-]+\.[A-Za-z0-9]{1,10}\b|"
-    r"\b\d+(?:[.,:/-]\d+)*\b)"
-)
 _NUMBER = re.compile(r"(?<!\w)(?:[$€£])?\d+(?:[.:,/-]\d+)*(?!\w)")
 _TOKEN = re.compile(r"ECHOLINKDRAFTTOKEN\d+X")
 _MEANING_WORD = re.compile(r"[A-Za-z][A-Za-z0-9'_-]{2,}")
@@ -304,7 +296,7 @@ def _validate_model(model: str) -> str:
     if (
         not value
         or len(value) > MAX_MODEL_NAME_CHARS
-        or _MODEL_NAME.fullmatch(value) is None
+        or SAFE_MODEL_TAG.fullmatch(value) is None
     ):
         raise ValueError("Choose a valid local writing AI.")
     return value
@@ -347,7 +339,7 @@ def _protect_facts(text: str, protected_terms: tuple[str, ...]) -> tuple[str, di
     spans: list[tuple[int, int]] = []
     for value in sorted(set(protected_terms), key=len, reverse=True):
         spans.extend((match.start(), match.end()) for match in re.finditer(re.escape(value), text, re.I))
-    spans.extend((match.start(), match.end()) for match in _AUTOMATIC_PROTECTED.finditer(text))
+    spans.extend((match.start(), match.end()) for match in _PROTECTED_PATTERN.finditer(text))
     selected: list[tuple[int, int]] = []
     for start, end in sorted(spans, key=lambda item: (item[0], -(item[1] - item[0]))):
         if selected and start < selected[-1][1]:
@@ -402,8 +394,8 @@ def _claims_are_grounded(source: str, candidate: str) -> bool:
     candidate_casefold = candidate.casefold()
     if any(marker in candidate_casefold and marker not in source_casefold for marker in _CLAIM_MARKERS):
         return False
-    if Counter(_AUTOMATIC_PROTECTED.findall(candidate)) - Counter(
-        _AUTOMATIC_PROTECTED.findall(source)
+    if Counter(_PROTECTED_PATTERN.findall(candidate)) - Counter(
+        _PROTECTED_PATTERN.findall(source)
     ):
         return False
     source_words = {

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from .data_protection import validate_local_data_file, validate_local_directory
+from .models import SAFE_MODEL_TAG
 from .paths import data_root, resource_path
 from .polish_types import ExecutionPlan, PolishModelPack, RuntimeBackend
 from .writing_models import LocalWritingModelManager, WritingModelError
@@ -29,12 +30,6 @@ _DIGEST_INFO_SHA256 = bytes.fromhex(
     "3031300d060960864801650304020105000420"
 )
 _MAX_MANIFEST_BYTES = 512 * 1024
-_SAFE_OLLAMA_TAG = re.compile(
-    r"[a-z0-9][a-z0-9._-]*"
-    r"(?:/[a-z0-9][a-z0-9._-]*)*"
-    r"(?::[a-z0-9][a-z0-9._-]*)?",
-    re.IGNORECASE,
-)
 
 
 class ModelPackSecurityError(RuntimeError):
@@ -573,7 +568,7 @@ def _is_safe_ollama_tag(value: object) -> bool:
         and tag == tag.strip()
         and len(tag) <= 120
         and ".." not in tag
-        and _SAFE_OLLAMA_TAG.fullmatch(tag)
+        and SAFE_MODEL_TAG.fullmatch(tag)
     )
 
 

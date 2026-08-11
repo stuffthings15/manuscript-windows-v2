@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Any
@@ -9,6 +11,14 @@ from .polish_types import PolishMode
 
 OLLAMA_IDLE_UNLOAD_SECONDS = 5 * 60
 OLLAMA_KEEP_ALIVE = f"{OLLAMA_IDLE_UNLOAD_SECONDS}s"
+
+# What a local model may be called. Held here because two unrelated modules
+# validate it - the pack installer and the drafting path - and two copies of a
+# validation rule diverge the moment one of them is relaxed.
+SAFE_MODEL_TAG = re.compile(
+    r"[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*(?::[a-z0-9][a-z0-9._-]*)?",
+    re.IGNORECASE,
+)
 
 
 class DictationMode(str, Enum):

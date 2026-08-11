@@ -68,6 +68,41 @@ def test_no_function_body_is_implemented_twice():
     )
 
 
+def test_no_module_constant_is_defined_twice():
+    """The duplicate scan compared function bodies, so constants slipped past.
+
+    GPU_BACKENDS existed three times: accepted_inference, polish_runtime and
+    window.py as _GPU_RUNTIME_BACKENDS. Two were found by hand and the third
+    only turned up while moving unrelated code. A set of backends that
+    disagrees with itself means one module treats a GPU as a CPU.
+    """
+    # Values are compared verbatim, not by shape. Two regexes have the same
+    # shape and different meanings; only identical text is a duplicate. One
+    # idiom is genuinely repeated per module and is not debt.
+    PER_MODULE_IDIOMS = {"logging.getLogger(__name__)"}
+
+    seen: dict[str, list[str]] = {}
+    for path in _modules():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            if not isinstance(node.value, (ast.Call, ast.Set, ast.Dict, ast.Tuple)):
+                continue
+            value = ast.unparse(node.value)
+            if value in PER_MODULE_IDIOMS or len(value) < 60:
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    seen.setdefault(value, []).append(f"{path.name}:{node.lineno} {target.id}")
+
+    duplicates = {k: v for k, v in seen.items() if len(v) > 1}
+
+    assert not duplicates, "the same constant is built twice: " + "; ".join(
+        " == ".join(sites) for sites in duplicates.values()
+    )
+
+
 def test_no_decorator_is_left_without_the_function_it_decorated():
     """Moving a decorated function is where this breaks.
 
