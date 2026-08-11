@@ -95,7 +95,8 @@ surprise waiting for the next reader.
 |---|---|---|
 | Memorized test-corpus literals in `_apply_fast_proofread_rules` | corrections do not transfer to new essays; some green tests prove nothing | in progress: generalize each into a real rule, or delete and record the defect |
 | `polish.py` 6,764 lines, `selected_text.py` 5,030, `window.py` 4,328, `rewrite_palette.py` 3,241 | 42% of source in four files; every change needs a large read | planned splits along the seams listed above |
-| 137 broad `except Exception`, 5 silent | a swallowed error hides a real defect | audit in progress; broad catches kept only with a written reason |
+| 137 broad `except Exception`, 5 silent. ruff reports 152 `BLE001` across `src`, `tests` and `tools` | a swallowed error hides a real defect | audit pending; `BLE001` is ignored in `pyproject.toml` so a non-zero ruff exit means a new defect, not this backlog. Removing that ignore is the last step of the audit |
+| `length_ok` in `tools/full_page_tone_quality_probe.py` is computed and never recorded | the probe's length check silently does nothing | decide what it should assert, then wire it into the case record |
 | Text-to-speech playback speed | reported slightly slow, never investigated | unmeasured |
 | Flaky: crash recovery, key rotation | intermittent suite failures, possibly disk-space related | unreproduced |
 | One dropped content word (`looking`) and roughly 12 stray unknown words in corpus output | small quality loss on the essay corpus | tracked by `meaning_diff.unexplained_losses` |
@@ -107,6 +108,13 @@ surprise waiting for the next reader.
 ```
 
 Baseline 2021 passed, 2 skipped.
+
+```bash
+.venv/Scripts/python.exe -m ruff check src tests tools
+```
+
+Must exit clean. The selected rules are narrow on purpose (`F`, `BLE`, `T20`),
+so a finding is a real defect rather than a style opinion.
 
 Entity behaviour that moved the essay corpus from 7 to 14 complete is guarded by
 `tools/entity_frequency_probe.py` and `tools/dead_essay_probe.py`.
