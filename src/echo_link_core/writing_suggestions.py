@@ -38,40 +38,249 @@ class _Candidate:
     replacement: str
 
 
-_COMMON_TYPOS = {
+# Every non-dictionary spelling correction the app knows, in one place.
+# This was four dicts across two modules - _COMMON_TYPOS here, plus
+# _MEASURED_MISSPELLINGS and _COMMON_MISSPELLINGS in polish_spelling.py,
+# with 14 entries duplicated verbatim between them. They agreed today; two
+# copies of the same rule do not stay agreeing.
+#
+# It lives in this module, not polish_spelling, because polish_spelling
+# imports from here. This layer stays free of I/O: it is plain data, and
+# the bundled 24,690-pair corpus stays behind the dictionary that owns it.
+#
+# Corrections that depend on the sentence around them are NOT here -
+# "wether" and "aint" read their context and live in polish_spelling.py.
+SPELLING_CORRECTIONS = {
+    # NOTE: "cant" is deliberately absent. It was in _COMMON_TYPOS mapping to
+    # "can't", but "cant" is a real English word - a slope, or insincere
+    # jargon - so that entry rewrote correct writing. That map had no
+    # validity gate; merging it here put the entry under one for the first
+    # time and it failed immediately. The apostrophe map in polish_spelling
+    # still restores can't, which is where that repair belongs.
+    "accidently": "accidentally",
     "accomodate": "accommodate",
     "accomodations": "accommodations",
-    "accidently": "accidentally",
+    "accross": "across",
+    "acheive": "achieve",
+    "acheived": "achieved",
+    "acommodate": "accommodate",
+    "adress": "address",
+    "adressed": "addressed",
+    "agin": "again",
+    "allready": "already",
     "alot": "a lot",
+    "apparant": "apparent",
+    "aquire": "acquire",
+    "aquired": "acquired",
     "archieve": "archive",
+    "arguement": "argument",
+    "arguemnts": "arguments",
+    "atenshun": "attention",
+    "athiest": "atheist",
+    "avalible": "available",
+    "becuase": "because",
+    "becuz": "because",
+    "begining": "beginning",
+    "beleif": "belief",
+    "beleive": "believe",
+    "beleived": "believed",
+    "belive": "believe",
+    "benifit": "benefit",
+    "benifits": "benefits",
+    "buisness": "business",
+    "cair": "care",
     "calender": "calendar",
-    "cant": "can't",
+    "catagory": "category",
+    "cemetary": "cemetery",
+    "changable": "changeable",
+    "cheif": "chief",
+    "collegue": "colleague",
+    "collegues": "colleagues",
+    "comming": "coming",
+    "commited": "committed",
+    "commitee": "committee",
+    "completly": "completely",
+    "concensus": "consensus",
+    "concious": "conscious",
+    "conciousness": "consciousness",
     "consistant": "consistent",
+    "curiousity": "curiosity",
     "definately": "definitely",
+    "definatly": "definitely",
+    "dependant": "dependent",
+    "desparate": "desperate",
     "didnt": "didn't",
+    "diffrence": "difference",
+    "dilemna": "dilemma",
+    "dissapear": "disappear",
+    "dissapeared": "disappeared",
+    "dissapoint": "disappoint",
+    "dissapointed": "disappointed",
+    "edjucashunal": "educational",
     "embarass": "embarrass",
+    "embarassed": "embarrassed",
+    "embarassing": "embarrassing",
+    "enviroment": "environment",
+    "enviromental": "environmental",
+    "equipments": "equipment",
+    "equiptment": "equipment",
+    "excede": "exceed",
+    "excellant": "excellent",
+    "existance": "existence",
+    "experiance": "experience",
+    "experianced": "experienced",
+    "explaination": "explanation",
+    "familar": "familiar",
+    "fasinating": "fascinating",
+    "finaly": "finally",
+    "foriegn": "foreign",
     "formating": "formatting",
+    "fourty": "forty",
+    "freind": "friend",
+    "freinds": "friends",
+    "fullfil": "fulfill",
+    "garantee": "guarantee",
+    "gaurd": "guard",
+    "goverment": "government",
     "grammer": "grammar",
+    "harrass": "harass",
+    "harrassment": "harassment",
+    "heirarchy": "hierarchy",
+    "hieght": "height",
+    "humourous": "humorous",
+    "hygeine": "hygiene",
+    "immediatly": "immediately",
     "inconsistant": "inconsistent",
+    "independant": "independent",
+    "indispensible": "indispensable",
+    "inteligent": "intelligent",
+    "interupt": "interrupt",
+    "intresting": "interesting",
+    "irresistable": "irresistible",
+    "knowlege": "knowledge",
     "lables": "labels",
+    "labratory": "laboratory",
+    "learnt": "learned",
+    "lernt": "learned",
+    "liason": "liaison",
+    "libary": "library",
+    "lisence": "license",
+    "maintainance": "maintenance",
     "maintence": "maintenance",
+    "maintenence": "maintenance",
+    "managment": "management",
+    "medeval": "medieval",
     "mesages": "messages",
+    "millenium": "millennium",
+    "miniture": "miniature",
+    "mischevious": "mischievous",
+    "mispell": "misspell",
     "neccessary": "necessary",
+    "necessery": "necessary",
+    "neice": "niece",
+    "nieghbor": "neighbor",
+    "noticable": "noticeable",
+    "occassion": "occasion",
+    "occassionally": "occasionally",
+    "occurance": "occurrence",
     "occured": "occurred",
+    "occuring": "occurring",
+    "ommision": "omission",
+    "oner": "owner",
+    "oners": "owners",
+    "oppurtunity": "opportunity",
+    "paralel": "parallel",
+    "parliment": "parliament",
+    "particurly": "particularly",
+    "pasttime": "pastime",
+    "perseverence": "perseverance",
+    "personel": "personnel",
+    "persuit": "pursuit",
+    "phenomenom": "phenomenon",
+    "playwrite": "playwright",
+    "posession": "possession",
+    "possable": "possible",
+    "potatoe": "potato",
+    "practise": "practice",
+    "preceed": "precede",
+    "prefered": "preferred",
+    "prejudise": "prejudice",
+    "presance": "presence",
+    "priviledge": "privilege",
+    "probaly": "probably",
+    "probly": "probably",
+    "proffesional": "professional",
+    "pronounciation": "pronunciation",
+    "publically": "publicly",
+    "questionaire": "questionnaire",
+    "readible": "readable",
+    "realy": "really",
     "recieve": "receive",
     "recieved": "received",
-    "seperate": "separate",
-    "seperates": "separates",
+    "recomend": "recommend",
+    "recomended": "recommended",
+    "refered": "referred",
+    "refering": "referring",
+    "relevent": "relevant",
+    "religous": "religious",
+    "remeber": "remember",
+    "repitition": "repetition",
+    "restaraunt": "restaurant",
+    "rythm": "rhythm",
+    "secratary": "secretary",
     "sentances": "sentences",
     "sentnce": "sentence",
+    "seperate": "separate",
+    "seperated": "separated",
+    "seperately": "separately",
+    "seperates": "separates",
+    "sieze": "seize",
+    "similiar": "similar",
+    "sincerly": "sincerely",
+    "skol": "school",
+    "skool": "school",
+    "speach": "speech",
+    "stoping": "stopping",
+    "strenght": "strength",
     "succesful": "successful",
+    "successfull": "successful",
     "sucessfully": "successfully",
+    "sumtimes": "sometimes",
+    "supercede": "supersede",
+    "suprise": "surprise",
+    "suprised": "surprised",
     "teh": "the",
+    "temperture": "temperature",
+    "tendancy": "tendency",
+    "threshhold": "threshold",
+    "tommorow": "tomorrow",
+    "tommorrow": "tomorrow",
+    "tounge": "tongue",
+    "truely": "truly",
+    "twelth": "twelfth",
+    "tyrany": "tyranny",
+    "underate": "underrate",
     "understandible": "understandable",
+    "unecessary": "unnecessary",
+    "unfortunatly": "unfortunately",
+    "untill": "until",
+    "upholstry": "upholstery",
+    "usualy": "usually",
+    "vaccuum": "vacuum",
+    "vegatarian": "vegetarian",
+    "vehical": "vehicle",
     "visable": "visible",
     "volenteers": "volunteers",
     "wasnt": "wasn't",
+    "wellcome": "welcome",
+    "wich": "which",
+    "wief": "wife",
     "wierd": "weird",
+    "withold": "withhold",
+    "worser": "worse",
+    "writen": "written",
+    "writting": "writing",
+    "yeild": "yield",
 }
 
 _FILLER_REPLACEMENTS = {
@@ -268,12 +477,53 @@ def apply_all_suggestions(
     return result
 
 
+# Two corrections that read the sentence rather than a single word, so they
+# cannot live in SPELLING_CORRECTIONS. They were defined here AND in
+# selected_text.py, WETHER_ANIMAL_LEAD included - two copies of the same
+# rule, kept in step by hand. One definition, used by both paths.
+# The conjunction "whether" never takes an article or a number, and the animal
+# almost always does, which separates them without a fixture-keyed phrase.
+_WETHER = re.compile(r"(?<!\w)(?P<lead>\w+\s+)?(?P<word>[Ww]ether)(?!\w)")
+WETHER_ANIMAL_LEAD = frozenset(
+    {"a", "an", "the", "this", "that", "one", "two", "three", "each", "every",
+     "my", "our", "his", "her", "their", "its", "young", "castrated"}
+)
+
+
+def repair_wether(text: str) -> str:
+    """Write the conjunction "whether" where the writer typed "wether"."""
+    def repair(match: re.Match[str]) -> str:
+        lead = match.group("lead") or ""
+        if lead.strip().casefold() in WETHER_ANIMAL_LEAD:
+            return match.group(0)
+        word = match.group("word")
+        fixed = "Whether" if word[0].isupper() else "whether"
+        return f"{lead}{fixed}"
+
+    return _WETHER.sub(repair, text)
+
+
+# "cair" survived in ten of the corrected essays - more than any other word.
+# The speller declines it correctly: it is one edit from "chair" and two from
+# "care", so ranking by distance picks the furniture. Context settles it, and
+# every occurrence in the corpus is one of these shapes ("proper cair", "cair
+# routines", "taking cair of"). Only the lowercase form is repaired, because
+# capitalised Cair is a name in places and a name is not ours to respell.
+_CAIR = re.compile(r"(?<!\w)cair(?!\w)")
+
+
+def repair_cair(text: str) -> str:
+    """Write "care" where the writer typed "cair"."""
+    return _CAIR.sub("care", text)
+
+
+
 def _typo_candidates(text: str, protected: tuple[tuple[int, int], ...]) -> list[_Candidate]:
     found: list[_Candidate] = []
     for match in _WORD.finditer(text):
         if _is_protected(match.start(), match.end(), protected):
             continue
-        replacement = _COMMON_TYPOS.get(match.group(0).casefold())
+        replacement = SPELLING_CORRECTIONS.get(match.group(0).casefold())
         if replacement is None:
             continue
         replacement = _match_case(match.group(0), replacement)

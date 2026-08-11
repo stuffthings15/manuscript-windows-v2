@@ -114,15 +114,12 @@ def test_the_common_misspelling_list_is_internally_valid():
     another. This check rejected "defiantly", "florescent" and "therefor" when
     the list was first assembled.
     """
-    from echo_link_core.polish_spelling import (
-        _COMMON_MISSPELLINGS,
-        _MEASURED_MISSPELLINGS,
-        EnglishDictionary,
-    )
+    from echo_link_core.polish_spelling import EnglishDictionary
+    from echo_link_core.writing_suggestions import SPELLING_CORRECTIONS
 
     dictionary = EnglishDictionary()
     dictionary.warm()
-    for wrong, right in {**_COMMON_MISSPELLINGS, **_MEASURED_MISSPELLINGS}.items():
+    for wrong, right in SPELLING_CORRECTIONS.items():
         assert not dictionary.contains(wrong), f"{wrong!r} is a real word"
         for part in right.split():
             assert dictionary.contains(part), f"{right!r} is not in the dictionary"
@@ -151,14 +148,12 @@ def test_words_that_only_look_like_misspellings_are_untouched():
 
 def test_the_measured_list_wins_over_the_common_list():
     """Context-aware entries must never be overridden by a general one."""
-    from echo_link_core.polish_spelling import (
-        _COMMON_MISSPELLINGS,
-        _SUBJECT_SENSITIVE_MISSPELLINGS,
-    )
+    from echo_link_core.polish_spelling import _SUBJECT_SENSITIVE_MISSPELLINGS
+    from echo_link_core.writing_suggestions import SPELLING_CORRECTIONS
 
     for word in _SUBJECT_SENSITIVE_MISSPELLINGS:
-        assert word not in _COMMON_MISSPELLINGS, word
-    assert "wether" not in _COMMON_MISSPELLINGS
+        assert word not in SPELLING_CORRECTIONS, word
+    assert "wether" not in SPELLING_CORRECTIONS
 
 
 def test_the_bundled_corpus_holds_the_validated_pairs():
@@ -193,14 +188,14 @@ def test_the_bundled_corpus_never_outranks_a_context_rule():
     """A flat lookup must not overrule logic that reads the sentence."""
     from echo_link_core.polish_spelling import (
         _bundled_misspellings,
-        _MEASURED_MISSPELLINGS,
         _SUBJECT_SENSITIVE_MISSPELLINGS,
     )
+    from echo_link_core.writing_suggestions import SPELLING_CORRECTIONS
 
     pairs = _bundled_misspellings()
     for word in (*_SUBJECT_SENSITIVE_MISSPELLINGS, "wether"):
         assert word not in pairs, word
-    for word, expected in _MEASURED_MISSPELLINGS.items():
+    for word, expected in SPELLING_CORRECTIONS.items():
         assert pairs.get(word, expected) == expected, word
 
 

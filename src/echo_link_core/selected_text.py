@@ -10,6 +10,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass
 
+from .writing_suggestions import repair_cair, repair_wether
 from .correction import (
     _PROTECTED_PATTERN,
     _protect_text,
@@ -922,8 +923,8 @@ class LocalWritingAssistant:
         if command == "Caveman":
             candidate = _apply_safe_caveman_splits(candidate)
         candidate = _repair_stranded_terminator(candidate)
-        candidate = _repair_wether(candidate)
-        candidate = _repair_cair(candidate)
+        candidate = repair_wether(candidate)
+        candidate = repair_cair(candidate)
         candidate = _restore_ui_label_case(source, candidate)
         if command in _PROOFREAD_CLEANUP_COMMANDS:
             candidate = _restore_proofread_style_options(source, candidate)
@@ -1895,42 +1896,6 @@ def _repair_stranded_terminator(text: str) -> str:
 
 # "wether" is a real English word - a castrated ram - so no speller will ever
 # call it a typo, and essay 1 keeps "Wether in Bakersfield" through every run.
-# The conjunction "whether" never takes an article or a number, and the animal
-# almost always does, which separates them without a fixture-keyed phrase.
-_WETHER = re.compile(r"(?<!\w)(?P<lead>\w+\s+)?(?P<word>[Ww]ether)(?!\w)")
-_WETHER_ANIMAL_LEAD = frozenset(
-    {"a", "an", "the", "this", "that", "one", "two", "three", "each", "every",
-     "my", "our", "his", "her", "their", "its", "young", "castrated"}
-)
-
-
-def _repair_wether(text: str) -> str:
-    """Write the conjunction "whether" where the writer typed "wether"."""
-    def repair(match: re.Match[str]) -> str:
-        lead = match.group("lead") or ""
-        if lead.strip().casefold() in _WETHER_ANIMAL_LEAD:
-            return match.group(0)
-        word = match.group("word")
-        fixed = "Whether" if word[0].isupper() else "whether"
-        return f"{lead}{fixed}"
-
-    return _WETHER.sub(repair, text)
-
-
-# "cair" survived in ten of the corrected essays - more than any other word.
-# The speller declines it correctly: it is one edit from "chair" and two from
-# "care", so ranking by distance picks the furniture. Context settles it, and
-# every occurrence in the corpus is one of these shapes ("proper cair", "cair
-# routines", "taking cair of"). Only the lowercase form is repaired, because
-# capitalised Cair is a name in places and a name is not ours to respell.
-_CAIR = re.compile(r"(?<!\w)cair(?!\w)")
-
-
-def _repair_cair(text: str) -> str:
-    """Write "care" where the writer typed "cair"."""
-    return _CAIR.sub("care", text)
-
-
 def _canonicalize_immutable_tokens(
     candidate: str,
     source: str,

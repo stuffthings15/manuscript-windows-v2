@@ -7,6 +7,7 @@ import pytest
 from echo_link_core.polish import PolishValidator, minimal_edits
 from echo_link_core.polish_classifier import MiniLMPolishClassifier
 from echo_link_core.polish_spelling import PolishRuleEngine, normalize_polish_text
+from echo_link_core.writing_suggestions import SuggestionCategory
 from echo_link_core.polish_types import PolishTask
 
 
@@ -22,8 +23,18 @@ def test_rule_engine_uses_existing_rules_and_symspell():
     assert engine.warm(), engine.dictionary.load_error
     result = engine.correct("Teh adress is definately wrong  ")
     assert result.text == "The address is definitely wrong. "
-    assert result.rule_suggestions
-    assert result.spelling_suggestions
+    # Assert what a reader gets, not which internal bucket reported it. The two
+    # tuples used to split on which map held the word; now one shared map does,
+    # so whichever layer reaches a span first claims it. Both callers in
+    # polish.py concatenate the tuples - for the category list and for the
+    # suggestion count - so the split was never observable behaviour.
+    suggestions = (*result.rule_suggestions, *result.spelling_suggestions)
+    assert suggestions
+    corrected = {value.original.casefold() for value in suggestions}
+    assert {"teh", "adress", "definately"} <= corrected, corrected
+    assert any(
+        value.category is SuggestionCategory.SPELLING for value in suggestions
+    )
 
 
 def test_rule_engine_respects_user_and_application_words():

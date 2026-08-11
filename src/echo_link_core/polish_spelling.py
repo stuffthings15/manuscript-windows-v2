@@ -12,11 +12,14 @@ from pathlib import Path
 from .correction import _PROTECTED_PATTERN
 from .paths import resource_path
 from .writing_suggestions import (
+    SPELLING_CORRECTIONS,
+    WETHER_ANIMAL_LEAD,
     SuggestionCategory,
     WritingSuggestion,
     WritingSuggestionEngine,
     apply_all_suggestions,
 )
+
 
 
 _WORD = re.compile(r"(?<![\w'-])[A-Za-z][A-Za-z'-]{2,}(?![\w'-])")
@@ -43,38 +46,7 @@ _APPLICATION_WORDS = frozenset(
         "Chromebook",
     }
 )
-# Measured across the twenty-essay corpus: after the rules and the bundled
-# dictionary have run, 106 distinct words remain unresolved, and these account
-# for nearly all of them - each appears in 13 to 20 of the 20 essays. The
-# speller declines them for good reasons that will not change: "cair" is one
-# edit from "chair" and two from "care", so distance ranking picks the
-# furniture; "edjucashunal" is six edits from "educational"; "equipments" and
-# "worser" are real-looking morphology rather than typos.
-#
-# Every entry is a word with exactly one sensible English reading. Words whose
-# correction depends on the sentence around them are NOT here - see
-# _SUBJECT_SENSITIVE_MISSPELLINGS below.
-_MEASURED_MISSPELLINGS = {
-    "agin": "again",
-    "atenshun": "attention",
-    "avalible": "available",
-    "becuz": "because",
-    "cair": "care",
-    "edjucashunal": "educational",
-    "equipments": "equipment",
-    "learnt": "learned",  # Americanise, per the corpus's US setting
-    # Measured: the speller turns "skool" into "skol", a Nordic drinking toast,
-    # and "lernt" into the British "learnt". Both are one pass, so nothing gets
-    # a second chance to repair them - they must be right the first time.
-    "skool": "school",
-    "lernt": "learned",
-    "oner": "owner",
-    "oners": "owners",
-    "probly": "probably",
-    "skol": "school",
-    "sumtimes": "sometimes",
-    "worser": "worse",
-}
+
 
 # "aint" is not a spelling mistake with one answer; it is a contraction whose
 # expansion depends on its subject. Writing "isn't" after "they" would be a
@@ -95,208 +67,6 @@ _SUBJECT_SENSITIVE_MISSPELLINGS = {
     },
 }
 
-# The standard commonly-misspelled-English set (the pool the English Club 100,
-# Mondly 100 and the Wikipedia list all draw from). These are consulted only
-# after _MEASURED_MISSPELLINGS and the context-sensitive maps above, so a
-# general entry can never override a rule that reads the sentence.
-#
-# Every pair was validated against the bundled dictionary before it shipped:
-# the misspelling must be absent from it and the correction present. That check
-# rejected three entries which would have corrupted correct English -
-# "defiantly" (defiant + ly), "florescent" (flowering) and "therefor" (for
-# that) are all real words that a naive list maps onto something else.
-_COMMON_MISSPELLINGS = {
-    "accomodate": "accommodate",
-    "accross": "across",
-    "acheive": "achieve",
-    "acheived": "achieved",
-    "acommodate": "accommodate",
-    "adress": "address",
-    "adressed": "addressed",
-    "allready": "already",
-    "alot": "a lot",
-    "apparant": "apparent",
-    "aquire": "acquire",
-    "aquired": "acquired",
-    "arguement": "argument",
-    "arguemnts": "arguments",
-    "athiest": "atheist",
-    "becuase": "because",
-    "begining": "beginning",
-    "beleif": "belief",
-    "beleive": "believe",
-    "beleived": "believed",
-    "belive": "believe",
-    "benifit": "benefit",
-    "benifits": "benefits",
-    "buisness": "business",
-    "calender": "calendar",
-    "catagory": "category",
-    "cemetary": "cemetery",
-    "changable": "changeable",
-    "cheif": "chief",
-    "collegue": "colleague",
-    "collegues": "colleagues",
-    "comming": "coming",
-    "commited": "committed",
-    "commitee": "committee",
-    "completly": "completely",
-    "concensus": "consensus",
-    "concious": "conscious",
-    "conciousness": "consciousness",
-    "curiousity": "curiosity",
-    "definately": "definitely",
-    "definatly": "definitely",
-    "dependant": "dependent",
-    "desparate": "desperate",
-    "diffrence": "difference",
-    "dilemna": "dilemma",
-    "dissapear": "disappear",
-    "dissapeared": "disappeared",
-    "dissapoint": "disappoint",
-    "dissapointed": "disappointed",
-    "embarass": "embarrass",
-    "embarassed": "embarrassed",
-    "embarassing": "embarrassing",
-    "enviroment": "environment",
-    "enviromental": "environmental",
-    "equiptment": "equipment",
-    "excede": "exceed",
-    "excellant": "excellent",
-    "existance": "existence",
-    "experiance": "experience",
-    "experianced": "experienced",
-    "explaination": "explanation",
-    "familar": "familiar",
-    "fasinating": "fascinating",
-    "finaly": "finally",
-    "foriegn": "foreign",
-    "fourty": "forty",
-    "freind": "friend",
-    "freinds": "friends",
-    "fullfil": "fulfill",
-    "garantee": "guarantee",
-    "gaurd": "guard",
-    "goverment": "government",
-    "grammer": "grammar",
-    "harrass": "harass",
-    "harrassment": "harassment",
-    "heirarchy": "hierarchy",
-    "hieght": "height",
-    "humourous": "humorous",
-    "hygeine": "hygiene",
-    "immediatly": "immediately",
-    "independant": "independent",
-    "indispensible": "indispensable",
-    "inteligent": "intelligent",
-    "interupt": "interrupt",
-    "intresting": "interesting",
-    "irresistable": "irresistible",
-    "knowlege": "knowledge",
-    "labratory": "laboratory",
-    "liason": "liaison",
-    "libary": "library",
-    "lisence": "license",
-    "maintainance": "maintenance",
-    "maintenence": "maintenance",
-    "managment": "management",
-    "medeval": "medieval",
-    "millenium": "millennium",
-    "miniture": "miniature",
-    "mischevious": "mischievous",
-    "mispell": "misspell",
-    "neccessary": "necessary",
-    "necessery": "necessary",
-    "neice": "niece",
-    "nieghbor": "neighbor",
-    "noticable": "noticeable",
-    "occassion": "occasion",
-    "occassionally": "occasionally",
-    "occurance": "occurrence",
-    "occured": "occurred",
-    "occuring": "occurring",
-    "ommision": "omission",
-    "oppurtunity": "opportunity",
-    "paralel": "parallel",
-    "parliment": "parliament",
-    "particurly": "particularly",
-    "pasttime": "pastime",
-    "perseverence": "perseverance",
-    "personel": "personnel",
-    "persuit": "pursuit",
-    "phenomenom": "phenomenon",
-    "playwrite": "playwright",
-    "posession": "possession",
-    "possable": "possible",
-    "potatoe": "potato",
-    "practise": "practice",
-    "preceed": "precede",
-    "prefered": "preferred",
-    "prejudise": "prejudice",
-    "presance": "presence",
-    "priviledge": "privilege",
-    "probaly": "probably",
-    "proffesional": "professional",
-    "pronounciation": "pronunciation",
-    "publically": "publicly",
-    "questionaire": "questionnaire",
-    "readible": "readable",
-    "realy": "really",
-    "recieve": "receive",
-    "recieved": "received",
-    "recomend": "recommend",
-    "recomended": "recommended",
-    "refered": "referred",
-    "refering": "referring",
-    "relevent": "relevant",
-    "religous": "religious",
-    "remeber": "remember",
-    "repitition": "repetition",
-    "restaraunt": "restaurant",
-    "rythm": "rhythm",
-    "secratary": "secretary",
-    "seperate": "separate",
-    "seperated": "separated",
-    "seperately": "separately",
-    "sieze": "seize",
-    "similiar": "similar",
-    "sincerly": "sincerely",
-    "speach": "speech",
-    "stoping": "stopping",
-    "strenght": "strength",
-    "succesful": "successful",
-    "successfull": "successful",
-    "supercede": "supersede",
-    "suprise": "surprise",
-    "suprised": "surprised",
-    "temperture": "temperature",
-    "tendancy": "tendency",
-    "threshhold": "threshold",
-    "tommorow": "tomorrow",
-    "tommorrow": "tomorrow",
-    "tounge": "tongue",
-    "truely": "truly",
-    "twelth": "twelfth",
-    "tyrany": "tyranny",
-    "underate": "underrate",
-    "unecessary": "unnecessary",
-    "unfortunatly": "unfortunately",
-    "untill": "until",
-    "upholstry": "upholstery",
-    "usualy": "usually",
-    "vaccuum": "vacuum",
-    "vegatarian": "vegetarian",
-    "vehical": "vehicle",
-    "visable": "visible",
-    "wellcome": "welcome",
-    "wich": "which",
-    "wief": "wife",
-    "wierd": "weird",
-    "withold": "withhold",
-    "writen": "written",
-    "writting": "writing",
-    "yeild": "yield",
-}
 
 # Words the speller deliberately refuses to guess at, because more than one
 # correction is genuinely possible and only the sentence can decide. "esay" is
@@ -337,19 +107,12 @@ def _preceding_word(text: str, start: int) -> str:
     return lead[0].casefold() if lead else ""
 
 
-# The conjunction "whether" never takes an article, number or possessive; the
-# castrated ram almost always does. Same discriminator the LLM path already
-# uses, so both paths agree rather than fighting each other.
-_WETHER_ANIMAL_LEAD = frozenset(
-    {"a", "an", "the", "this", "that", "one", "two", "three", "each", "every",
-     "my", "our", "his", "her", "their", "its", "young", "castrated"}
-)
 
 
 def _measured_replacement(text: str, start: int, folded: str) -> str:
     """The correction for a word the speller cannot resolve, or "" for none."""
     if folded == "wether":
-        if _preceding_word(text, start) in _WETHER_ANIMAL_LEAD:
+        if _preceding_word(text, start) in WETHER_ANIMAL_LEAD:
             return ""  # the animal, not the conjunction
         return "whether"
     subject_map = _SUBJECT_SENSITIVE_MISSPELLINGS.get(folded)
@@ -364,13 +127,11 @@ def _measured_replacement(text: str, start: int, folded: str) -> str:
         # wrong verb into the sentence, which is worse than leaving the word
         # alone for a reader to fix.
         return subject_map.get(_preceding_word(text, start), "")
-    measured = _MEASURED_MISSPELLINGS.get(folded, "")
-    return (
-        measured
-        or _COMMON_MISSPELLINGS.get(folded, "")
-        # Last, and only when nothing above knows the word. The curated maps
-        # read context; this one is a flat lookup and must never outrank them.
-        or _bundled_misspellings().get(folded, "")
+    # SPELLING_CORRECTIONS is the shared map in writing_suggestions.py; the
+    # bundled corpus is consulted last and never outranks it, because a flat
+    # 24,690-entry lookup should not overrule a curated or measured answer.
+    return SPELLING_CORRECTIONS.get(folded, "") or _bundled_misspellings().get(
+        folded, ""
     )
 
 

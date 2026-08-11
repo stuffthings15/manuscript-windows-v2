@@ -5546,26 +5546,26 @@ def test_wether_becomes_whether():
     flag it - the same blind spot that leaves "cud" and "esay" alone. Only a
     deterministic repair fires on every run.
     """
-    from echo_link_core.selected_text import _repair_wether
+    from echo_link_core.writing_suggestions import repair_wether
 
-    assert _repair_wether("Wether in Bakersfield, housing size all change.") == (
+    assert repair_wether("Wether in Bakersfield, housing size all change.") == (
         "Whether in Bakersfield, housing size all change."
     )
-    assert _repair_wether("it depends wether you live there") == (
+    assert repair_wether("it depends wether you live there") == (
         "it depends whether you live there"
     )
 
 
 def test_the_animal_wether_is_left_alone():
     """The conjunction never takes an article; the ram usually does."""
-    from echo_link_core.selected_text import _repair_wether
+    from echo_link_core.writing_suggestions import repair_wether
 
     for value in (
         "The wether grazed beside the fence.",
         "a wether is a castrated ram",
         "two wethers were sold",
     ):
-        assert _repair_wether(value) == value, value
+        assert repair_wether(value) == value, value
 
 
 def test_capitalised_ordinary_word_occurring_once_is_not_a_name():
@@ -5649,21 +5649,21 @@ def test_place_names_the_speller_knows_are_still_frozen():
 
 def test_cair_becomes_care():
     """Survived in ten corrected essays - more than any other single word."""
-    from echo_link_core.selected_text import _repair_cair
+    from echo_link_core.writing_suggestions import repair_cair
 
-    assert _repair_cair("proper cair for a pet") == "proper care for a pet"
-    assert _repair_cair("cair routines help") == "care routines help"
-    assert _repair_cair("taking cair of it") == "taking care of it"
+    assert repair_cair("proper cair for a pet") == "proper care for a pet"
+    assert repair_cair("cair routines help") == "care routines help"
+    assert repair_cair("taking cair of it") == "taking care of it"
 
 
 def test_capitalised_cair_is_left_alone():
     """Cair is a place name; a name is not ours to respell."""
-    from echo_link_core.selected_text import _repair_cair
+    from echo_link_core.writing_suggestions import repair_cair
 
-    assert _repair_cair("We sailed to Cair Paravel") == "We sailed to Cair Paravel"
+    assert repair_cair("We sailed to Cair Paravel") == "We sailed to Cair Paravel"
 
 
 def test_cair_inside_a_longer_word_is_untouched():
-    from echo_link_core.selected_text import _repair_cair
+    from echo_link_core.writing_suggestions import repair_cair
 
-    assert _repair_cair("haircair cairo") == "haircair cairo"
+    assert repair_cair("haircair cairo") == "haircair cairo"
