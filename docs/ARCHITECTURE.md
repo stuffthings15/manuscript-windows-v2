@@ -43,8 +43,10 @@ window.py (HUD) -> polish.py -> selected_text.py -> local model
 
 | Module | Owns |
 |---|---|
-| `polish.py` | `PolishEngine` (orchestration, retries, cascade), `PolishValidator`, the meaning guards, named-entity detection and opaque tokens, tone and style rewriting, `PolishWritingAssistantAdapter` |
-| `selected_text.py` | `LocalWritingAssistant`: the local model client, prompt construction, candidate validation and repair, immutable-token restoration, the deterministic fast proofread rules |
+| `polish.py` | `PolishEngine` (orchestration, retries, cascade), `PolishValidator`, the meaning guards, tone and style rewriting, `PolishWritingAssistantAdapter` |
+| `polish_entities.py` | which capitalised words are names: document frequency, capitalised misspellings, opaque immutable tokens |
+| `polish_proofread.py` | the deterministic proofread pass, one table of rule repairs applied to a finished answer |
+| `selected_text.py` | `LocalWritingAssistant`: the local model client, prompt construction, candidate validation and repair, immutable-token restoration |
 | `writing_suggestions.py` | the pure, no-I/O deterministic suggestion layer. **Must not** import the dictionary or warm the speller |
 | `polish_spelling.py` | the single source of truth for every non-dictionary spelling correction |
 | `polish_quality.py` | the tone contract and the correction quality gate |
@@ -64,7 +66,7 @@ does not get its own parallel structure.
 | Is this word misspelled, and to what? | `polish_spelling.py`, one lookup, layered by specificity |
 | How many tokens, how much context, GPU or CPU? | the `ExecutionPlan` from `polish_hardware.py`. The app layer does not get a vote |
 | Did the model change the meaning? | the meaning guards in `polish.py` |
-| Is this capitalised word a name or an ordinary word? | `_named_entities` in `polish.py`, using document-wide frequency |
+| Is this capitalised word a name or an ordinary word? | `_named_entities` in `polish_entities.py`, using document-wide frequency |
 | Is this correction good enough to show the user? | `CorrectionQualityGate` in `polish_quality.py` |
 | Is the review ready to apply? | the readiness signal exposed by the HUD in `rewrite_palette.py` |
 
@@ -93,9 +95,9 @@ surprise waiting for the next reader.
 
 | Debt | Impact | Remediation |
 |---|---|---|
-| Memorized test-corpus literals in `_apply_fast_proofread_rules` | corrections do not transfer to new essays; some green tests prove nothing | in progress: generalize each into a real rule, or delete and record the defect |
-| `polish.py` 6,764 lines, `selected_text.py` 5,030, `window.py` 4,328, `rewrite_palette.py` 3,241 | 42% of source in four files; every change needs a large read | planned splits along the seams listed above |
-| 137 broad `except Exception`, 5 silent. ruff reports 152 `BLE001` across `src`, `tests` and `tools` | a swallowed error hides a real defect | audit pending; `BLE001` is ignored in `pyproject.toml` so a non-zero ruff exit means a new defect, not this backlog. Removing that ignore is the last step of the audit |
+| 149 memorized test-corpus literals remain in `polish_proofread.py`, out of 512 rules | corrections do not transfer to new essays; a green test on one of them proves only that the sentence is memorized | 13 replaced so far by two general rules. Deleting the rest is not free: the rules chain, so a rule can fire on an intermediate string that appears in no test, and removing 85 that looked unasserted failed 309 tests. The method that works is finding a cluster sharing one grammatical defect and writing the rule for it |
+| `polish.py` 6,300 lines, `window.py` 4,349, `rewrite_palette.py` 3,241, `selected_text.py` 3,332 | still the largest files; a change to any of them needs a large read | two splits done (polish_proofread, polish_entities). The remaining seams: tone and style rewriting out of polish.py, and the review state machine out of rewrite_palette.py |
+| 137 broad `except Exception` in `src`, of which 88 log or re-raise and 5 swallow silently | a swallowed error hides a real defect | audited. The five silent ones were each read and justified, and `tests/test_source_discipline.py` now fails if a sixth appears. `BLE001` stays ignored in `pyproject.toml` so a non-zero ruff exit means a new defect rather than this backlog |
 | `length_ok` in `tools/full_page_tone_quality_probe.py` is computed and never recorded | the probe's length check silently does nothing | decide what it should assert, then wire it into the case record |
 | Text-to-speech playback speed | reported slightly slow, never investigated | unmeasured |
 | Flaky: crash recovery, key rotation | intermittent suite failures, possibly disk-space related | unreproduced |
@@ -107,7 +109,7 @@ surprise waiting for the next reader.
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-Baseline 2025 passed, 2 skipped.
+Baseline 2031 passed, 2 skipped.
 
 ```bash
 .venv/Scripts/python.exe -m ruff check src tests tools
