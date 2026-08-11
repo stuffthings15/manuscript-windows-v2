@@ -108,6 +108,9 @@ def review_readiness(hud) -> str:
         if "Current writing suggestion position" in name:
             if "all sections ready" in name:
                 return "ready"
+            if "all sections finished" in name:
+                # Every section has had its turn; some have no correction.
+                return "finished"
             if "preparing" in name:
                 return "preparing"
             return "unknown"
@@ -291,7 +294,7 @@ def review_one(path: Path, *, max_presses: int = 30) -> dict:
         while time.monotonic() < settle:
             hud = hud_window(8.0) or hud
             state = review_readiness(hud)
-            if state == "ready":
+            if state in {"ready", "finished"}:
                 break
             if state == "":
                 # The HUD is not reporting readiness (older build, or the card
@@ -353,11 +356,45 @@ def review_one(path: Path, *, max_presses: int = 30) -> dict:
             # Essay 2 had been clean on the previous run. That is the harness
             # giving up on the app, not the app failing.
             patient = time.monotonic() + 60.0
+            retried = 0
             while time.monotonic() < patient:
                 time.sleep(4.0)
-                again = counter_text(hud_window(8.0) or hud)
+                hud = hud_window(8.0) or hud
+                again = counter_text(hud)
                 if again != before:
                     break
+                # The app says so itself on the button: "This correction was
+                # not applied. The document may have been busy. Try Replace
+                # Text again." Word occasionally refuses the write, and the
+                # correction is still there waiting. Pressing once and calling
+                # it a stall ignores the one instruction the app gave.
+                retry = replace_button(hud)
+                message = str(getattr(retry, "Name", "") or "")
+                if (
+                    retry is not None
+                    and not retry.IsEnabled
+                    and review_readiness(hud) in {"ready", "finished"}
+                ):
+                    # Replace is dead and the app says nothing more is coming
+                    # for this section, so there is no correction to wait for.
+                    # This is NOT the paused-counter case that was measured
+                    # throwing away eight sections: there, work was still
+                    # arriving. Here the app has said it has finished.
+                    skip = dismiss_button(hud)
+                    if skip is not None and skip.IsEnabled and invoke(skip):
+                        report["dismissed"] = report.get("dismissed", 0) + 1
+                        time.sleep(4.0)
+                        again = counter_text(hud_window(8.0) or hud)
+                        if again != before:
+                            break
+                if "not applied" in message and retry is not None and retried < 3:
+                    if retry.IsEnabled and invoke(retry):
+                        retried += 1
+                        report["reapplied"] = report.get("reapplied", 0) + 1
+                        time.sleep(6.0)
+                        again = counter_text(hud_window(8.0) or hud)
+                        if again != before:
+                            break
             else:
                 again = before
             if again == before:

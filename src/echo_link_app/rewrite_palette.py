@@ -1786,16 +1786,26 @@ class RewritePalette(QDialog):
         total = len(self._suggestions)
         if not total:
             return "no sections"
-        ready = sum(
-            1
-            for suggestion in self._suggestions
-            if str(getattr(suggestion, "suggestion_id", ""))
-            in self._ai_completed_ids
-            or str(getattr(suggestion, "suggestion_id", "")) in self._ai_failed_ids
-        )
-        if ready >= total:
-            return "all sections ready"
-        return f"preparing, {ready} of {total} sections ready"
+        ready = 0
+        refused = 0
+        for suggestion in self._suggestions:
+            identifier = str(getattr(suggestion, "suggestion_id", ""))
+            if identifier in self._ai_completed_ids:
+                ready += 1
+            elif identifier in self._ai_failed_ids:
+                refused += 1
+        if ready + refused < total:
+            return f"preparing, {ready} of {total} sections ready"
+        if refused:
+            # Finished is not the same as ready. Counting a section the AI
+            # could not correct as "ready" told a reader every section had a
+            # correction while the card in front of them said "AI correction
+            # not ready" and Replace was disabled - a flat contradiction.
+            return (
+                f"all sections finished, {refused} of {total} "
+                "could not be corrected"
+            )
+        return "all sections ready"
 
     def _available_suggestions(self) -> tuple[object, ...]:
         return tuple(
