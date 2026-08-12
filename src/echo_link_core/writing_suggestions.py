@@ -415,16 +415,26 @@ _APPOSITIVE_LEAD = re.compile(r"\b[A-Z][A-Za-z'-]+[ \t]*,[ \t]*$")
 # destroy the sentence; a rule keyed on the -s ending alone would do exactly
 # that. A following determiner or preposition is required for the same reason.
 _STRAY_VERB_FORMS = (
-    "accessed|based|came|comes|drawn|followed|follows|kept|keeps|needed|needs|"
-    "referenced|requested|retained|stemmed|used|wanted|wants"
+    "accessed|affected|affects|analysed|analyzed|assessed|based|came|comes|"
+    "drawn|examined|followed|follows|kept|keeps|looked|measured|needed|needs|"
+    "referenced|requested|retained|reviewed|showed|stemmed|studied|used|"
+    "wanted|wants"
 )
+# A modal followed by have or be takes a participle next, and that is correct
+# English: "should have looked at the report", "must be given the file".
+# Without this exclusion the rule reads "have" as the verb, "looked" as debris,
+# and writes "should have at the report".
+_PERFECT_AUXILIARIES = "have|has|had|be|been|being"
 _MODAL_STRAY_VERB = re.compile(
     r"\b(?:must|should|shall|will|would|can|could|may|might|does|do|did)[ \t]+"
     # The negation must not be mistaken for the verb. Without this guard
     # "does not follows from" matched with "not" as the verb and deleted
     # "follows", which is the word the sentence needs.
-    r"(?:not[ \t]+)?(?!not\b)[a-z]+[ \t]+"
+    r"(?:not[ \t]+)?(?!not\b)(?!(?:" + _PERFECT_AUXILIARIES + r")\b)[a-z]+[ \t]+"
     r"(?P<stray>" + _STRAY_VERB_FORMS + r")[ \t]+"
+    # A past participle doubles as an adjective: "measured data", "affected
+    # users", "reviewed copies". Requiring a determiner or preposition next is
+    # what separates debris from a normal modifier.
     r"(?=(?:the|a|an|this|that|these|those|his|her|their|its|our|my|your"
     r"|from|on|of)\b)"
 )

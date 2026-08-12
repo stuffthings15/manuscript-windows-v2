@@ -102,6 +102,14 @@ def _apply_fast_proofread_rules(text: str) -> str:
             r"\bthe city still pays staff security utilities and transportation support\b",
             "the city still pays for staff, security, utilities, and transportation support",
         ),        (r"\b(didn't|did not)\s+measures\b", r"\1 measure"),
+        # A stray verb with no determiner after it. The general rule in
+        # writing_suggestions requires one, because "measured data" and
+        # "affected users" are ordinary adjective phrases it must not touch,
+        # and these sentences read "analyzed property values" with no
+        # determiner between the two.
+        (r"\bdid not measure affects?\b", "did not measure"),
+        (r"\bdid not measure analy(?:s|z)ed\b", "did not measure"),
+        (r"\bdid not measure assessed\b", "did not measure"),
         (r"\bmust not be presents as\b", "must not be presented as"),
         (r"\bfor first six weeks\b", "for the first six weeks"),
         (
@@ -118,7 +126,6 @@ def _apply_fast_proofread_rules(text: str) -> str:
             r"(?P<count>\d+ respondents)\b",
             r"\g<dates>; \g<count>",
         ),
-        (r"\bdid not measure affects?\b", "did not measure"),
         (
             r"\bmust not be shows?\b",
             "must not be presented as proof that",
@@ -419,8 +426,6 @@ def _apply_fast_proofread_rules(text: str) -> str:
             "Council maintains ultimate authority, and approval of the "
             "trial does not authorize",
         ),
-        (r"\bdid not measure analy(?:s|z)ed\b", "did not measure"),
-        (r"\bdid not measure assessed\b", "did not measure"),
         (
             r"\bdid not measure looked at property values and it must not be "
             r"presented that as proof gardens raise rent\b",

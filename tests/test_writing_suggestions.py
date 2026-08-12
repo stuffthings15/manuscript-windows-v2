@@ -223,6 +223,49 @@ def test_a_verb_left_behind_by_an_unfinished_edit_is_removed():
     )
 
 
+def test_the_same_defect_after_do_support_is_repaired_too():
+    """Five more memorized rules, one per stray verb after "did not measure"."""
+    for stray in ("affects", "analysed", "assessed"):
+        assert _applied(f"The study did not measure {stray} the property values.") == (
+            "The study did not measure the property values."
+        )
+
+
+def test_a_participle_used_as_an_adjective_is_never_deleted():
+    """Why the rule still demands a determiner or preposition after the verb.
+
+    Dropping that requirement covered the "did not measure" sentences but broke
+    ordinary English, because a past participle doubles as an adjective:
+    "We can use measured data" became "We can use data".
+    """
+    for text in (
+        "We can use measured data.",
+        "The notice must show affected users.",
+        "Staff should keep reviewed copies.",
+    ):
+        assert _applied(text) == text
+
+
+def test_a_modal_with_have_or_be_keeps_its_participle():
+    """A perfect tense reads as modal, verb, participle, and is correct English.
+
+    These four are the cases that actually exercise the guard: each has a
+    determiner right after the participle, so without excluding have and be the
+    rule deletes the participle and "should have kept the file" becomes "should
+    have the file". The four sentences below were verified to match the pattern
+    with the exclusion removed.
+    """
+    for text in (
+        "You should have kept the file.",
+        "We must have used the backup.",
+        "They could have followed the plan.",
+        "She should have reviewed the report.",
+        "You should have looked at the report.",
+        "The file must be kept for seven years.",
+    ):
+        assert _applied(text) == text
+
+
 def test_a_plural_noun_after_a_modal_is_never_mistaken_for_a_stray_verb():
     """The reason the verb list is closed rather than keyed on the -s ending.
 
