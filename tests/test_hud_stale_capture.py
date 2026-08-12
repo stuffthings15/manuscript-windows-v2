@@ -74,3 +74,50 @@ def test_a_failing_probe_never_discards_a_review(monkeypatch):
         SimpleNamespace(user32=SimpleNamespace(IsWindow=explode)),
     )
     assert _alive(_stub(4851442)) is True
+
+
+def _in_focus(stub, incoming_handle: int | None) -> bool:
+    incoming = SimpleNamespace(
+        window=SimpleNamespace(handle=incoming_handle)
+        if incoming_handle is not None
+        else None
+    )
+    # The check consults the liveness probe, so the stub carries the real one.
+    stub._hud_source_window_alive = lambda: _alive(stub)
+    return window_module.EchoLinkWindow._hud_review_still_in_focus(stub, incoming)
+
+
+def test_a_review_does_not_block_a_different_document(is_window):
+    """The second half of the same bug, and the one that cost three essays.
+
+    The source window was alive, so the gate kept the review and swallowed
+    every focus signal from the document the writer had moved to. Replace was
+    then refused against a document the review had never captured, and the
+    counter read "0 of 0".
+    """
+    is_window(1)
+
+    assert _in_focus(_stub(4851442), 9927001) is False
+
+
+def test_a_review_still_blocks_signals_from_its_own_document(is_window):
+    """Moving the caret inside the same document must not restart the review."""
+    is_window(1)
+
+    assert _in_focus(_stub(4851442), 4851442) is True
+
+
+def test_a_dead_source_window_is_stale_whatever_has_focus(is_window):
+    is_window(0)
+
+    assert _in_focus(_stub(4851442), 4851442) is False
+
+
+def test_an_unidentifiable_window_keeps_the_review(is_window):
+    """Never discard a live review because a handle could not be read."""
+    is_window(1)
+
+    assert _in_focus(_stub(4851442), 0) is True
+    assert _in_focus(_stub(4851442), None) is True
+    assert _in_focus(_stub(0), 9927001) is True
+    assert _in_focus(_stub(None), 9927001) is True
