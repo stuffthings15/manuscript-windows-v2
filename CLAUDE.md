@@ -17,7 +17,7 @@ refactoring survivable.
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-Baseline is 2032 passed, 2 skipped, 9 to 25 minutes. A drop is a regression, not
+Baseline is 2041 passed, 2 skipped, 9 to 25 minutes. A drop is a regression, not
 a cleanup, unless it is an intentional known defect recorded in
 `docs/ARCHITECTURE.md`.
 
@@ -62,11 +62,20 @@ test asserting it. Those tests were green and proved nothing, and a new essay
 with the same grammar defect got no correction because the fix was pinned to one
 sentence.
 
-Do not try to delete them in bulk. The rules chain, so a rule can fire on an
-intermediate string that appears in no test file; removing 85 that looked
-unasserted failed 309 tests. What works is finding a cluster that shares one
-grammatical defect and writing the general rule for it. Two such rules have
-replaced 13 memorized ones so far.
+These are **accepted debt, not a backlog to grind**. The decision was taken on
+2026-08-12 after four clusters were attempted: two generalized and replaced 13
+rules, and the rest could not be generalized here at all. Telling "customer
+names gate codes and service notes" from a noun phrase needs part-of-speech
+knowledge this layer does not have, "must not be presented them as" is shaped
+exactly like the correct "she was shown this as an example", and a rule for
+"did not measure analyzed" destroyed "we can use measured data" when tried.
+
+Do not delete them in bulk either: the rules chain, so one can fire on an
+intermediate string that appears in no test, and removing 85 that looked
+unasserted failed 309 tests.
+
+`tests/test_source_discipline.py` freezes the count at 149. The table can
+shrink, never grow. If you replace some, lower the ceiling in the same commit.
 
 When a corpus essay corrects badly, the fix is the general rule that failed to
 fire. If you find yourself writing a regex that matches one specific sentence,

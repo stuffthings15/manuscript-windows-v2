@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import pathlib
+import re
 
 SOURCE_ROOT = pathlib.Path(__file__).resolve().parent.parent / "src"
 
@@ -126,6 +127,69 @@ def test_no_decorator_is_left_without_the_function_it_decorated():
                 stacked.append(f"{path.name}:{node.lineno} {getattr(node, 'name', '?')}")
 
     assert not stacked, "a function carries more than one lru_cache: " + ", ".join(stacked)
+
+
+# The proofread table holds 149 rules that match one benchmark sentence each
+# rather than a grammar defect. They are accepted debt, not a target: several
+# encode defects that cannot be generalized here at all, because telling
+# "customer names gate codes and service notes" apart from a noun phrase needs
+# part-of-speech knowledge this layer deliberately does not have.
+#
+# What must not happen is the number growing. Every one of these was added the
+# same way - a corpus sentence corrected badly, and the sentence went into the
+# table instead of the rule. This ceiling makes that fail the suite.
+#
+# Lowering it is always welcome. Two general rules have already replaced 13.
+MEMORIZED_PROOFREAD_RULES = 149
+
+
+def test_the_memorized_proofread_rules_never_grow():
+    """A rule matching six or more literal words in a row is a memorized one.
+
+    If this fails after you added a rule, the rule is the answer to one
+    sentence. Find the grammar defect behind it and write that instead. If you
+    replaced rules and the count dropped, lower the ceiling in the same commit.
+    """
+    source = (SOURCE_ROOT / "echo_link_core" / "polish_proofread.py").read_text(
+        encoding="utf-8"
+    )
+    fn = next(
+        node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_apply_fast_proofread_rules"
+    )
+
+    memorized = sum(
+        1
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Tuple)
+        and len(node.elts) == 2
+        and isinstance(node.elts[0], ast.Constant)
+        and isinstance(node.elts[0].value, str)
+        and _longest_literal_run(node.elts[0].value) >= 6
+    )
+
+    assert memorized <= MEMORIZED_PROOFREAD_RULES, (
+        f"{memorized - MEMORIZED_PROOFREAD_RULES} new memorized rule(s). "
+        "Write the general rule for the defect instead of the sentence."
+    )
+
+
+_STRIP_ESCAPE = re.compile(r"\\[A-Za-z]")
+_STRIP_META = re.compile(r"[?*+|^$.{}\\()\[\]]")
+_LITERAL_WORDS = re.compile(r"[A-Za-z0-9$%'-]+")
+
+
+def _longest_literal_run(pattern: str) -> int:
+    """How many plain words the pattern matches in a row, ignoring alternatives."""
+    plain = re.sub(r"\([^()]*\)", "|", pattern)
+    plain = re.sub(r"\[[^\]]*\]", "|", plain)
+    plain = _STRIP_META.sub(" ", _STRIP_ESCAPE.sub(" ", plain))
+    return max(
+        (len(_LITERAL_WORDS.findall(chunk)) for chunk in plain.split("|")),
+        default=0,
+    )
 
 
 def _broad(handler: ast.ExceptHandler) -> bool:
