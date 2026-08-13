@@ -2623,9 +2623,11 @@ class RewritePalette(QDialog):
                     round(right / scale),
                     round(bottom / scale),
                 )
-            target_x = left - width - 8
-            if target_x < area.left():
-                target_x = right + 8
+            # The badge sits to the right of the selected text. Only fall back
+            # to the left side when the right side would run off the screen.
+            target_x = right + 8
+            if target_x + width - 1 > area.right():
+                target_x = left - width - 8
             target_y = top + ((bottom - top) - height) // 2
         x = min(max(target_x, area.left()), area.right() - width + 1)
         y = min(max(target_y, area.top()), area.bottom() - height + 1)

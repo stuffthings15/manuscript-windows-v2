@@ -291,12 +291,26 @@ QScrollArea {{
 }}
 QScrollBar:vertical {{
     width: 12px;
+    margin: 0;
     background: {COLORS['window']};
 }}
 QScrollBar::handle:vertical {{
     min-height: 32px;
     border-radius: 5px;
     background: {COLORS['border']};
+}}
+QScrollBar::handle:vertical:hover {{
+    background: {COLORS['accent']};
+}}
+/* Without these the default arrow buttons take the top and bottom of the
+   track, which on a short review box leaves no room for a visible handle. */
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+    height: 0;
+    border: 0;
+    background: none;
+}}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+    background: none;
 }}
 QToolTip {{
     padding: 6px;
