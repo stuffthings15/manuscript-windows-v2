@@ -3211,23 +3211,27 @@ def test_em_dash_in_candidate_is_converted_not_retried():
 
 
 def test_quality_retry_repairs_the_previous_fact_safe_candidate():
+    # The first candidate keeps a singular subject with a plural verb, which
+    # the deterministic layer does not own, so the retry still has work to do.
+    # It used to keep "reports is"; that is repaired before the quality gate
+    # sees it since 2026-08-13, which left no reason to retry at all.
     runtime = FakeRuntime(
         (
-            "The reports is ready, and the files are ready.",
-            "The reports are ready, and the files are ready.",
+            "The report are ready, and the files are ready.",
+            "The report is ready, and the files are ready.",
         )
     )
     value, _ = engine(classifier=FakeClassifier(), runtime=runtime)
 
     result = value.analyze(
-        request("The reports is ready, and the files is ready.")
+        request("The report are ready, and the files is ready.")
     )
 
-    assert result.text == "The reports are ready, and the files are ready."
+    assert result.text == "The report is ready, and the files are ready."
     assert result.quality_complete
     assert (
         runtime.generate_calls[1].text
-        == "The reports is ready, and the files are ready."
+        == "The report are ready, and the files are ready."
     )
 
 
@@ -3258,18 +3262,23 @@ def test_incomplete_fact_safe_ai_correction_is_not_review_ready():
     and leaves the agreement error. Every retry is still spent trying for
     better, but an incomplete answer is not presented as ready for replacement.
     """
+    # The residual defect is a singular subject with a plural verb. It used to
+    # be "The reports is ready", but the deterministic layer learned to repair
+    # a plural subject with a singular verb on 2026-08-13, which left this test
+    # asserting a sentence the pipeline now fixes. The property under test is
+    # unchanged: an answer with a residual error is not offered for review.
     runtime = FakeRuntime(
         (
-            "The reports is ready.",
-            "The reports is ready.",
-            "The reports is ready.",
+            "The report are ready.",
+            "The report are ready.",
+            "The report are ready.",
         )
     )
     value, _ = engine(classifier=FakeClassifier(), runtime=runtime)
 
-    result = value.analyze(request("Teh reports is ready."))
+    result = value.analyze(request("Teh report are ready."))
 
-    assert result.text == "The reports is ready."
+    assert result.text == "The report are ready."
     # Still not flawless, so the review card must not offer it for replacement.
     assert not result.quality_complete
     assert result.residual_errors
@@ -3299,20 +3308,23 @@ def test_rules_only_fallback_is_never_exposed_as_manual_correction():
 
 
 def test_sentence_recovery_requires_ai_for_every_sentence():
-    source = "Teh build 47 is not ready. The reports is delayed."
+    # "The report are delayed" for the same reason as the test above: the
+    # deterministic layer now repairs "reports is", so the residual error has
+    # to be one it does not own.
+    source = "Teh build 47 is not ready. The report are delayed."
     runtime = FakeRuntime(
         (
-            "The build 48 is ready. The reports are delayed.",
-            "The build 48 is not ready. The reports are delayed.",
+            "The build 48 is ready. The report is delayed.",
+            "The build 48 is not ready. The report is delayed.",
             "The build 48 is not ready.",
-            "The reports are delayed.",
+            "The report is delayed.",
         )
     )
     value, _ = engine(classifier=FakeClassifier(), runtime=runtime)
 
     result = value.analyze(request(source))
 
-    assert result.text == "The build 47 is not ready. The reports is delayed."
+    assert result.text == "The build 47 is not ready. The report are delayed."
     assert not result.used_llm
     assert result.rejected_llm
     assert not result.review_ready

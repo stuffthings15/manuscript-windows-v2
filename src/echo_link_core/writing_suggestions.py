@@ -475,6 +475,9 @@ class WritingSuggestionEngine:
         candidates.extend(_duplicate_candidates(text, protected))
         candidates.extend(_grammar_phrase_candidates(text, protected))
         candidates.extend(_homophone_candidates(text, protected))
+        candidates.extend(_sentence_boundary_candidates(text, protected))
+        candidates.extend(_agreement_candidates(text, protected))
+        candidates.extend(_dictation_filler_candidates(text, protected))
         candidates.extend(_lowercase_i_candidates(text, protected))
         candidates.extend(_structural_punctuation_candidates(text, protected))
         candidates.extend(_doubled_punctuation_candidates(text, protected))
@@ -774,10 +777,15 @@ _HOMOPHONE_RULES: tuple[tuple[str, re.Pattern[str], str, str], ...] = (
     ),
     (
         # "read a essay". Only spelled vowels, so "a university" and "a one-way
-        # street" are left alone, as is "a European".
+        # street" are left alone, as is "a European". Vowel-initial dictation
+        # filler is skipped too: "a or whatever good choice" is repaired by
+        # deleting the filler, and turning the determiner into "an" first left
+        # "an good choice" behind.
         "a-before-vowel",
         re.compile(
-            r"(?<!\w)(?P<word>[Aa])\s+(?=(?!one\b)(?!once\b)(?!eu)[aeio][a-z])"
+            r"(?<!\w)(?P<word>[Aa])\s+(?!or[ \t]+whatever\b)(?!anyways\b)"
+            r"(?!and[ \t]+stuff\b)(?!i[ \t]+guess\b)"
+            r"(?=(?!one\b)(?!once\b)(?!eu)[aeio][a-z])"
         ),
         "an",
         'Use "an" before a word that starts with a vowel sound.',
@@ -850,6 +858,226 @@ _HOMOPHONE_RULES: tuple[tuple[str, re.Pattern[str], str, str], ...] = (
         '"Loose" is the opposite of tight. The verb is "lose".',
     ),
 )
+
+
+# NOT IMPLEMENTED: adding commas to a list written with none at all ("it offers
+# companionship routine education entertainment and a reason to care"). A rule
+# requiring three consecutive content words before "and" was written on
+# 2026-08-13 and measured clean against all 20 corpus essays, whose bare lists
+# happen to have single-word items. It then corrupted the first real list it met
+# outside them: "counted volunteer hours crop donations cancelled workdays and
+# public meeting attendance" became "volunteer, hours, crop, donations,
+# cancelled, workdays". Item boundaries in a multi-word list cannot be found
+# without part-of-speech knowledge, and a wrong comma is worse than a missing
+# one. Recorded in docs/ARCHITECTURE.md as a known defect.
+# NOT IMPLEMENTED: splitting a run-on where one independent clause is butted
+# against the next ("... in Athens Greece it offers companionship ..."). A rule
+# matching a pronoun subject plus a finite verb was written and measured against
+# all 20 corpus essays on 2026-08-13: 53 matches, of which one was the run-on it
+# was aimed at. It split "realizes they had one fact wrong", "shows the pet is
+# theirs", "entertainment that is educational" and "then after a while it
+# becomes automatic", because any transitive verb takes a clause with no "that",
+# a relative "that is" looks identical, and an adverb can sit where the clause
+# boundary would be. Telling those apart needs part-of-speech knowledge this
+# layer does not have, so the rule was deleted rather than shipped. Recorded in
+# docs/ARCHITECTURE.md as a known defect.
+#
+# Exactly two full stops is a typing slip. Three is an ellipsis an author may
+# have meant, so it is left alone; four or more is trimmed back to one.
+_DOUBLED_FULL_STOP = re.compile(r"(?<!\.)(?P<dots>\.\.)(?!\.)|(?P<many>\.{4,})")
+
+
+# A plural subject with a third-person singular verb: "pigeons makes good
+# pets", "its needs is met", "some habitats does need lights". The verb set is
+# closed to the copulas plus "makes" on purpose. Measured across the corpus, a
+# wider set matched "a gecko got habits needs and a personality" and "daily life
+# sometimes gets boring", where the word after the -s noun is another noun, not
+# a verb. "is", "was", "has" and "does" are never plural nouns, which is the
+# whole reason they are safe here.
+_SINGULAR_VERB_PLURAL_FORM = {
+    "is": "are",
+    "was": "were",
+    "has": "have",
+    "does": "do",
+    "makes": "make",
+}
+# Nouns that end in s and are singular. A rule keyed on the -s ending alone
+# rewrites the verb after every one of these.
+_SINGULAR_S_NOUNS = frozenset(
+    {
+        "always", "anyways", "das", "his", "its", "less", "news", "perhaps",
+        "series", "sometimes", "species", "this", "thus", "yes",
+    }
+)
+# Endings that mark a singular noun rather than a plural: -us (campus, virus,
+# and the lowercased place name "aarhus" the corpus produced), -ss (business,
+# illness), -is and -sis (analysis, crisis), -ics (physics, politics).
+_SINGULAR_S_ENDINGS = ("us", "ss", "is", "ics")
+_PREPOSITIONS = frozenset(
+    {
+        "about", "across", "after", "among", "around", "at", "before",
+        "behind", "below", "beside", "between", "beyond", "by", "during",
+        "for", "from", "in", "inside", "into", "near", "of", "on", "onto",
+        "outside", "over", "through", "throughout", "to", "toward", "under",
+        "until", "with", "within", "without",
+    }
+)
+_PLURAL_SUBJECT_SINGULAR_VERB = re.compile(
+    r"(?<!\w)(?P<before>(?:[a-z]+[ \t]+){0,2})(?P<noun>[a-z]{3,}s)[ \t]+"
+    r"(?P<verb>" + "|".join(_SINGULAR_VERB_PLURAL_FORM) + r")(?!\w)"
+)
+# A plural pronoun subject, which needs no noun analysis at all.
+_PRONOUN_PLURAL_FORM = {
+    "they": {"is": "are", "was": "were", "has": "have", "does": "do"},
+    "we": {"is": "are", "was": "were", "has": "have", "does": "do"},
+    "you": {"is": "are", "was": "were", "has": "have", "does": "do"},
+    "people": {"is": "are", "was": "were", "has": "have", "does": "do"},
+    "children": {"is": "are", "was": "were", "has": "have", "does": "do"},
+}
+_PRONOUN_SINGULAR_VERB = re.compile(
+    r"(?<!\w)(?P<subject>they|we|you|people|children)[ \t]+"
+    r"(?P<verb>is|was|has|does)(?!\w)",
+    re.IGNORECASE,
+)
+
+
+def _agreement_candidates(
+    text: str,
+    protected: tuple[tuple[int, int], ...],
+) -> list[_Candidate]:
+    found: list[_Candidate] = []
+    for match in _PRONOUN_SINGULAR_VERB.finditer(text):
+        start = match.start("verb")
+        end = match.end("verb")
+        if _is_protected(start, end, protected):
+            continue
+        subject = match.group("subject").lower()
+        verb = match.group("verb").lower()
+        found.append(
+            _Candidate(
+                "pronoun-verb-agreement",
+                SuggestionCategory.GRAMMAR,
+                "Fix subject and verb agreement",
+                f'"{match.group("subject")}" is plural and takes a plural verb.',
+                start,
+                end,
+                _match_case(match.group("verb"), _PRONOUN_PLURAL_FORM[subject][verb]),
+            )
+        )
+    for match in _PLURAL_SUBJECT_SINGULAR_VERB.finditer(text):
+        noun = match.group("noun")
+        verb = match.group("verb")
+        if noun in _SINGULAR_S_NOUNS or noun.endswith(_SINGULAR_S_ENDINGS):
+            continue
+        # "behavior makes makes a schedule" is a doubled word, not an agreement
+        # error; the duplicate rule owns it and rewriting the second one to
+        # "make" would hide the real defect.
+        if noun == verb:
+            continue
+        # A plural inside a prepositional phrase is not the subject: "one of
+        # the dogs is friendly", "engaging in additional shifts has to be done
+        # voluntarily". Two words of lead are read because the preposition is
+        # usually separated from the noun by a determiner or an adjective.
+        before_words = (match.group("before") or "").lower().split()
+        if _PREPOSITIONS.intersection(before_words):
+            continue
+        # "Neither erased values or estimated temperatures is allowed" takes its
+        # agreement from the correlative, not from the nearest plural, and the
+        # rule that repairs "or" to "nor" keys on "is allowed". Correcting the
+        # verb here left that repair unmatched and the sentence half fixed.
+        if {"or", "nor", "neither", "either"}.intersection(before_words):
+            continue
+        start = match.start("verb")
+        end = match.end("verb")
+        if _is_protected(start, end, protected):
+            continue
+        found.append(
+            _Candidate(
+                "plural-subject-agreement",
+                SuggestionCategory.GRAMMAR,
+                "Fix subject and verb agreement",
+                f'"{noun}" is plural and takes a plural verb.',
+                start,
+                end,
+                _match_case(verb, _SINGULAR_VERB_PLURAL_FORM[verb]),
+            )
+        )
+    return found
+
+
+# Dictation filler sitting inside a noun phrase, between a determiner and the
+# word it determines: "a basically home", "the you know animal", "the or
+# whatever visitor". An adverb or a discourse marker cannot occupy that slot in
+# English, so the phrase is a speech artefact rather than something the author
+# wrote, and removing it changes no meaning.
+#
+# This is the only rule in this module that deletes the author's words, so the
+# position requirement is doing real work: "the essay is basically finished"
+# keeps its adverb because "basically" is not between a determiner and its noun.
+_DICTATION_FILLER = (
+    "or whatever",
+    "you know",
+    "to be honest",
+    "for real",
+    "i guess",
+    "anyways",
+    "sorta",
+    "and stuff",
+    "basically",
+)
+_FILLER_IN_NOUN_PHRASE = re.compile(
+    r"(?<!\w)(?:" + _DETERMINERS + r")[ \t]+(?P<filler>"
+    + "|".join(phrase.replace(" ", r"[ \t]+") for phrase in _DICTATION_FILLER)
+    + r")[ \t]+(?=[a-z])",
+    re.IGNORECASE,
+)
+
+
+def _dictation_filler_candidates(
+    text: str,
+    protected: tuple[tuple[int, int], ...],
+) -> list[_Candidate]:
+    found: list[_Candidate] = []
+    for match in _FILLER_IN_NOUN_PHRASE.finditer(text):
+        start = match.start("filler")
+        end = match.end()
+        if _is_protected(start, end, protected):
+            continue
+        found.append(
+            _Candidate(
+                "dictation-filler-in-noun-phrase",
+                SuggestionCategory.CLARITY,
+                "Remove the filler",
+                f'"{match.group("filler")}" cannot sit between a determiner '
+                "and its noun; it came from speech.",
+                start,
+                end,
+                "",
+            )
+        )
+    return found
+
+
+def _sentence_boundary_candidates(
+    text: str,
+    protected: tuple[tuple[int, int], ...],
+) -> list[_Candidate]:
+    found: list[_Candidate] = []
+    for match in _DOUBLED_FULL_STOP.finditer(text):
+        if _is_protected(match.start(), match.end(), protected):
+            continue
+        found.append(
+            _Candidate(
+                "doubled-full-stop",
+                SuggestionCategory.FORMATTING,
+                "Remove the extra full stop",
+                "One full stop ends a sentence.",
+                match.start(),
+                match.end(),
+                "." if match.group("dots") else "...",
+            )
+        )
+    return found
 
 
 def _homophone_candidates(
