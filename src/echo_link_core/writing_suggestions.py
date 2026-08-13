@@ -474,6 +474,7 @@ class WritingSuggestionEngine:
         candidates.extend(_typo_candidates(text, protected))
         candidates.extend(_duplicate_candidates(text, protected))
         candidates.extend(_grammar_phrase_candidates(text, protected))
+        candidates.extend(_homophone_candidates(text, protected))
         candidates.extend(_lowercase_i_candidates(text, protected))
         candidates.extend(_structural_punctuation_candidates(text, protected))
         candidates.extend(_doubled_punctuation_candidates(text, protected))
@@ -681,6 +682,198 @@ def _grammar_phrase_candidates(
                 "",
             )
         )
+    return found
+
+
+# Homophones are correctly spelled words in the wrong place, so neither
+# SymSpell nor Hunspell can see them; every one below was left untouched in the
+# graded corpus output. Each pattern keys on the neighbouring word class rather
+# than on a sentence, so the rule transfers to essays outside the corpus. The
+# lookarounds are the safety property: they carve out the reading where the
+# written word is the correct one, and loosening them is how these turn into
+# false corrections of text the author meant.
+_DETERMINERS = r"a|an|the|this|that|these|those|my|your|his|her|its|our|their"
+_FUNCTION_FOLLOWERS = (
+    r"is|was|are|were|be|been|and|or|but|so|then|in|on|at|to|of|for|from|"
+    r"with|near|over|under|before|after|today|tomorrow|again|now|here|there"
+)
+_HOMOPHONE_RULES: tuple[tuple[str, re.Pattern[str], str, str], ...] = (
+    (
+        # "a grate pet". As a noun, grate is followed by punctuation, a verb or
+        # a preposition; followed by another content word it is modifying it,
+        # which only "great" can do.
+        "grate-for-great",
+        re.compile(
+            r"(?<!\w)(?:(?P<lead>" + _DETERMINERS + r")\s+)?(?P<word>[Gg]rate)"
+            r"\s+(?!(?:" + _FUNCTION_FOLLOWERS + r")\b)[a-z]",
+            re.IGNORECASE,
+        ),
+        "great",
+        'The noun "grate" is a metal cover. Before another word you want "great".',
+    ),
+    (
+        # "witch is a lot of requirements". The relative pronoun takes a verb or
+        # a pronoun subject; the noun does not.
+        "witch-for-which",
+        re.compile(
+            r"(?<!\w)(?<!the )(?<!a )(?<!an )(?P<word>[Ww]itch)\s+"
+            r"(?=(?:is|was|are|were|means|meant|makes|made|will|would|can|"
+            r"could|should|might|has|have|had|he|she|they|it|we|you)\b)"
+        ),
+        "which",
+        'A "witch" is a person. The relative pronoun is "which".',
+    ),
+    (
+        # "cud become". Cud is what cattle chew; anything else is "could".
+        "cud-for-could",
+        re.compile(
+            r"(?<!\w)(?<!the )(?<!its )(?<!a )(?P<word>[Cc]ud)(?!\w)"
+        ),
+        "could",
+        '"Cud" is chewed by cattle. The modal verb is "could".',
+    ),
+    (
+        # "wit correct preparation". The noun "wit" follows a determiner, a
+        # possessive, or "and"/"of"; standing before a word it is "with".
+        "wit-for-with",
+        re.compile(
+            r"(?<!\w)(?<!the )(?<!a )(?<!his )(?<!her )(?<!their )(?<!your )"
+            r"(?<!of )(?<!and )(?<!quick )(?<!dry )(?<!sharp )"
+            r"(?P<word>[Ww]it)\s+(?=[a-z])"
+        ),
+        "with",
+        '"Wit" is cleverness. The preposition is "with".',
+    ),
+    (
+        # "care bout something". The noun "bout" needs a determiner in front.
+        "bout-for-about",
+        re.compile(
+            r"(?<!\w)(?<!a )(?<!an )(?<!the )(?<!this )(?<!that )(?<!each )"
+            r"(?<!every )(?<!one )(?<!first )(?<!second )(?<!last )(?<!title )"
+            r"(?P<word>[Bb]out)(?!\w)"
+        ),
+        "about",
+        'A "bout" is a round of something. You want "about".',
+    ),
+    (
+        # "there a good choice". The adverb does not take a determiner after it
+        # unless a copula or a question word came first ("is there a ...").
+        "there-for-theyre",
+        re.compile(
+            # The lookbehinds are case-insensitive by hand because the pattern
+            # is not: "Is there a good choice?" opens a sentence, and a
+            # case-sensitive "is " missed it and rewrote a correct question.
+            r"(?<!\w)(?<![Ii]s )(?<![Aa]re )(?<![Ww]as )(?<![Ww]ere )"
+            r"(?<![Bb]e )(?<![Bb]een )"
+            r"(?P<word>[Tt]here)\s+"
+            r"(?=(?:" + _DETERMINERS + r"|going|not|just|really|still|always|"
+            r"never|probably)\b)"
+        ),
+        "they're",
+        'This is the contraction of "they are", written "they\'re".',
+    ),
+    (
+        # "read a essay". Only spelled vowels, so "a university" and "a one-way
+        # street" are left alone, as is "a European".
+        "a-before-vowel",
+        re.compile(
+            r"(?<!\w)(?P<word>[Aa])\s+(?=(?!one\b)(?!once\b)(?!eu)[aeio][a-z])"
+        ),
+        "an",
+        'Use "an" before a word that starts with a vowel sound.',
+    ),
+    (
+        "your-for-youre",
+        re.compile(
+            r"(?<!\w)(?P<word>[Yy]our)\s+"
+            r"(?=(?:going|gonna|not|welcome|right|wrong|probably|definitely|"
+            r"always|never)\b)"
+        ),
+        "you're",
+        'This is the contraction of "you are", written "you\'re".',
+    ),
+    (
+        "its-for-it-is",
+        re.compile(
+            r"(?<!\w)(?P<word>[Ii]ts)\s+"
+            r"(?=(?:a|an|the|not|going|been|only|just|too|very|now|clear|"
+            r"important|possible|likely)\b)"
+        ),
+        "it's",
+        'This is the contraction of "it is", written "it\'s".',
+    ),
+    (
+        # A comparative always takes "than", never "then".
+        "then-for-than",
+        re.compile(
+            r"(?<!\w)(?:more|less|better|worse|rather|other|otherwise|fewer"
+            r"|[a-z]{3,}er)\s+(?P<word>[Tt]hen)(?!\w)",
+            re.IGNORECASE,
+        ),
+        "than",
+        'A comparison takes "than". "Then" is about time.',
+    ),
+    (
+        "affect-for-effect",
+        re.compile(
+            # One optional adjective is allowed between the determiner and the
+            # noun ("the main affect"), but never a pronoun or an auxiliary,
+            # which would make the following word a verb and correct already.
+            r"(?<!\w)(?:the|an|any|no|this|that|side|little|great)\s+"
+            r"(?:(?!we\b|they\b|you\b|i\b|he\b|she\b|it\b|can\b|could\b|will\b"
+            r"|would\b|may\b|might\b|must\b|not\b|do\b|does\b|did\b|to\b)"
+            r"[a-z]+\s+)?"
+            r"(?P<word>[Aa]ffect)(?!\w)",
+            re.IGNORECASE,
+        ),
+        "effect",
+        'The noun is "effect". "Affect" is the verb.',
+    ),
+    (
+        "effect-for-affect",
+        re.compile(
+            r"(?<!\w)(?:to|will|would|can|could|may|might|not)\s+"
+            r"(?P<word>[Ee]ffect)(?!\w)",
+            re.IGNORECASE,
+        ),
+        "affect",
+        'The verb is "affect". "Effect" is the noun.',
+    ),
+    (
+        "loose-for-lose",
+        re.compile(
+            r"(?<!\w)(?:to|will|would|could|might|may|can|not|never|always)\s+"
+            r"(?P<word>[Ll]oose)(?!\w)",
+            re.IGNORECASE,
+        ),
+        "lose",
+        '"Loose" is the opposite of tight. The verb is "lose".',
+    ),
+)
+
+
+def _homophone_candidates(
+    text: str,
+    protected: tuple[tuple[int, int], ...],
+) -> list[_Candidate]:
+    found: list[_Candidate] = []
+    for rule, pattern, replacement, explanation in _HOMOPHONE_RULES:
+        for match in pattern.finditer(text):
+            start = match.start("word")
+            end = match.end("word")
+            if _is_protected(start, end, protected):
+                continue
+            found.append(
+                _Candidate(
+                    rule,
+                    SuggestionCategory.SPELLING,
+                    "Fix the wrong word",
+                    explanation,
+                    start,
+                    end,
+                    _match_case(match.group("word"), replacement),
+                )
+            )
     return found
 
 
