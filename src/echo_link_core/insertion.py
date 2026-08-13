@@ -299,14 +299,6 @@ def _word_visible_text_and_spans(text: str) -> tuple[str, tuple[tuple[int, int],
         if character in _WORD_UIA_OMITTED_CHARACTERS:
             index += 1
             continue
-        if character == _WORD_NONBREAKING_SPACE and not visible:
-            # Only a *leading* one is dropped, and only because accessibility
-            # drops it: a document starting with U+00A0 read as 5204 characters
-            # through COM and 5203 through UI Automation. An interior one is
-            # reported by both and becomes a plain space below, so the two
-            # sides stay the same length and every offset survives.
-            index += 1
-            continue
         if character == "\r":
             raw_end = index + 1
             if raw_end < len(raw) and raw[raw_end] == "\n":

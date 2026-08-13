@@ -1198,26 +1198,57 @@ def test_module_never_references_clipboard_fallback():
 def test_capture_and_replacement_agree_on_a_word_document_digest():
     """Accept was refused on every multi-paragraph Word document.
 
-    Word hands UI Automation a bare carriage return for each paragraph
-    mark and hands COM extra characters of its own. The two sides
-    digested those differently, so the replacement path decided the
-    document had changed underneath it and refused, on a document
-    nobody had touched.
+    Word hands UI Automation a bare carriage return for each paragraph mark and
+    hands COM extra characters of its own. The two sides digested those
+    differently, so the replacement path decided the document had changed
+    underneath it and refused, on a document nobody had touched.
+
+    This used to prefix the COM text with U+00A0 and assert the digests still
+    matched, because the reader deleted every non-breaking space. Deleting is
+    what made it wrong: Word puts a leading one into these documents, the
+    reader dropped it, and from there the app's offsets were one behind Word's.
+    The first correction then relocated that character into the middle of a
+    word, turning "error-filled" into "error-fille" plus a non-breaking space
+    plus "d", after which every remaining section was correctly refused. Essays
+    7 and 12 lost nine paragraphs each that way.
+
+    Nothing is deleted now, so a COM-only character is a genuine mismatch and
+    the replacement is refused. Refusing is safe; corrupting a sentence is not.
     """
     import hashlib as _hashlib
 
     from echo_link_core.insertion import _word_visible_text_and_spans
 
     carriage = chr(13)
-    uia_text = carriage.join(
+    document = carriage.join(
         ("Dogs Makes Grate Petts", "in Bakersfield", "third line")
     )
-    com_text = chr(160) + uia_text
 
-    visible, _spans = _word_visible_text_and_spans(com_text)
-    replacement_digest = _hashlib.sha256(visible.encode("utf-8")).hexdigest()
+    visible, spans = _word_visible_text_and_spans(document)
 
-    assert _text_digest(uia_text) == replacement_digest
+    assert _text_digest(document) == _hashlib.sha256(
+        visible.encode("utf-8")
+    ).hexdigest()
+    assert len(spans) == len(visible), "no character may be dropped"
+
+
+def test_a_non_breaking_space_never_shifts_an_offset():
+    """One character in, one character out, wherever it sits.
+
+    A deleted character moves every offset after it, and the write path then
+    lands in the wrong place.
+    """
+    from echo_link_core.insertion import _word_visible_text_and_spans
+
+    leading = chr(160) + "A pigeon can become a loyal pet."
+    interior = "intentionally error-filled" + chr(160) + "practice essay"
+
+    for document in (leading, interior):
+        visible, spans = _word_visible_text_and_spans(document)
+
+        assert len(visible) == len(document)
+        assert len(spans) == len(document)
+        assert chr(160) not in visible
 
 
 def test_word_page_expansion_never_shrinks_a_larger_selection():
