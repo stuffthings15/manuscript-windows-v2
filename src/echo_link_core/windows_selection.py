@@ -109,7 +109,7 @@ class WindowsSelectionReader:
                             )
                         continue
                     selected_range = ranges[0]
-                    text = selected_range.GetText(self.max_characters + 1)
+                    text = normalize_captured_text(selected_range.GetText(self.max_characters + 1))
                     if not isinstance(text, str):
                         if diagnostic:
                             logger.info("Word HUD candidate rejected non-text")
@@ -140,7 +140,7 @@ class WindowsSelectionReader:
                             if diagnostic:
                                 logger.info("Word HUD candidate rejected no-caret-sentence")
                             continue
-                        text = selected_range.GetText(self.max_characters + 1)
+                        text = normalize_captured_text(selected_range.GetText(self.max_characters + 1))
                         if not isinstance(text, str) or not text.strip():
                             if diagnostic:
                                 logger.info("Word HUD candidate rejected empty-caret-sentence")
@@ -204,7 +204,7 @@ class WindowsSelectionReader:
                             if page_unit is not None:
                                 page_range = selected_range.Clone()
                                 page_range.ExpandToEnclosingUnit(page_unit)
-                                page_text = page_range.GetText(self.max_characters + 1)
+                                page_text = normalize_captured_text(page_range.GetText(self.max_characters + 1))
                                 # Grow, never shrink. Widening a caret or a
                                 # short selection to its page is how the badge
                                 # offers a useful amount to review. Applying it
@@ -245,7 +245,7 @@ class WindowsSelectionReader:
                     selection_end = None
                     document_range = getattr(pattern, "DocumentRange", None)
                     if document_range is not None:
-                        document_text = document_range.GetText(self.max_characters + 1)
+                        document_text = normalize_captured_text(document_range.GetText(self.max_characters + 1))
                         if (
                             isinstance(document_text, str)
                             and len(document_text) <= self.max_characters
@@ -358,7 +358,7 @@ class WindowsSelectionReader:
                     text = ""
                     anchor = None
                     if document_range is not None:
-                        value = document_range.GetText(self.max_characters + 1)
+                        value = normalize_captured_text(document_range.GetText(self.max_characters + 1))
                         if not isinstance(value, str) or len(value) > self.max_characters:
                             continue
                         text = value
@@ -419,7 +419,7 @@ class WindowsSelectionReader:
                     )
                     if document_range is None:
                         continue
-                    text = document_range.GetText(self.max_characters + 1)
+                    text = normalize_captured_text(document_range.GetText(self.max_characters + 1))
                     if (
                         not isinstance(text, str)
                         or not text.strip()
@@ -489,7 +489,7 @@ class WindowsSelectionReader:
                     if page_unit is None:
                         continue
                     page_range.ExpandToEnclosingUnit(page_unit)
-                    page_text = page_range.GetText(self.max_characters + 1)
+                    page_text = normalize_captured_text(page_range.GetText(self.max_characters + 1))
                     if (
                         not isinstance(page_text, str)
                         or not page_text.strip()
@@ -505,7 +505,7 @@ class WindowsSelectionReader:
                     selection_end = None
                     document_range = getattr(pattern, "DocumentRange", None)
                     if document_range is not None:
-                        document_text = document_range.GetText(self.max_characters + 1)
+                        document_text = normalize_captured_text(document_range.GetText(self.max_characters + 1))
                         if (
                             isinstance(document_text, str)
                             and len(document_text) <= self.max_characters
@@ -566,7 +566,7 @@ class WindowsSelectionReader:
                 )
                 if candidate_range is None:
                     continue
-                candidate_text = candidate_range.GetText(self.max_characters + 1)
+                candidate_text = normalize_captured_text(candidate_range.GetText(self.max_characters + 1))
                 candidate_base = _record_text_offset(record, control, candidate_text)
                 if candidate_base is not None:
                     document_range = candidate_range
@@ -596,7 +596,7 @@ class WindowsSelectionReader:
                     )
                     if candidate_range is None:
                         continue
-                    candidate_text = candidate_range.GetText(self.max_characters + 1)
+                    candidate_text = normalize_captured_text(candidate_range.GetText(self.max_characters + 1))
                     candidate_base = _record_text_offset(record, control, candidate_text)
                     if candidate_base is not None:
                         matches.append((candidate_range, candidate_text, candidate_base))
@@ -653,7 +653,7 @@ class WindowsSelectionReader:
             )
             if document_range is None:
                 return False
-            text = document_range.GetText(self.max_characters + 1)
+            text = normalize_captured_text(document_range.GetText(self.max_characters + 1))
             if not isinstance(text, str) or len(text) > self.max_characters:
                 return False
             if record.document_digest:
@@ -746,7 +746,7 @@ class WindowsSelectionReader:
         document_range = getattr(pattern, "DocumentRange", None) if pattern is not None else None
         if document_range is None:
             return None
-        document_text = document_range.GetText(self.max_characters + 1)
+        document_text = normalize_captured_text(document_range.GetText(self.max_characters + 1))
         if (
             not isinstance(document_text, str)
             or len(document_text) > self.max_characters
@@ -1005,7 +1005,31 @@ def _load_uiautomation():
 
 # Characters Word's COM text contains that UI Automation never reports;
 # kept in step with insertion._WORD_UIA_OMITTED_CHARACTERS.
-_COM_ONLY_CHARACTERS = frozenset({chr(0x01), chr(0xA0)})
+_COM_ONLY_CHARACTERS = frozenset({chr(0x01)})
+_NONBREAKING_SPACE = chr(0xA0)
+
+
+def normalize_captured_text(text: str) -> str:
+    """The one form of a document every part of the review agrees on.
+
+    Word does not report a non-breaking space consistently: essay 12 of the
+    corpus was captured with U+00A0 at offset 68 through accessibility, and the
+    COM read of the same document did not have it. The replacement path then
+    saw two texts differing by one character, correctly refused to write into
+    what looked like a changed document, and after two refusals the review
+    demanded a fresh capture and froze at "1 of 10". Three essays of a
+    twenty-essay run died that way.
+
+    It is mapped to a plain space rather than deleted, and that is the whole
+    trick: deleting shifts every offset after it, so a review's section bounds
+    would no longer point where they did at capture. One character for one
+    character keeps every span valid.
+
+    Apply this wherever captured text enters the review, so the text the reader
+    sees, the digest that identifies the document, and the live read that
+    verifies it are all the same string.
+    """
+    return str(text or "").replace(_NONBREAKING_SPACE, " ")
 
 
 def _text_digest(text: str) -> str:
@@ -1019,7 +1043,7 @@ def _text_digest(text: str) -> str:
     COM range replacement refused changed document text", on a document the
     writer had not touched.
     """
-    value = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    value = normalize_captured_text(text).replace("\r\n", "\n").replace("\r", "\n")
     value = "".join(
         character
         for character in value
@@ -1047,12 +1071,12 @@ def _selection_offsets(
         )
         if moved is False:
             return None, None
-        prefix_text = prefix.GetText(max_characters + 1)
+        prefix_text = normalize_captured_text(prefix.GetText(max_characters + 1))
         if not isinstance(prefix_text, str):
             return None, None
         start = len(prefix_text)
         end = start + len(selected_text)
-        document_text = document_range.GetText(max_characters + 1)
+        document_text = normalize_captured_text(document_range.GetText(max_characters + 1))
         if (
             not isinstance(document_text, str)
             or end > len(document_text)
@@ -1099,7 +1123,7 @@ def _sentence_range_at_caret(caret_range, automation, max_characters: int):
         paragraph_unit = getattr(text_unit, "Paragraph", text_unit.Line)
         if not paragraph_range.ExpandToEnclosingUnit(paragraph_unit, waitTime=0):
             return None
-        paragraph_text = paragraph_range.GetText(max_characters + 1)
+        paragraph_text = normalize_captured_text(paragraph_range.GetText(max_characters + 1))
         if not isinstance(paragraph_text, str) or not paragraph_text.strip():
             return None
         prefix_range = paragraph_range.Clone()
@@ -1110,7 +1134,7 @@ def _sentence_range_at_caret(caret_range, automation, max_characters: int):
             waitTime=0,
         ):
             return None
-        prefix = prefix_range.GetText(max_characters + 1)
+        prefix = normalize_captured_text(prefix_range.GetText(max_characters + 1))
         if not isinstance(prefix, str):
             return None
         bounds = _sentence_chunk_bounds_at_position(paragraph_text, len(prefix))

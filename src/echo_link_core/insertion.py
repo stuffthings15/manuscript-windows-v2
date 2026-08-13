@@ -54,7 +54,14 @@ _WORD_COM_NOT_APPLICABLE = object()
 # read as 5204 characters through COM and 5203 through UI Automation, so the
 # two never matched, every offset after it was out by one, and Replace Text
 # refused a document the writer had not touched.
-_WORD_UIA_OMITTED_CHARACTERS = frozenset({chr(0x01), chr(0xA0)})
+_WORD_UIA_OMITTED_CHARACTERS = frozenset({chr(0x01)})
+# A non-breaking space used to be deleted here too, on the assumption that
+# accessibility never reports one. It does, and Word is not consistent about
+# it: see windows_selection.normalize_captured_text. Deleting it moved every
+# later offset, so a capture and a live read of one document could never be
+# realigned. It is now the same plain space on both sides, which keeps the
+# length and every span.
+_WORD_NONBREAKING_SPACE = chr(0xA0)
 # Only U+0001 actually stands for something that is not text. Refusing every
 # range that merely contained a non-breaking space threw away correct
 # corrections: essay 1 paragraph 3 has one in "Bakersfield , United States",
@@ -238,7 +245,14 @@ def _active_word_application():
 
 
 def _canonical_word_text(text: str, *, remove_final_mark: bool = False) -> str:
-    value = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    value = (
+        str(text or "")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+        # The substitution the capture already made; see
+        # windows_selection.normalize_captured_text.
+        .replace(_WORD_NONBREAKING_SPACE, " ")
+    )
     if remove_final_mark and value.endswith("\n"):
         value = value[:-1]
     return value
@@ -285,6 +299,14 @@ def _word_visible_text_and_spans(text: str) -> tuple[str, tuple[tuple[int, int],
         if character in _WORD_UIA_OMITTED_CHARACTERS:
             index += 1
             continue
+        if character == _WORD_NONBREAKING_SPACE and not visible:
+            # Only a *leading* one is dropped, and only because accessibility
+            # drops it: a document starting with U+00A0 read as 5204 characters
+            # through COM and 5203 through UI Automation. An interior one is
+            # reported by both and becomes a plain space below, so the two
+            # sides stay the same length and every offset survives.
+            index += 1
+            continue
         if character == "\r":
             raw_end = index + 1
             if raw_end < len(raw) and raw[raw_end] == "\n":
@@ -293,7 +315,7 @@ def _word_visible_text_and_spans(text: str) -> tuple[str, tuple[tuple[int, int],
             spans.append((index, raw_end))
             index = raw_end
             continue
-        visible.append(character)
+        visible.append(" " if character == _WORD_NONBREAKING_SPACE else character)
         spans.append((index, index + 1))
         index += 1
     value = "".join(visible)

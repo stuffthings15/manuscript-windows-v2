@@ -1407,33 +1407,22 @@ def test_word_range_replacement_still_refuses_an_object_anchor(monkeypatch):
     assert state["assigned"] == []
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Known defect: Word reports a non-breaking space through one API and "
-        "not the other, in both directions. This case comes from essay 12 of "
-        "the corpus, captured with U+00A0 at offset 68, which the COM read "
-        "drops. The two texts then differ by one character, the replacement is "
-        "refused as a changed document, and after two refusals the review "
-        "freezes at '1 of 10'. It cost essays 7, 12 and 14 of the 2026-08-12 "
-        "batch. "
-        "Not fixed by normalising both sides: "
-        "test_capture_and_replacement_agree_on_a_word_document_digest holds the "
-        "opposite case, where COM carries a leading U+00A0 that accessibility "
-        "never reports. Deleting the character shifts every later offset and "
-        "keeping it breaks that test, so the fix is to normalise once where the "
-        "capture is built, not in the two comparisons."
-    ),
-    strict=True,
-)
 def test_a_non_breaking_space_reads_the_same_through_com_and_accessibility():
-    """The counter freeze, reduced to two lines of text."""
+    """The counter freeze that cost essays 7, 12 and 14, in two lines of text.
+
+    Essay 12 was captured with U+00A0 at offset 68 through accessibility, and
+    the COM read deleted it. The two texts then differed by one character, the
+    replacement was refused as a changed document, and after two refusals the
+    review demanded a fresh capture and froze at "1 of 10".
+
+    Deleting it was the trap: it moves every later offset, so the two sides can
+    never be realigned. An interior one is now the same plain space on both
+    sides. A leading one is still dropped, because accessibility drops it; that
+    case is test_capture_and_replacement_agree_on_a_word_document_digest.
+    """
     sentence = "Pets in Bakersfield," + chr(0xA0) + "United States are common."
-    raw = sentence + chr(13)
 
-    visible, spans = insertion._word_visible_text_and_spans(raw)
-    captured = insertion._canonical_word_text(
-        sentence
-    )
+    visible, spans = insertion._word_visible_text_and_spans(sentence + chr(13))
 
-    assert visible == captured
+    assert visible == insertion._canonical_word_text(sentence)
     assert len(spans) == len(visible), "one span per visible character"
