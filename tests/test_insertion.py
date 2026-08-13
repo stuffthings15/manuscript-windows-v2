@@ -1405,3 +1405,35 @@ def test_word_range_replacement_still_refuses_an_object_anchor(monkeypatch):
     )
     assert _replace_second_sentence(state) is False
     assert state["assigned"] == []
+
+
+@pytest.mark.xfail(
+    reason=(
+        "Known defect: Word reports a non-breaking space through one API and "
+        "not the other, in both directions. This case comes from essay 12 of "
+        "the corpus, captured with U+00A0 at offset 68, which the COM read "
+        "drops. The two texts then differ by one character, the replacement is "
+        "refused as a changed document, and after two refusals the review "
+        "freezes at '1 of 10'. It cost essays 7, 12 and 14 of the 2026-08-12 "
+        "batch. "
+        "Not fixed by normalising both sides: "
+        "test_capture_and_replacement_agree_on_a_word_document_digest holds the "
+        "opposite case, where COM carries a leading U+00A0 that accessibility "
+        "never reports. Deleting the character shifts every later offset and "
+        "keeping it breaks that test, so the fix is to normalise once where the "
+        "capture is built, not in the two comparisons."
+    ),
+    strict=True,
+)
+def test_a_non_breaking_space_reads_the_same_through_com_and_accessibility():
+    """The counter freeze, reduced to two lines of text."""
+    sentence = "Pets in Bakersfield," + chr(0xA0) + "United States are common."
+    raw = sentence + chr(13)
+
+    visible, spans = insertion._word_visible_text_and_spans(raw)
+    captured = insertion._canonical_word_text(
+        sentence
+    )
+
+    assert visible == captured
+    assert len(spans) == len(visible), "one span per visible character"
