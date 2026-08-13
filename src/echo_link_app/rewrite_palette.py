@@ -2607,11 +2607,16 @@ class RewritePalette(QDialog):
                     round(right / scale),
                     round(bottom / scale),
                 )
-            # The badge sits to the right of the selected text. Only fall back
-            # to the left side when the right side would run off the screen.
+            # The badge sits to the right of the selected text. When the anchor
+            # is a whole text box rather than a selection rectangle its right
+            # edge is often at the edge of the window, so "just outside it"
+            # does not fit; sitting flush against the right of the screen keeps
+            # the badge on the side the writer expects. Jumping to the left of
+            # the anchor, which is what this did first, read as the badge
+            # ignoring the setting entirely.
             target_x = right + 8
             if target_x + width - 1 > area.right():
-                target_x = left - width - 8
+                target_x = area.right() - width + 1
             target_y = top + ((bottom - top) - height) // 2
         x = min(max(target_x, area.left()), area.right() - width + 1)
         y = min(max(target_y, area.top()), area.bottom() - height + 1)
