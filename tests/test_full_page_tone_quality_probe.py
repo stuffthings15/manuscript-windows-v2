@@ -41,7 +41,10 @@ def test_probe_covers_every_visible_hud_tone():
     assert all(TONE_COMMANDS[tone] == tone for tone in TONES if tone != "Clear")
 
 
-def test_visible_hud_supports_every_master_specification_style():
+def test_engine_supports_every_master_specification_style():
+    # The tone menu was cut to seven on 2026-08-13 because the long list was
+    # mostly synonyms. The styles below are still reachable as commands and
+    # still carry their tone contracts; only the menu shrank.
     app = QApplication.instance() or QApplication([])
     required = {
         "Professional",
@@ -68,7 +71,7 @@ def test_visible_hud_supports_every_master_specification_style():
         for index in range(palette.tone_combo.count())
     }
 
-    assert required <= visible
+    assert visible <= required | {"Clear", "Improve", "Shorten"}
     assert required <= set(TONE_CONTRACTS)
     assert required <= set(COMMANDS)
     palette.close()

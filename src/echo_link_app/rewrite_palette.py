@@ -494,27 +494,11 @@ class RewritePalette(QDialog):
             (
                 "Clear",
                 "Improve",
-                "Rephrase",
                 "Shorten",
                 "Friendly",
                 "Formal",
-                "Professional",
                 "Academic",
-                "Conversational",
-                "Concise",
-                "Detailed",
-                "Persuasive",
-                "Confident",
-                "Casual",
-                "Technical",
                 "Simplified",
-                "High-school level",
-                "College level",
-                "Diplomatic",
-                "Empathetic",
-                "Cooperative",
-                "Assertive",
-                "Caveman",
             )
         )
         self.tone_combo.setAccessibleName("Rewrite tone")

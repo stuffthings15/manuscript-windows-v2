@@ -29,27 +29,11 @@ DOCX_FORMAT = (
 VISIBLE_TONES = (
     "Clear",
     "Improve",
-    "Rephrase",
     "Shorten",
     "Friendly",
     "Formal",
-    "Professional",
     "Academic",
-    "Conversational",
-    "Concise",
-    "Detailed",
-    "Persuasive",
-    "Confident",
-    "Casual",
-    "Technical",
     "Simplified",
-    "High-school level",
-    "College level",
-    "Diplomatic",
-    "Empathetic",
-    "Cooperative",
-    "Assertive",
-    "Caveman",
 )
 ALL_VISIBLE_MODES = ("Proofread", *VISIBLE_TONES)
 PHYSICAL_HUD_MODES = ("Proofread",)
