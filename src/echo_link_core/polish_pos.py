@@ -69,9 +69,12 @@ _declare(
 _declare(
     "and but or nor so yet because although though while whereas unless "
     "whether if since as than when where wherever whenever however therefore "
-    "moreover furthermore otherwise",
+    "moreover furthermore otherwise why how",
     CONJUNCTION,
 )
+# "why" and "how" were the omission that mattered: the generated table reports
+# "why" as a noun, so the run-on rule read "that is why they are a good choice"
+# as a noun followed by a new clause and split it in two.
 _declare(
     "am is are was were be been being have has had do does did will would "
     "shall should can could may might must ought",

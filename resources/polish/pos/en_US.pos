@@ -4064,6 +4064,7 @@ autodidact	n
 autodidacts	n
 autograph	v
 autographed	v
+autographes	v
 autographing	v
 autographs	
 autoimmune	
@@ -4487,7 +4488,7 @@ badge	n
 badger	v
 badgered	v
 badgering	v
-badgers	n
+badgers	nv
 badges	n
 badinage	n
 badlands	n
@@ -4497,6 +4498,7 @@ badmen
 badminton	n
 badmouth	v
 badmouthed	v
+badmouthes	v
 badmouthing	v
 badmouths	
 badness	n
@@ -4860,7 +4862,7 @@ barbered	v
 barbering	v
 barberries	n
 barberry	n
-barbers	n
+barbers	nv
 barbershop	n
 barbershops	n
 barbie	n
@@ -4878,11 +4880,13 @@ bards	n
 bare	jnv
 bareback	v
 barebacked	v
+barebacks	v
 bared	v
 barefaced	
 barefacedly	r
 barefoot	v
 barefooted	v
+barefoots	v
 barehanded	
 bareheaded	
 barelegged	
@@ -5786,6 +5790,7 @@ benzine	n
 benzyl	
 bequeath	v
 bequeathed	v
+bequeathes	v
 bequeathing	v
 bequeaths	
 bequest	n
@@ -5819,6 +5824,7 @@ berrylike
 berserk	
 berth	v
 berthed	v
+berthes	v
 berthing	v
 berths	
 beryl	n
@@ -5941,6 +5947,7 @@ betroth	v
 betrothal	n
 betrothals	n
 betrothed	nv
+betrothes	v
 betrothing	v
 betroths	
 bets	n
@@ -6325,6 +6332,7 @@ birthdays	n
 birthed	v
 birther	n
 birthers	n
+birthes	v
 birthing	v
 birthmark	n
 birthmarks	n
@@ -6443,7 +6451,7 @@ blacked	v
 blacken	nv
 blackened	v
 blackening	v
-blackens	n
+blackens	nv
 blacker	
 blackest	j
 blackface	
@@ -6676,7 +6684,7 @@ blinked	v
 blinker	v
 blinkered	v
 blinkering	v
-blinkers	n
+blinkers	nv
 blinking	v
 blinks	nv
 blintz	n
@@ -6699,6 +6707,7 @@ blithely	r
 blitheness	n
 blither	v
 blithering	v
+blithers	v
 blithesome	
 blithest	j
 blitz	nv
@@ -6872,6 +6881,7 @@ blowy	j
 blowzier	
 blowziest	j
 blowzy	j
+bls	v
 blubber	nv
 blubbered	v
 blubbering	v
@@ -7134,6 +7144,7 @@ bolder
 boldest	j
 boldface	v
 boldfaced	v
+boldfaces	v
 boldly	r
 boldness	n
 bole	n
@@ -7997,7 +8008,7 @@ brightened	v
 brightener	n
 brighteners	n
 brightening	v
-brightens	n
+brightens	nv
 brighter	
 brightest	j
 brightly	r
@@ -8020,6 +8031,7 @@ brims	n
 brimstone	n
 brindle	v
 brindled	v
+brindles	v
 brine	n
 bring	nv
 bringer	n
@@ -8075,7 +8087,7 @@ broadcloth	n
 broaden	nv
 broadened	v
 broadening	v
-broadens	n
+broadens	nv
 broader	
 broadest	j
 broadloom	n
@@ -8267,6 +8279,7 @@ brutes	n
 brutish	j
 brutishly	r
 brutishness	n
+bs	v
 bu	
 bub	n
 bubble	nv
@@ -8315,6 +8328,7 @@ buckskins	n
 buckteeth	
 bucktooth	v
 bucktoothed	v
+bucktoothes	v
 buckwheat	n
 buckyball	n
 buckyballs	n
@@ -8346,6 +8360,7 @@ buffalo	v
 buffaloed	v
 buffaloes	
 buffaloing	v
+buffalos	v
 buffed	v
 buffer	nv
 buffered	v
@@ -8789,7 +8804,7 @@ butcher	v
 butchered	v
 butcheries	n
 butchering	v
-butchers	n
+butchers	nv
 butchery	n
 butches	n
 butler	n
@@ -8819,7 +8834,7 @@ buttering	v
 buttermilk	n
 butternut	n
 butternuts	n
-butters	n
+butters	nv
 butterscotch	n
 buttery	jn
 buttes	n
@@ -9470,7 +9485,7 @@ caped	v
 caper	v
 capered	v
 capering	v
-capers	n
+capers	nv
 capes	n
 capeskin	n
 capillaries	n
@@ -10360,7 +10375,7 @@ centerfolds	n
 centering	v
 centerpiece	n
 centerpieces	n
-centers	n
+centers	nv
 centigrade	
 centigram	n
 centigrams	n
@@ -10813,7 +10828,7 @@ cheap	j
 cheapen	nv
 cheapened	v
 cheapening	v
-cheapens	n
+cheapens	nv
 cheaper	
 cheapest	j
 cheaply	r
@@ -10998,7 +11013,7 @@ chickenfeed	n
 chickenhearted	
 chickening	v
 chickenpox	n
-chickens	n
+chickens	nv
 chickenshit	n
 chickenshits	n
 chickpea	n
@@ -11283,6 +11298,7 @@ choreograph	v
 choreographed	v
 choreographer	n
 choreographers	n
+choreographes	v
 choreographic	
 choreographically	
 choreographing	v
@@ -12109,6 +12125,7 @@ clubbing
 clubfeet	
 clubfoot	v
 clubfooted	v
+clubfoots	v
 clubhouse	n
 clubhouses	n
 clubland	
@@ -13270,6 +13287,7 @@ comrade	n
 comradely	r
 comrades	n
 comradeship	n
+coms	v
 con	nv
 concatenate	nv
 concatenated	v
@@ -13324,7 +13342,7 @@ concern	v
 concerned	v
 concernedly	r
 concerning	
-concerns	
+concerns	v
 concert	nv
 concerted	v
 concertedly	r
@@ -13487,6 +13505,7 @@ conductor	n
 conductors	n
 conductress	n
 conductresses	n
+conducts	v
 conduit	n
 conduits	n
 cone	n
@@ -13715,6 +13734,7 @@ conk	v
 conked	v
 conker	
 conkers	n
+conks	v
 conman	
 connect	nv
 connectable	
@@ -13871,6 +13891,7 @@ conspiratorially	r
 conspirators	n
 conspire	v
 conspired	v
+conspires	v
 conspiring	v
 constable	n
 constables	n
@@ -14091,6 +14112,7 @@ contortion	n
 contortionist	n
 contortionists	n
 contortions	n
+contorts	v
 contra	
 contraband	n
 contrabassoon	n
@@ -14106,6 +14128,7 @@ contractility
 contracting	v
 contraction	n
 contractions	n
+contracts	v
 contractual	
 contractually	r
 contradict	nv
@@ -14155,6 +14178,7 @@ contraventions	n
 contretemps	n
 contribute	v
 contributed	v
+contributes	v
 contributing	v
 contribution	n
 contributions	n
@@ -14363,7 +14387,7 @@ cooperator	n
 cooperators	n
 coopered	v
 coopering	v
-coopers	n
+coopers	nv
 cooping	v
 coops	nv
 coordinate	nv
@@ -14514,7 +14538,7 @@ corned	v
 corner	v
 cornered	v
 cornering	v
-corners	n
+corners	nv
 cornerstone	n
 cornerstones	n
 cornet	n
@@ -14804,6 +14828,7 @@ cougar	n
 cougars	n
 cough	v
 coughed	v
+coughes	v
 coughing	v
 coughs	
 could	
@@ -15073,7 +15098,7 @@ cowed	v
 cower	v
 cowered	v
 cowering	v
-cowers	n
+cowers	nv
 cowgirl	n
 cowgirls	n
 cowhand	n
@@ -15266,7 +15291,7 @@ crated	v
 crater	v
 cratered	v
 cratering	v
-craters	n
+craters	nv
 crates	nv
 crating	v
 cravat	n
@@ -16429,7 +16454,7 @@ dampened	v
 dampener	n
 dampeners	n
 dampening	v
-dampens	n
+dampens	nv
 damper	n
 dampers	n
 dampest	j
@@ -16513,7 +16538,7 @@ darkened	v
 darkener	n
 darkeners	n
 darkening	v
-darkens	n
+darkens	nv
 darker	
 darkest	j
 darkie	n
@@ -16658,7 +16683,7 @@ deadbolts	n
 deaden	nv
 deadened	v
 deadening	v
-deadens	n
+deadens	nv
 deader	
 deadest	j
 deadhead	nv
@@ -16685,7 +16710,7 @@ deafen	nv
 deafened	v
 deafening	v
 deafeningly	r
-deafens	n
+deafens	nv
 deafer	
 deafest	j
 deafness	n
@@ -16757,6 +16782,7 @@ debilities	n
 debility	n
 debit	v
 debited	v
+debits	v
 debonair	j
 debonairly	r
 debonairness	n
@@ -16778,6 +16804,7 @@ debutante	n
 debutantes	n
 debuted	v
 debuting	v
+debuts	v
 decade	n
 decadence	n
 decadency	n
@@ -16811,6 +16838,7 @@ decathlons	n
 decay	v
 decayed	v
 decaying	v
+decays	v
 deceased	n
 decedent	n
 decedents	n
@@ -16980,9 +17008,11 @@ deduction	n
 deductions	n
 deductive	j
 deductively	r
+deducts	v
 deed	v
 deeded	v
 deeding	v
+deeds	v
 deejay	n
 deejays	n
 deem	nv
@@ -16993,7 +17023,7 @@ deep	jn
 deepen	nv
 deepened	v
 deepening	v
-deepens	n
+deepens	nv
 deeper	
 deepest	j
 deepfake	n
@@ -17143,6 +17173,7 @@ defrayal	n
 defrock	v
 defrocked	v
 defrocking	v
+defrocks	v
 defroster	n
 defrosters	n
 deft	j
@@ -17190,11 +17221,13 @@ delay	v
 delayed	v
 delayer	
 delayers	n
+delays	v
 delectable	
 delectably	
 delectation	n
 delegate	v
 delegated	v
+delegates	v
 delegating	v
 delete	nv
 deleted	v
@@ -17380,8 +17413,10 @@ demonstrativeness	n
 demonstratives	jn
 demonstrator	n
 demonstrators	n
+demos	v
 demote	v
 demoted	v
+demotes	v
 demotic	
 demoting	v
 demount	
@@ -17405,6 +17440,7 @@ denationalization
 denaturation	
 denature	v
 denatured	v
+denatures	v
 denaturing	v
 dendrite	n
 dendrites	n
@@ -17664,6 +17700,7 @@ describe	v
 described	v
 describer	n
 describers	n
+describes	v
 describing	v
 descried	v
 descries	nv
@@ -17729,6 +17766,7 @@ desists	nv
 desk	n
 deskill	v
 deskilling	v
+deskills	v
 desks	n
 desktop	n
 desktops	n
@@ -17884,6 +17922,7 @@ detoxing	v
 detract	v
 detracted	v
 detracting	v
+detracts	v
 detriment	n
 detrimental	
 detrimentally	r
@@ -18091,7 +18130,7 @@ dickens	n
 dicker	v
 dickered	v
 dickering	v
-dickers	n
+dickers	nv
 dickey	n
 dickeys	n
 dickhead	n
@@ -18177,7 +18216,7 @@ differentiating	v
 differentiation	n
 differently	r
 differing	v
-differs	n
+differs	nv
 difficult	
 difficulties	n
 difficultly	r
@@ -18350,7 +18389,7 @@ dingle	n
 dingles	n
 dingo	n
 dingoes	
-dings	n
+dings	nv
 dingus	n
 dinguses	n
 dingy	j
@@ -18533,9 +18572,11 @@ discombobulation	n
 discomfit	v
 discomfited	v
 discomfiting	v
+discomfits	v
 discomfiture	n
 discommode	v
 discommoded	v
+discommodes	v
 discommoding	v
 disconcerting	
 disconcertingly	r
@@ -18547,6 +18588,7 @@ disconsolately	r
 discordance	n
 discordant	
 discordantly	r
+discos	v
 discotheque	n
 discotheques	n
 discourage	nv
@@ -18615,6 +18657,7 @@ disgruntles	nv
 disgruntling	v
 disguise	v
 disguised	v
+disguises	v
 disguising	v
 disgusted	
 disgustedly	r
@@ -18650,6 +18693,7 @@ disillusion	v
 disillusioned	v
 disillusioning	v
 disillusionment	n
+disillusions	v
 disinfectant	n
 disinfectants	n
 disinfection	n
@@ -18680,6 +18724,7 @@ dismember	v
 dismembered	v
 dismembering	v
 dismemberment	n
+dismembers	v
 dismissive	
 dismissively	r
 disorder	
@@ -18872,16 +18917,19 @@ distorter
 distorting	v
 distortion	n
 distortions	n
+distorts	v
 distract	v
 distracted	v
 distractedly	r
 distracting	v
 distraction	n
 distractions	n
+distracts	v
 distrait	
 distraught	
 distress	v
 distressed	v
+distresses	v
 distressful	
 distressing	v
 distressingly	r
@@ -19947,6 +19995,7 @@ dryly	r
 dryness	n
 drys	
 drywall	n
+ds	v
 dual	
 dualism	n
 duality	n
@@ -20309,6 +20358,7 @@ earthbound
 earthed	v
 earthen	
 earthenware	n
+earthes	v
 earthier	
 earthiest	j
 earthiness	n
@@ -20406,7 +20456,7 @@ echoes
 echoic	
 echoing	v
 echolocation	n
-echos	
+echos	v
 eclair	n
 eclairs	n
 eclat	n
@@ -21005,6 +21055,7 @@ embargo	v
 embargoed	v
 embargoes	
 embargoing	v
+embargos	v
 embark	nv
 embarkation	n
 embarkations	
@@ -23002,7 +23053,7 @@ expensively	r
 expensiveness	n
 experience	v
 experienced	v
-experiences	
+experiences	v
 experiencing	
 experiential	
 experiment	nv
@@ -23605,6 +23656,7 @@ falterings	n
 falters	nv
 fame	v
 famed	v
+fames	v
 familial	
 familiar	n
 familiarity	n
@@ -23685,6 +23737,7 @@ far
 farad	n
 faradize	v
 faradized	v
+faradizes	v
 faradizing	v
 farads	n
 faraway	
@@ -24146,7 +24199,7 @@ festal
 fester	v
 festered	v
 festering	v
-festers	n
+festers	nv
 festival	n
 festivals	n
 festive	j
@@ -25003,7 +25056,7 @@ flicked	v
 flicker	v
 flickered	v
 flickering	v
-flickers	n
+flickers	nv
 flicking	v
 flicks	nv
 flied	v
@@ -25033,7 +25086,7 @@ flinches	nv
 flinching	v
 fling	v
 flinging	v
-flings	n
+flings	nv
 flint	n
 flintier	
 flintiest	j
@@ -25195,6 +25248,7 @@ flowery	j
 flowing	v
 flown	
 flows	nv
+fls	v
 flt	
 flu	n
 flub	n
@@ -25612,6 +25666,7 @@ forego	v
 foregoes	
 foregoing	v
 foregone	
+foregos	v
 foreground	nv
 foregrounded	v
 foregrounding	v
@@ -25686,6 +25741,7 @@ foreshortens	nv
 foresight	v
 foresighted	v
 foresightedness	n
+foresights	v
 foreskin	n
 foreskins	n
 forest	nv
@@ -25762,6 +25818,7 @@ forgoers	n
 forgoes	
 forgoing	v
 forgone	
+forgos	v
 forgot	
 forgotten	
 fork	nv
@@ -26209,7 +26266,7 @@ freshened	v
 freshener	n
 fresheners	n
 freshening	v
-freshens	n
+freshens	nv
 fresher	
 freshers	n
 freshest	j
@@ -26275,7 +26332,7 @@ frighten	nv
 frightened	v
 frightening	v
 frighteningly	r
-frightens	n
+frightens	nv
 frightful	j
 frightfully	r
 frightfulness	n
@@ -26395,6 +26452,7 @@ frosts	nv
 frosty	j
 froth	v
 frothed	v
+frothes	v
 frothier	
 frothiest	j
 frothiness	n
@@ -26634,6 +26692,7 @@ furlong	n
 furlongs	n
 furlough	v
 furloughed	v
+furloughes	v
 furloughing	v
 furloughs	
 furls	nv
@@ -26864,6 +26923,7 @@ galoshes	n
 gals	n
 galumph	v
 galumphed	v
+galumphes	v
 galumphing	v
 galumphs	
 galvanic	
@@ -27905,7 +27965,7 @@ glowed	v
 glower	v
 glowered	v
 glowering	v
-glowers	n
+glowers	nv
 glowing	v
 glowingly	r
 glows	nv
@@ -28027,6 +28087,7 @@ godchildren	n
 goddammit	
 goddamn	v
 goddamned	v
+goddamns	v
 goddaughter	n
 goddaughters	n
 goddess	n
@@ -28203,6 +28264,7 @@ gorp	n
 gorps	n
 gorse	n
 gory	j
+gos	v
 gosh	
 goshawk	n
 goshawks	n
@@ -28439,6 +28501,7 @@ grapevine	n
 grapevines	n
 graph	v
 graphed	v
+graphes	v
 graphic	n
 graphical	
 graphically	r
@@ -28689,6 +28752,7 @@ grimly	r
 grimmer	
 grimmest	
 grimness	n
+grims	v
 grimy	j
 grin	n
 grind	nv
@@ -28715,6 +28779,7 @@ grippe	v
 gripped	v
 gripper	n
 grippers	n
+grippes	v
 gripping	v
 grips	nv
 grislier	
@@ -28913,6 +28978,7 @@ gruel	v
 grueling	v
 gruelingly	r
 gruelings	n
+gruels	v
 grues	n
 gruesome	j
 gruesomely	r
@@ -29481,7 +29547,7 @@ haltered	v
 haltering	v
 halterneck	n
 halternecks	n
-halters	n
+halters	nv
 halting	v
 haltingly	r
 halts	nv
@@ -29655,7 +29721,7 @@ hanker	v
 hankered	v
 hankering	nv
 hankerings	n
-hankers	n
+hankers	nv
 hankie	n
 hankies	n
 hanks	n
@@ -29717,7 +29783,7 @@ hardened	v
 hardener	n
 hardeners	n
 hardening	v
-hardens	n
+hardens	nv
 harder	
 hardest	j
 hardhat	n
@@ -29837,6 +29903,7 @@ harrowing	v
 harrows	nv
 harrumph	v
 harrumphed	v
+harrumphes	v
 harrumphing	v
 harrumphs	
 harry	nv
@@ -29876,13 +29943,14 @@ hasted	v
 hasten	nv
 hastened	v
 hastening	v
-hastens	n
+hastens	nv
 hastes	n
 hastier	
 hastiest	j
 hastily	
 hastiness	n
 hasting	v
+hasts	v
 hasty	j
 hat	nv
 hatband	n
@@ -30317,7 +30385,7 @@ height	n
 heighten	nv
 heightened	v
 heightening	v
-heightens	n
+heightens	nv
 heights	n
 heinous	j
 heinously	r
@@ -30626,6 +30694,7 @@ hibiscus	n
 hibiscuses	n
 hiccough	v
 hiccoughed	v
+hiccoughes	v
 hiccoughing	v
 hiccoughs	
 hiccup	nv
@@ -30750,7 +30819,7 @@ hind	n
 hinder	v
 hindered	v
 hindering	v
-hinders	n
+hinders	nv
 hindmost	
 hindquarter	n
 hindquarters	n
@@ -31074,7 +31143,7 @@ homered	v
 homering	v
 homeroom	n
 homerooms	n
-homers	n
+homers	nv
 homes	nv
 homeschooling	n
 homesick	j
@@ -31096,6 +31165,7 @@ homework	v
 homeworker	
 homeworkers	n
 homeworking	v
+homeworks	v
 homewrecker	n
 homewreckers	n
 homey	jn
@@ -31743,6 +31813,7 @@ humpbacks	nv
 humped	v
 humph	v
 humphed	v
+humphes	v
 humphing	v
 humphs	
 humping	v
@@ -31778,7 +31849,7 @@ hunk	n
 hunker	v
 hunkered	v
 hunkering	v
-hunkers	n
+hunkers	nv
 hunkier	
 hunkiest	j
 hunks	n
@@ -31807,6 +31878,7 @@ hurling	nv
 hurls	nv
 hurrah	v
 hurrahed	v
+hurrahes	v
 hurrahing	v
 hurrahs	
 hurricane	n
@@ -31866,6 +31938,7 @@ hutches	n
 huts	n
 huzzah	v
 huzzahed	v
+huzzahes	v
 huzzahing	v
 huzzahs	
 hwy	
@@ -33027,6 +33100,7 @@ incognitos	n
 incombustible	
 incommode	v
 incommoded	v
+incommodes	v
 incommoding	v
 incommodious	
 incommunicado	
@@ -33049,6 +33123,7 @@ incontinent
 incontrovertibly	
 inconvenience	v
 inconvenienced	v
+inconveniences	v
 inconveniencing	v
 incorporate	nv
 incorporated	v
@@ -33081,6 +33156,7 @@ incrimination	n
 incriminatory	
 incrustation	n
 incrustations	n
+incs	v
 incubate	nv
 incubated	v
 incubates	nv
@@ -33139,6 +33215,7 @@ indentations	n
 indention	n
 indenture	v
 indentured	v
+indentures	v
 indenturing	v
 indescribably	
 indestructibly	
@@ -33254,6 +33331,7 @@ induction	n
 inductions	n
 inductive	j
 inductively	r
+inducts	v
 indulge	nv
 indulged	v
 indulgence	n
@@ -33493,6 +33571,7 @@ ingot	n
 ingots	n
 ingrain	v
 ingraining	v
+ingrains	v
 ingrate	n
 ingrates	n
 ingratiate	nv
@@ -33512,6 +33591,7 @@ inhabitant	n
 inhabitants	n
 inhabited	v
 inhabiting	v
+inhabits	v
 inhalant	n
 inhalants	n
 inhalation	n
@@ -33603,6 +33683,7 @@ inkiest	j
 inkiness	n
 inkling	n
 inklings	n
+inks	v
 inkstand	n
 inkstands	n
 inkwell	n
@@ -33670,6 +33751,7 @@ inquire	v
 inquired	v
 inquirer	n
 inquirers	n
+inquires	v
 inquiries	n
 inquiring	v
 inquiringly	r
@@ -33694,6 +33776,7 @@ inscribe	v
 inscribed	v
 inscriber	n
 inscribers	n
+inscribes	v
 inscribing	v
 inscription	n
 inscriptions	n
@@ -33810,6 +33893,7 @@ installments	n
 installs	nv
 instance	v
 instanced	v
+instances	v
 instancing	v
 instant	n
 instantaneous	
@@ -34183,6 +34267,7 @@ interning	v
 internist	n
 internists	n
 internment	n
+interns	v
 internship	n
 internships	n
 interoffice	
@@ -34441,6 +34526,7 @@ invasive
 invective	n
 inveigh	v
 inveighed	v
+inveighes	v
 inveighing	v
 inveighs	
 inveigle	nv
@@ -35884,7 +35970,7 @@ knack	n
 knacker	v
 knackered	v
 knackering	v
-knackers	n
+knackers	nv
 knacks	n
 knapsack	n
 knapsacks	n
@@ -36482,7 +36568,7 @@ lathed	v
 lather	v
 lathered	v
 lathering	v
-lathers	n
+lathers	nv
 lathery	
 lathes	nv
 lathing	v
@@ -36518,6 +36604,7 @@ laugh	v
 laughable	j
 laughably	
 laughed	v
+laughes	v
 laughing	nv
 laughingly	r
 laughingstock	n
@@ -36803,7 +36890,7 @@ leerier
 leeriest	j
 leeriness	n
 leering	v
-leers	n
+leers	nv
 leery	j
 lees	n
 leeward	n
@@ -36917,6 +37004,7 @@ leisure	v
 leisured	v
 leisureliness	n
 leisurely	r
+leisures	v
 leisurewear	n
 leitmotif	n
 leitmotifs	n
@@ -36925,6 +37013,7 @@ leitmotivs	n
 lemma	n
 lemmas	n
 lemme	v
+lemmes	v
 lemming	nv
 lemmings	n
 lemon	n
@@ -36944,7 +37033,7 @@ length	n
 lengthen	nv
 lengthened	v
 lengthening	v
-lengthens	n
+lengthens	nv
 lengthier	
 lengthiest	j
 lengthily	
@@ -36990,7 +37079,7 @@ lessees	n
 lessen	nv
 lessened	v
 lessening	v
-lessens	n
+lessens	nv
 lesser	
 lesson	n
 lessons	n
@@ -37252,6 +37341,7 @@ lighters	n
 lightest	j
 lightface	v
 lightfaced	v
+lightfaces	v
 lightheaded	
 lighthearted	j
 lightheartedly	r
@@ -37443,7 +37533,7 @@ lintels	n
 lintier	
 lintiest	j
 linting	v
-lints	
+lints	v
 linty	j
 lion	n
 lioness	n
@@ -37517,7 +37607,7 @@ listened	v
 listener	n
 listeners	n
 listening	v
-listens	n
+listens	nv
 listeria	
 listing	nv
 listings	n
@@ -37556,6 +37646,7 @@ lithograph	v
 lithographed	v
 lithographer	n
 lithographers	n
+lithographes	v
 lithographic	
 lithographically	
 lithographing	v
@@ -38012,6 +38103,7 @@ loudhailers	n
 loudly	r
 loudmouth	v
 loudmouthed	v
+loudmouthes	v
 loudmouths	
 loudness	n
 loudspeaker	n
@@ -38082,7 +38174,7 @@ lowercase	n
 lowered	v
 lowering	v
 lowermost	
-lowers	n
+lowers	nv
 lowest	j
 lowing	v
 lowish	
@@ -38338,6 +38430,7 @@ lyceums	n
 lychgate	n
 lychgates	n
 lye	v
+lyes	v
 lying	nv
 lymph	n
 lymphatic	n
@@ -38853,6 +38946,7 @@ mange	v
 manged	v
 manger	n
 mangers	n
+manges	v
 mangetout	n
 mangetouts	n
 mangier	
@@ -39399,7 +39493,7 @@ matted	v
 matter	v
 mattered	v
 mattering	v
-matters	n
+matters	nv
 mattes	nv
 matting	nv
 mattock	n
@@ -40041,6 +40135,7 @@ metalwork	v
 metalworker	n
 metalworkers	n
 metalworking	nv
+metalworks	v
 metamorphic	
 metamorphism	n
 metamorphose	nv
@@ -40089,7 +40184,7 @@ meteors	n
 meter	v
 metered	v
 metering	v
-meters	n
+meters	nv
 metes	nv
 metformin	
 meth	j
@@ -40470,6 +40565,7 @@ mime	nv
 mimed	v
 mimeograph	v
 mimeographed	v
+mimeographes	v
 mimeographing	v
 mimeographs	
 mimes	nv
@@ -40791,6 +40887,7 @@ misdoes
 misdoing	nv
 misdoings	n
 misdone	
+misdos	v
 miser	n
 miserable	j
 miserableness	n
@@ -41053,7 +41150,7 @@ mite	n
 miter	v
 mitered	v
 mitering	v
-miters	n
+miters	nv
 mites	n
 mitigate	nv
 mitigated	v
@@ -41228,7 +41325,7 @@ moistened	v
 moistener	n
 moisteners	n
 moistening	v
-moistens	n
+moistens	nv
 moister	
 moistest	j
 moistly	r
@@ -41250,7 +41347,7 @@ molded	v
 molder	v
 moldered	v
 moldering	v
-molders	n
+molders	nv
 moldier	
 moldiest	j
 moldiness	n
@@ -41629,6 +41726,7 @@ morphed	v
 morpheme	n
 morphemes	n
 morphemic	
+morphes	v
 morphia	n
 morphine	n
 morphing	nv
@@ -41850,6 +41948,7 @@ moussing	v
 mousy	j
 mouth	v
 mouthed	v
+mouthes	v
 mouthfeel	
 mouthful	n
 mouthfuls	n
@@ -42269,7 +42368,7 @@ mustard	n
 muster	v
 mustered	v
 mustering	v
-musters	n
+musters	nv
 mustier	
 mustiest	j
 mustily	
@@ -42665,7 +42764,7 @@ neat	j
 neaten	nv
 neatened	v
 neatening	v
-neatens	n
+neatens	nv
 neater	
 neatest	j
 neath	
@@ -42796,6 +42895,7 @@ neighborliness	n
 neighborly	r
 neighbors	nv
 neighed	v
+neighes	v
 neighing	v
 neighs	
 neither	
@@ -43054,7 +43154,7 @@ nickels	n
 nicker	v
 nickered	v
 nickering	v
-nickers	n
+nickers	nv
 nicking	v
 nickle	n
 nickles	n
@@ -43601,6 +43701,7 @@ nonstructural
 nonsuccessive	
 nonsupport	v
 nonsupporting	v
+nonsupports	v
 nonsurgical	
 nonsustaining	
 nonsympathizer	n
@@ -44411,7 +44512,7 @@ offer	v
 offered	v
 offering	nv
 offerings	n
-offers	n
+offers	nv
 offertories	n
 offertory	n
 offhand	
@@ -44458,6 +44559,7 @@ offsetting
 offshoot	n
 offshoots	n
 offshore	v
+offshores	v
 offshoring	v
 offside	
 offsite	
@@ -44641,6 +44743,7 @@ onyxes	n
 oodles	n
 ooh	v
 oohed	v
+oohes	v
 oohing	v
 oohs	
 oomph	
@@ -45143,6 +45246,7 @@ outdone
 outdoor	n
 outdoors	n
 outdoorsy	
+outdos	v
 outdraw	nv
 outdrawing	v
 outdrawn	
@@ -45187,6 +45291,7 @@ outgo	v
 outgoes	
 outgoing	v
 outgoings	n
+outgos	v
 outgrew	
 outgrow	nv
 outgrowing	v
@@ -45388,6 +45493,7 @@ outwearing	v
 outwears	nv
 outweigh	v
 outweighed	v
+outweighes	v
 outweighing	v
 outweighs	
 outwit	n
@@ -45504,6 +45610,7 @@ overcharging	v
 overclock	v
 overclocked	v
 overclocking	v
+overclocks	v
 overcloud	nv
 overclouded	v
 overclouding	v
@@ -45544,6 +45651,7 @@ overdo	v
 overdoes	
 overdoing	v
 overdone	
+overdos	v
 overdose	nv
 overdosed	v
 overdoses	nv
@@ -46493,6 +46601,7 @@ paragon	n
 paragons	n
 paragraph	v
 paragraphed	v
+paragraphes	v
 paragraphing	v
 paragraphs	
 parakeet	n
@@ -46530,6 +46639,7 @@ paramedics	n
 parameter	n
 parameterize	v
 parameterized	v
+parameterizes	v
 parameters	n
 parametric	
 paramilitaries	n
@@ -47300,7 +47410,7 @@ peeress	n
 peeresses	n
 peering	v
 peerless	
-peers	n
+peers	nv
 pees	nv
 peeve	nv
 peeved	v
@@ -47917,7 +48027,7 @@ pest	jn
 pester	v
 pestered	v
 pestering	v
-pesters	n
+pesters	nv
 pesticide	n
 pesticides	n
 pestiferous	
@@ -47948,7 +48058,7 @@ petcocks	n
 peter	v
 petered	v
 petering	v
-peters	n
+peters	nv
 petiole	n
 petioles	n
 petite	n
@@ -48141,6 +48251,7 @@ phish	v
 phished	v
 phisher	n
 phishers	n
+phishes	v
 phishing	v
 phlebitis	n
 phlegm	n
@@ -48231,6 +48342,7 @@ photograph	v
 photographed	v
 photographer	n
 photographers	n
+photographes	v
 photographic	
 photographically	
 photographing	v
@@ -48425,6 +48537,7 @@ pies	n
 piety	n
 piezoelectric	
 piffle	v
+piffles	v
 piffling	v
 pig	n
 pigeon	n
@@ -48580,7 +48693,7 @@ pinfeathers	n
 ping	v
 pinged	v
 pinging	v
-pings	n
+pings	nv
 pinhead	n
 pinheads	n
 pinhole	n
@@ -49495,6 +49608,7 @@ polygonal
 polygons	n
 polygraph	v
 polygraphed	v
+polygraphes	v
 polygraphing	v
 polygraphs	
 polyhedral	
@@ -49623,6 +49737,7 @@ poofter	n
 poofters	n
 pooh	v
 poohed	v
+poohes	v
 poohing	v
 poohs	
 pooing	v
@@ -50855,6 +50970,7 @@ primping	v
 primps	nv
 primrose	n
 primroses	n
+prims	v
 primula	n
 primulas	n
 prince	n
@@ -51000,6 +51116,7 @@ processional	n
 processionals	n
 processioned	v
 processioning	v
+processions	v
 processor	n
 processors	n
 proclamation	n
@@ -51094,6 +51211,7 @@ profiterole	n
 profiteroles	n
 profiting	v
 profitless	
+profits	v
 profligacy	n
 profligate	n
 profligately	r
@@ -51219,6 +51337,7 @@ promote	v
 promoted	v
 promoter	n
 promoters	n
+promotes	v
 promoting	v
 promotional	
 prompt	jnv
@@ -51362,6 +51481,7 @@ prorating	v
 prorogation	n
 prorogue	v
 prorogued	v
+prorogues	v
 proroguing	v
 pros	n
 prosaic	
@@ -51371,6 +51491,7 @@ prosceniums	n
 prosciutto	n
 proscribe	v
 proscribed	v
+proscribes	v
 proscribing	v
 proscription	n
 proscriptions	n
@@ -51480,6 +51601,7 @@ protozoic
 protract	v
 protracted	v
 protracting	v
+protracts	v
 protrude	nv
 protruded	v
 protrudes	nv
@@ -51581,6 +51703,7 @@ prurient
 pruriently	r
 pry	jnv
 prying	v
+ps	v
 psalm	n
 psalmist	n
 psalmists	n
@@ -51714,7 +51837,7 @@ puck	n
 pucker	v
 puckered	v
 puckering	v
-puckers	n
+puckers	nv
 puckish	j
 puckishly	r
 puckishness	n
@@ -52100,7 +52223,7 @@ puttered	v
 putterer	n
 putterers	n
 puttering	v
-putters	n
+putters	nv
 puttied	v
 putties	nv
 putting	v
@@ -52397,7 +52520,7 @@ quick	j
 quicken	nv
 quickened	v
 quickening	v
-quickens	n
+quickens	nv
 quicker	
 quickest	j
 quickfire	
@@ -52421,7 +52544,7 @@ quieted	v
 quieten	nv
 quietened	v
 quietening	v
-quietens	n
+quietens	nv
 quieter	
 quietest	j
 quieting	v
@@ -53053,7 +53176,7 @@ rationally	r
 rationals	n
 rationed	v
 rationing	v
-rations	n
+rations	nv
 ratios	n
 ratlike	
 ratline	n
@@ -53388,6 +53511,7 @@ recompensing	v
 recompilation	
 recompile	v
 recompiled	v
+recompiles	v
 recompiling	v
 recon	n
 reconcilable	j
@@ -53401,6 +53525,7 @@ recondite
 reconfiguration	
 reconfigure	v
 reconfigured	v
+reconfigures	v
 reconnaissance	n
 reconnaissances	n
 reconnoiter	nv
@@ -53419,6 +53544,7 @@ recordings	n
 recoup	v
 recouped	v
 recouping	v
+recoups	v
 recourse	n
 recoverable	
 recoveries	n
@@ -53531,6 +53657,7 @@ redirection
 redistrict	v
 redistricted	v
 redistricting	v
+redistricts	v
 redivide	nv
 redivided	v
 redivides	nv
@@ -53543,6 +53670,7 @@ redo	v
 redoing	v
 redolence	n
 redolent	
+redos	v
 redoubt	n
 redoubtable	j
 redoubtably	
@@ -53597,6 +53725,7 @@ reeled	v
 reeling	v
 reels	nv
 reeve	v
+reeves	v
 reeving	v
 reexport	nv
 reexported	v
@@ -53744,6 +53873,7 @@ regalement	n
 regalia	n
 regaling	v
 regally	r
+regals	v
 regard	nv
 regarded	v
 regarding	v
@@ -53862,6 +53992,7 @@ rehears	v
 rehearsal	n
 rehearsals	n
 rehearsed	v
+rehearses	v
 rehearsing	v
 rehi	
 rehung	
@@ -53892,9 +54023,11 @@ reinforces	nv
 reinforcing	v
 reining	v
 reinitialize	
+reins	v
 reinstall	v
 reinstalled	v
 reinstalling	v
+reinstalls	v
 reinstatement	n
 reinsurance	
 reiterate	
@@ -53951,6 +54084,7 @@ relaxes	nv
 relaxing	v
 relay	v
 relayed	v
+relays	v
 releasable	j
 release	
 released	
@@ -54046,6 +54180,7 @@ remedying	v
 remember	v
 remembered	v
 remembering	v
+remembers	v
 remembrance	n
 remembrances	n
 reminder	n
@@ -54160,6 +54295,7 @@ renovator	n
 renovators	n
 renown	v
 renowned	v
+renowns	v
 rent	nv
 rental	n
 rentals	n
@@ -54238,6 +54374,7 @@ repetitively	r
 repetitiveness	n
 rephotograph	v
 rephotographed	v
+rephotographes	v
 rephotographing	v
 replaceable	
 replant	nv
@@ -54359,19 +54496,21 @@ request	v
 requested	v
 requester	
 requesting	v
+requests	v
 requiem	n
 requiems	n
 require	v
 required	v
 requirement	n
 requirements	n
+requires	v
 requiring	v
 requisite	n
 requisites	n
 requisition	nv
 requisitioned	v
 requisitioning	v
-requisitions	n
+requisitions	nv
 requital	n
 requite	nv
 requited	v
@@ -54525,6 +54664,7 @@ respirators	n
 respiratory	
 respire	v
 respired	v
+respires	v
 respiring	v
 resplendence	n
 resplendent	
@@ -54634,6 +54774,7 @@ retainers	n
 retaining	v
 retains	nv
 retake	v
+retakes	v
 retaking	v
 retaliate	nv
 retaliated	v
@@ -54687,6 +54828,7 @@ retirements	n
 retort	v
 retorted	v
 retorting	v
+retorts	v
 retrace	nv
 retraced	v
 retraces	nv
@@ -54698,12 +54840,14 @@ retractile
 retracting	v
 retraction	n
 retractions	n
+retracts	v
 retrain	nv
 retrained	v
 retraining	v
 retrains	nv
 retread	v
 retreaded	v
+retreads	v
 retrenchment	n
 retrenchments	n
 retribution	n
@@ -54855,6 +54999,7 @@ revolt	v
 revolted	v
 revolting	v
 revoltingly	r
+revolts	v
 revolution	n
 revolutionaries	n
 revolutionary	n
@@ -55131,7 +55276,7 @@ ringlets	n
 ringlike	
 ringmaster	n
 ringmasters	n
-rings	n
+rings	nv
 ringside	n
 ringtone	n
 ringtones	n
@@ -55161,7 +55306,7 @@ ripen	nv
 ripened	v
 ripeness	n
 ripening	v
-ripens	n
+ripens	nv
 riper	
 ripest	j
 ripoff	n
@@ -55584,8 +55729,9 @@ roughed	v
 roughen	nv
 roughened	v
 roughening	v
-roughens	n
+roughens	nv
 rougher	
+roughes	v
 roughest	j
 roughhouse	nv
 roughhoused	v
@@ -56652,7 +56798,7 @@ scamp	n
 scamper	v
 scampered	v
 scampering	v
-scampers	n
+scampers	nv
 scampi	n
 scamps	n
 scams	n
@@ -56737,7 +56883,7 @@ scarped	v
 scarper	v
 scarpered	v
 scarpering	v
-scarpers	n
+scarpers	nv
 scarping	v
 scarps	nv
 scarred	
@@ -58027,6 +58173,7 @@ serpentine	n
 serpents	n
 serrate	v
 serrated	v
+serrates	v
 serration	n
 serrations	n
 serried	
@@ -58617,7 +58764,7 @@ shiv	n
 shiver	v
 shivered	v
 shivering	v
-shivers	n
+shivers	nv
 shivery	
 shivs	n
 shoal	nv
@@ -58727,13 +58874,14 @@ shorten	nv
 shortened	v
 shortening	nv
 shortenings	n
-shortens	n
+shortens	nv
 shorter	
 shortest	j
 shortfall	n
 shortfalls	n
 shorthand	v
 shorthanded	v
+shorthands	v
 shorthorn	n
 shorthorns	n
 shorties	n
@@ -58798,7 +58946,7 @@ shower	v
 showered	v
 showering	v
 showerproof	
-showers	n
+showers	nv
 showery	
 showgirl	n
 showgirls	n
@@ -58983,7 +59131,7 @@ sicken	nv
 sickened	v
 sickening	v
 sickeningly	r
-sickens	n
+sickens	nv
 sicker	
 sickest	j
 sickie	n
@@ -59084,6 +59232,7 @@ sifting	v
 sifts	nv
 sigh	v
 sighed	v
+sighes	v
 sighing	v
 sighs	
 sight	nv
@@ -59494,7 +59643,7 @@ skewed	v
 skewer	v
 skewered	v
 skewering	v
-skewers	n
+skewers	nv
 skewing	v
 skews	nv
 ski	nv
@@ -59658,7 +59807,7 @@ slacked	v
 slacken	nv
 slackened	v
 slackening	v
-slackens	n
+slackens	nv
 slacker	n
 slackers	n
 slackest	j
@@ -59748,7 +59897,7 @@ slaveholders	n
 slaver	v
 slavered	v
 slavering	v
-slavers	n
+slavers	nv
 slavery	n
 slaves	nv
 slaving	v
@@ -59831,6 +59980,7 @@ sleeveless
 sleeves	nv
 sleigh	v
 sleighed	v
+sleighes	v
 sleighing	v
 sleighs	
 sleight	n
@@ -59845,6 +59995,7 @@ slenderizing	v
 slenderness	n
 slept	
 sleuth	v
+sleuthes	v
 sleuthing	v
 sleuths	
 slew	nv
@@ -60005,6 +60156,7 @@ slouching	v
 slouchy	j
 slough	v
 sloughed	v
+sloughes	v
 sloughing	v
 sloughs	
 sloven	n
@@ -60121,7 +60273,7 @@ smarted	v
 smarten	nv
 smartened	v
 smartening	v
-smartens	n
+smartens	nv
 smarter	
 smartest	j
 smarties	n
@@ -60232,6 +60384,7 @@ smoochy
 smooth	jv
 smoothed	v
 smoother	
+smoothes	v
 smoothest	j
 smoothie	n
 smoothies	n
@@ -60377,7 +60530,7 @@ snicked	v
 snicker	v
 snickered	v
 snickering	v
-snickers	n
+snickers	nv
 snicking	v
 snicks	nv
 snide	j
@@ -60684,7 +60837,7 @@ softened	v
 softener	n
 softeners	n
 softening	v
-softens	n
+softens	nv
 softer	
 softest	j
 softhearted	
@@ -61000,6 +61153,7 @@ souffle	n
 souffles	n
 sough	v
 soughed	v
+soughes	v
 soughing	v
 soughs	
 sought	
@@ -61257,6 +61411,7 @@ spatula	n
 spatulas	n
 spavin	v
 spavined	v
+spavins	v
 spawn	nv
 spawned	v
 spawning	v
@@ -61627,6 +61782,7 @@ splayed	v
 splayfeet	
 splayfoot	v
 splayfooted	v
+splayfoots	v
 splaying	v
 splays	nv
 spleen	n
@@ -61655,7 +61811,7 @@ splinted	v
 splinter	v
 splintered	v
 splintering	v
-splinters	n
+splinters	nv
 splintery	
 splinting	v
 splints	nv
@@ -62418,7 +62574,7 @@ stationery	n
 stationing	v
 stationmaster	n
 stationmasters	n
-stations	n
+stations	nv
 statistic	n
 statistical	
 statistically	r
@@ -62505,7 +62661,7 @@ steamrolled	v
 steamroller	v
 steamrollered	v
 steamrollering	v
-steamrollers	n
+steamrollers	nv
 steamrolling	v
 steamrolls	nv
 steams	nv
@@ -62534,7 +62690,7 @@ steeped	v
 steepen	nv
 steepened	v
 steepening	v
-steepens	n
+steepens	nv
 steeper	
 steepest	j
 steeping	v
@@ -62697,7 +62853,7 @@ stiffened	v
 stiffener	n
 stiffeners	n
 stiffening	nv
-stiffens	n
+stiffens	nv
 stiffer	
 stiffest	j
 stiffing	v
@@ -62876,6 +63032,7 @@ stomachaches	n
 stomached	v
 stomacher	n
 stomachers	n
+stomaches	v
 stomaching	v
 stomachs	
 stomp	nv
@@ -63021,7 +63178,7 @@ straightened	v
 straightener	n
 straighteners	n
 straightening	v
-straightens	n
+straightens	nv
 straighter	
 straightest	j
 straightforward	jn
@@ -63042,7 +63199,7 @@ strait	n
 straiten	nv
 straitened	v
 straitening	v
-straitens	n
+straitens	nv
 straitjacket	nv
 straitjacketed	v
 straitjacketing	v
@@ -63168,7 +63325,7 @@ stretched	v
 stretcher	v
 stretchered	v
 stretchering	v
-stretchers	n
+stretchers	nv
 stretches	nv
 stretchier	
 stretchiest	j
@@ -63340,6 +63497,7 @@ stucco	v
 stuccoed	v
 stuccoes	
 stuccoing	v
+stuccos	v
 stuck	
 stud	n
 studbook	n
@@ -63821,7 +63979,7 @@ sucked	v
 sucker	v
 suckered	v
 suckering	v
-suckers	n
+suckers	nv
 sucking	v
 suckle	nv
 suckled	v
@@ -64323,6 +64481,7 @@ suppression	n
 suppressive	j
 suppressor	n
 suppressors	n
+supps	v
 suppurate	nv
 suppurated	v
 suppurates	nv
@@ -64605,6 +64764,7 @@ swatting
 sway	nv
 swayback	v
 swaybacked	v
+swaybacks	v
 swayed	v
 swaying	v
 sways	nv
@@ -65211,7 +65371,7 @@ tampered	v
 tamperer	n
 tamperers	n
 tampering	v
-tampers	n
+tampers	nv
 tamping	v
 tampon	n
 tampons	n
@@ -65292,7 +65452,7 @@ tapelines	n
 taper	v
 tapered	v
 tapering	v
-tapers	n
+tapers	nv
 tapes	n
 tapestries	n
 tapestry	n
@@ -65472,7 +65632,7 @@ taut	j
 tauten	nv
 tautened	v
 tautening	v
-tautens	n
+tautens	nv
 tauter	
 tautest	j
 tautly	r
@@ -65699,6 +65859,7 @@ telegraph	v
 telegraphed	v
 telegrapher	n
 telegraphers	n
+telegraphes	v
 telegraphese	
 telegraphic	
 telegraphically	
@@ -65806,7 +65967,7 @@ temperature	n
 temperatures	n
 tempered	v
 tempering	v
-tempers	n
+tempers	nv
 tempest	jn
 tempests	n
 tempestuous	j
@@ -66273,6 +66434,7 @@ thermostatic
 thermostatically	
 thermostats	n
 therms	n
+thes	v
 thesauri	
 thesaurus	n
 thesauruses	n
@@ -66294,7 +66456,7 @@ thickener	n
 thickeners	n
 thickening	nv
 thickenings	n
-thickens	n
+thickens	nv
 thicker	
 thickest	j
 thicket	n
@@ -66444,7 +66606,7 @@ threaten	nv
 threatened	v
 threatening	v
 threateningly	r
-threatens	n
+threatens	nv
 threats	n
 three	n
 threefold	
@@ -66682,7 +66844,7 @@ tiepin	n
 tiepins	n
 tier	v
 tiered	v
-tiers	n
+tiers	nv
 ties	nv
 tiff	nv
 tiffed	v
@@ -66697,7 +66859,7 @@ tightened	v
 tightener	n
 tighteners	n
 tightening	v
-tightens	n
+tightens	nv
 tighter	
 tightest	j
 tightfisted	
@@ -66818,7 +66980,7 @@ tingles	nv
 tingling	nv
 tinglings	n
 tingly	r
-tings	n
+tings	nv
 tinier	
 tiniest	j
 tininess	n
@@ -67182,6 +67344,7 @@ toothaches	n
 toothbrush	n
 toothbrushes	n
 toothed	v
+toothes	v
 toothier	
 toothiest	j
 toothily	
@@ -67277,6 +67440,7 @@ torpedo	v
 torpedoed	v
 torpedoes	
 torpedoing	v
+torpedos	v
 torpid	
 torpidity	n
 torpidly	r
@@ -67390,8 +67554,9 @@ toughened	v
 toughener	n
 tougheners	n
 toughening	v
-toughens	n
+toughens	nv
 tougher	
+toughes	v
 toughest	j
 toughie	n
 toughies	n
@@ -67441,7 +67606,7 @@ towels	nv
 tower	v
 towered	v
 towering	v
-towers	n
+towers	nv
 towhead	nv
 towheaded	v
 towheads	nv
@@ -68063,6 +68228,7 @@ triad	n
 triads	n
 triage	v
 triaged	v
+triages	v
 trial	n
 trialed	
 trialing	
@@ -68245,6 +68411,7 @@ triumphalist
 triumphant	
 triumphantly	r
 triumphed	v
+triumphes	v
 triumphing	v
 triumphs	
 triumvir	n
@@ -68521,7 +68688,7 @@ tucked	v
 tucker	v
 tuckered	v
 tuckering	v
-tuckers	n
+tuckers	nv
 tucking	v
 tucks	nv
 tuft	nv
@@ -68797,6 +68964,7 @@ twilight	n
 twilit	
 twill	v
 twilled	v
+twills	v
 twin	nv
 twine	n
 twined	v
@@ -69072,8 +69240,10 @@ unblushingly	r
 unbosom	v
 unbosomed	v
 unbosoming	v
+unbosoms	v
 unbound	v
 unbounded	v
+unbounds	v
 unbox	nv
 unboxed	v
 unboxes	nv
@@ -69103,10 +69273,12 @@ uncleanest	j
 uncleanliest	j
 uncleanly	j
 uncleanness	n
+uncleans	v
 unclear	jv
 uncleared	v
 unclearer	
 unclearest	j
+unclears	v
 uncles	n
 uncomfortable	
 uncommon	j
@@ -69226,6 +69398,7 @@ undergo	v
 undergoes	
 undergoing	v
 undergone	
+undergos	v
 undergrad	n
 undergrads	n
 undergraduate	n
@@ -69408,6 +69581,7 @@ unenterprising
 unequal	v
 unequaled	v
 unequally	r
+unequals	v
 unerring	
 unerringly	r
 unessential	
@@ -69457,6 +69631,7 @@ unfriendly	j
 unfrock	v
 unfrocked	v
 unfrocking	v
+unfrocks	v
 unfruitful	
 unfunny	
 ungainlier	
@@ -69747,6 +69922,7 @@ unwary	j
 unwavering	
 unwed	
 unwelcome	v
+unwelcomes	v
 unwelcoming	v
 unwell	
 unwieldier	
@@ -70603,6 +70779,7 @@ veto	v
 vetoed	v
 vetoes	
 vetoing	v
+vetos	v
 vets	n
 vetted	
 vetting	
@@ -71248,7 +71425,7 @@ wagered	v
 wagerer	n
 wagerers	n
 wagering	v
-wagers	n
+wagers	nv
 wages	n
 wagged	
 waggeries	n
@@ -71426,6 +71603,7 @@ wannabes	n
 wanner	
 wanness	n
 wannest	
+wans	v
 want	nv
 wanted	v
 wanting	v
@@ -71712,7 +71890,7 @@ waverer	n
 waverers	n
 wavering	v
 waveringly	r
-wavers	n
+wavers	nv
 waves	nv
 wavier	
 waviest	j
@@ -71760,7 +71938,7 @@ weakened	v
 weakener	n
 weakeners	n
 weakening	v
-weakens	n
+weakens	nv
 weaker	
 weakest	j
 weakfish	n
@@ -71942,6 +72120,7 @@ weigh	v
 weighbridge	n
 weighbridges	n
 weighed	v
+weighes	v
 weighing	v
 weighs	
 weight	nv
@@ -72009,7 +72188,7 @@ welted	v
 welter	v
 weltered	v
 weltering	v
-welters	n
+welters	nv
 welterweight	n
 welterweights	n
 welting	v
@@ -72262,7 +72441,7 @@ whisk	nv
 whisked	v
 whisker	v
 whiskered	v
-whiskers	n
+whiskers	nv
 whiskery	
 whiskey	n
 whiskeys	n
@@ -72305,7 +72484,7 @@ whiteners	n
 whiteness	n
 whitening	nv
 whitenings	n
-whitens	n
+whitens	nv
 whiteout	n
 whiteouts	n
 whiter	
@@ -72567,6 +72746,7 @@ windbreakers	n
 windbreaks	n
 windburn	v
 windburned	v
+windburns	v
 windcheater	n
 windcheaters	n
 windchill	n
@@ -72647,7 +72827,7 @@ wingless
 winglike	
 wingnut	n
 wingnuts	n
-wings	n
+wings	nv
 wingspan	n
 wingspans	n
 wingspread	n
@@ -72786,7 +72966,7 @@ withered	v
 withering	v
 witheringly	r
 witherings	n
-withers	n
+withers	nv
 withes	nv
 withheld	
 withhold	nv
@@ -72916,6 +73096,7 @@ wonks	n
 wonky	j
 wont	v
 wonted	v
+wonts	v
 woo	nv
 wood	nv
 woodbine	n
@@ -72973,6 +73154,7 @@ woodwork	v
 woodworker	n
 woodworkers	n
 woodworking	nv
+woodworks	v
 woodworm	n
 woodworms	n
 woody	jn
@@ -73302,6 +73484,7 @@ wryer
 wryest	
 wryly	r
 wryness	n
+ws	v
 wt	
 wunderkind	n
 wunderkinds	n
@@ -73648,6 +73831,7 @@ zeroes
 zeroing	v
 zeros	nv
 zeroth	j
+zes	v
 zest	jn
 zestful	j
 zestfully	r
@@ -73679,7 +73863,7 @@ zingers	n
 zingier	
 zingiest	j
 zinging	v
-zings	n
+zings	nv
 zingy	j
 zinnia	n
 zinnias	n

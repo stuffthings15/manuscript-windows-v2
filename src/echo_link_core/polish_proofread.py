@@ -22,6 +22,12 @@ def _apply_fast_proofread_rules(text: str) -> str:
     text = text.replace("\u00e2\u20ac\u2122", "'")
     suggestions = WritingSuggestionEngine().analyze(text)
     cleaned = apply_all_suggestions(text, suggestions) if suggestions else text
+    # Word-class rules run here rather than inside the suggestion engine, which
+    # has to stay free of I/O. They run after it so the speller has already
+    # repaired the words they look up.
+    from .polish_syntax import apply_syntax_rules
+
+    cleaned = apply_syntax_rules(cleaned)
     for pattern, replacement in (
         (
             r",\s+(But|And|Or|So|Yet)\b",

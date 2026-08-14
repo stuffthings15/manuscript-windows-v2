@@ -172,6 +172,15 @@ def build() -> dict[str, set[str]]:
                 lexicon.setdefault(form, set()).update(form_class_set)
                 continue
             lexicon.setdefault(form, set()).add(form_class)
+        # Every verb has a third person in -s, whether or not the entry
+        # carries the -s flag. "offer/JGMD" does not, so "offers" was reaching
+        # the table only as a spurious generation from "off" plus -ers, tagged
+        # noun and nothing else. A rule asking is_only() would have been told
+        # confidently that "it offers companionship" contains no verb.
+        if VERB in classes:
+            third_person = _inflect(word, "S", rules)
+            if third_person and third_person.isalpha():
+                lexicon.setdefault(third_person, set()).add(VERB)
     return lexicon
 
 
