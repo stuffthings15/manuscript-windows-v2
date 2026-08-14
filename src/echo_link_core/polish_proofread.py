@@ -1055,7 +1055,11 @@ def _apply_fast_proofread_rules(text: str) -> str:
         (r"\bThis was serious mistake\b", "This was a serious mistake"),
         (r"\bone on call supervisor\b", "one on-call supervisor"),
         (
-            r"(?<![,;:])(?<!not)\s+but\s+"
+            # The terminators are in the lookbehind because ". But the animal
+            # creates entertainment" came out as "., but the animal": a
+            # sentence had already ended, and a comma cannot follow a full
+            # stop. It was the last punctuation artefact in the corpus.
+            r"(?<![,;:.!?])(?<!not)\s+but\s+"
             r"(?=(?:several|the|they|he|she|it|MedTrack)\b)",
             ", but ",
         ),
