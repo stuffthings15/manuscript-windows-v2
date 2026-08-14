@@ -96,6 +96,9 @@ _MODIFIER_NORMALIZATION = {
     0x5B: VK_MAP["win"],
     0x5C: VK_MAP["win"],
 }
+_MODIFIER_KEYS = frozenset(
+    {VK_MAP["shift"], VK_MAP["ctrl"], VK_MAP["alt"], VK_MAP["win"]}
+)
 _STOP_CALLBACKS = object()
 
 
@@ -183,6 +186,7 @@ class GlobalPushToTalk(threading.Thread):
             self._stop_callback_dispatcher()
 
     def _hook_callback(self, code, message, data_pointer):
+        swallow = False
         try:
             if code >= 0:
                 data = ctypes.cast(data_pointer, ctypes.POINTER(_KeyboardHookStruct)).contents
@@ -190,18 +194,40 @@ class GlobalPushToTalk(threading.Thread):
                 if message in (self.WM_KEYDOWN, self.WM_SYSKEYDOWN):
                     self._pressed.add(key)
                     pressed = {normalize_hotkey_key(value) for value in self._pressed}
+                    if self.spec.keys.issubset(pressed):
+                        swallow = self._is_trigger(key)
                     if not self._active and self.spec.keys.issubset(pressed):
                         self._active = True
                         self._queue_callback(self.on_press)
                 elif message in (self.WM_KEYUP, self.WM_SYSKEYUP):
+                    was_active = self._active
                     self._pressed.discard(key)
                     pressed = {normalize_hotkey_key(value) for value in self._pressed}
+                    if was_active and self._is_trigger(key):
+                        swallow = True
                     if self._active and not self.spec.keys.issubset(pressed):
                         self._active = False
                         self._queue_callback(self.on_release)
         except Exception:
             logger.exception("Global hotkey callback failed")
+        if swallow:
+            # Stop the chord reaching the focused application. The default
+            # hotkey is ctrl+shift+space, which is also Microsoft Word's
+            # shortcut for a non-breaking space: passing it through inserted
+            # one into the document at the caret, the capture no longer matched
+            # what Word held, and every replacement after that was correctly
+            # refused. It cost 19 of 20 essays in the 2026-08-13 batch and had
+            # been misdiagnosed twice before that.
+            #
+            # Only the trigger key is swallowed, never the modifiers, so
+            # releasing ctrl or shift still behaves normally everywhere else.
+            return 1
         return ctypes.windll.user32.CallNextHookEx(self._hook, code, message, data_pointer)
+
+    def _is_trigger(self, key: int) -> bool:
+        """True for the chord's non-modifier key, the one that completes it."""
+        normalized = normalize_hotkey_key(key)
+        return normalized in self.spec.keys and normalized not in _MODIFIER_KEYS
 
     def stop(self) -> None:
         self._running.clear()

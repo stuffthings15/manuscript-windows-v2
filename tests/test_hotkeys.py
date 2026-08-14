@@ -160,3 +160,77 @@ def test_hotkey_normalizes_left_and_right_modifiers(physical, normalized):
 def test_hotkey_parser_rejects_unsafe_values(value):
     with pytest.raises(ValueError):
         parse_hotkey(value)
+
+
+def test_the_chord_key_never_reaches_the_focused_application(monkeypatch):
+    """The default hotkey is also Microsoft Word's non-breaking space shortcut.
+
+    Passing ctrl+shift+space through inserted a non-breaking space into the
+    document at the caret. The capture then no longer matched what Word held,
+    so every replacement after it was refused: 19 of 20 essays in the
+    2026-08-13 batch corrected one section and stopped.
+    """
+    forwarded = []
+    listener = hotkeys_module.GlobalPushToTalk(
+        "ctrl+shift+space", lambda: None, lambda: None
+    )
+    monkeypatch.setattr(
+        hotkeys_module.ctypes,
+        "windll",
+        SimpleNamespace(
+            user32=SimpleNamespace(
+                CallNextHookEx=lambda *args: forwarded.append(args) or 0
+            )
+        ),
+    )
+
+    def fire(message, key):
+        data = hotkeys_module._KeyboardHookStruct(key, 0, 0, 0, None)
+        return listener._hook_callback(0, message, ctypes.addressof(data))
+
+    listener._start_callback_dispatcher()
+    try:
+        assert fire(listener.WM_KEYDOWN, hotkeys_module.VK_MAP["ctrl"]) == 0
+        assert fire(listener.WM_KEYDOWN, hotkeys_module.VK_MAP["shift"]) == 0
+        # The key that completes the chord is swallowed, both down and up.
+        assert fire(listener.WM_KEYDOWN, hotkeys_module.VK_MAP["space"]) == 1
+        assert fire(listener.WM_KEYUP, hotkeys_module.VK_MAP["space"]) == 1
+        assert fire(listener.WM_KEYUP, hotkeys_module.VK_MAP["shift"]) == 0
+        assert fire(listener.WM_KEYUP, hotkeys_module.VK_MAP["ctrl"]) == 0
+    finally:
+        listener._stop_callback_dispatcher()
+
+    # Three modifier events forwarded, and not one space event among them.
+    assert len(forwarded) == 4
+
+
+def test_a_space_pressed_without_the_chord_still_types(monkeypatch):
+    forwarded = []
+    listener = hotkeys_module.GlobalPushToTalk(
+        "ctrl+shift+space", lambda: None, lambda: None
+    )
+    monkeypatch.setattr(
+        hotkeys_module.ctypes,
+        "windll",
+        SimpleNamespace(
+            user32=SimpleNamespace(
+                CallNextHookEx=lambda *args: forwarded.append(args) or 0
+            )
+        ),
+    )
+
+    def fire(message, key):
+        data = hotkeys_module._KeyboardHookStruct(key, 0, 0, 0, None)
+        return listener._hook_callback(0, message, ctypes.addressof(data))
+
+    listener._start_callback_dispatcher()
+    try:
+        assert fire(listener.WM_KEYDOWN, hotkeys_module.VK_MAP["space"]) == 0
+        assert fire(listener.WM_KEYUP, hotkeys_module.VK_MAP["space"]) == 0
+        # Shift and space alone are not the chord either.
+        assert fire(listener.WM_KEYDOWN, hotkeys_module.VK_MAP["shift"]) == 0
+        assert fire(listener.WM_KEYDOWN, hotkeys_module.VK_MAP["space"]) == 0
+    finally:
+        listener._stop_callback_dispatcher()
+
+    assert len(forwarded) == 4
