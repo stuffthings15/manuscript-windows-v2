@@ -8,7 +8,7 @@ import math
 import sys
 import time
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QCloseEvent,
@@ -199,6 +199,9 @@ class RewritePalette(QDialog):
         self._target_marking_enabled = False
         self._view = "badge"
         self._drag_offset: QPoint | None = None
+        self._badge_press_origin: QPoint | None = None
+        self._badge_drag_offset: QPoint | None = None
+        self._badge_dragged = False
         self._user_positioned = False
         self._analysis_pending = False
         self._pulse_step = 0
@@ -302,8 +305,50 @@ class RewritePalette(QDialog):
             self.badge_button.setIcon(QIcon(str(icon_path)))
             self.badge_button.setIconSize(QSize(22, 22))
         self.badge_button.clicked.connect(self._open_from_badge)
+        # The badge is a button filling the whole window, so the window's own
+        # drag handling never saw a press: mousePressEvent ignores presses that
+        # land on a QPushButton, which is right for the card's controls and
+        # wrong here, where the button is the only thing there is to grab.
+        self.badge_button.installEventFilter(self)
         layout.addWidget(self.badge_button)
         return page
+
+    def eventFilter(self, watched, event):
+        if watched is getattr(self, "badge_button", None):
+            self._filter_badge_drag(event)
+        return super().eventFilter(watched, event)
+
+    def _filter_badge_drag(self, event) -> None:
+        kind = event.type()
+        if kind == QEvent.Type.MouseButtonPress:
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._badge_press_origin = event.globalPosition().toPoint()
+                self._badge_dragged = False
+        elif kind == QEvent.Type.MouseMove:
+            if self._badge_press_origin is None:
+                return
+            origin = self._badge_press_origin
+            moved = event.globalPosition().toPoint() - origin
+            if (
+                not self._badge_dragged
+                and max(abs(moved.x()), abs(moved.y()))
+                < QApplication.startDragDistance()
+            ):
+                # Below the platform's drag threshold this is still a click,
+                # not a drag. Without the threshold a badge could never be
+                # pressed without moving a pixel and sliding away.
+                return
+            if not self._badge_dragged:
+                self._badge_dragged = True
+                self._badge_drag_offset = origin - self.frameGeometry().topLeft()
+            if self._badge_drag_offset is not None:
+                self.move(event.globalPosition().toPoint() - self._badge_drag_offset)
+                self._user_positioned = True
+        elif kind == QEvent.Type.MouseButtonRelease:
+            self._badge_press_origin = None
+            self._badge_drag_offset = None
+            if self._badge_dragged:
+                self._clamp_current_position()
 
     def _build_loading_page(self) -> QWidget:
         page = QFrame()
@@ -861,6 +906,10 @@ class RewritePalette(QDialog):
         self.badge_button.setAccessibleName(f"Manuscript, {tooltip}")
 
     def _open_from_badge(self) -> None:
+        if self._badge_dragged:
+            # The click that ends a drag must not also open the card.
+            self._badge_dragged = False
+            return
         if self._analysis_pending:
             self._analysis_timer.stop()
             self._finish_automatic_analysis()
@@ -2607,16 +2656,22 @@ class RewritePalette(QDialog):
                     round(right / scale),
                     round(bottom / scale),
                 )
-            # The badge sits to the right of the selected text. When the anchor
-            # is a whole text box rather than a selection rectangle its right
-            # edge is often at the edge of the window, so "just outside it"
-            # does not fit; sitting flush against the right of the screen keeps
-            # the badge on the side the writer expects. Jumping to the left of
-            # the anchor, which is what this did first, read as the badge
-            # ignoring the setting entirely.
+            # The badge sits to the right of the text it was captured from.
+            #
+            # Two earlier attempts got this wrong in ways worth recording.
+            # Anchoring outside the right edge works for a selection
+            # rectangle, but the anchor is usually a whole text box whose
+            # right edge is already at the window edge, so there is no room:
+            # the first version then jumped to the left of the box, and the
+            # second parked the badge at the far right of the screen, which is
+            # on the correct side but nowhere near the writing.
+            #
+            # When it will not fit outside, it goes just inside the anchor's
+            # right edge instead, which is beside the text in the reader's
+            # sense of the word.
             target_x = right + 8
             if target_x + width - 1 > area.right():
-                target_x = area.right() - width + 1
+                target_x = right - width - 8
             target_y = top + ((bottom - top) - height) // 2
         x = min(max(target_x, area.left()), area.right() - width + 1)
         y = min(max(target_y, area.top()), area.bottom() - height + 1)
