@@ -35,6 +35,14 @@
 - License and attribution: bundled beside the dictionary as `license.txt` and `README_en_US.txt`
 - Source: https://github.com/LibreOffice/dictionaries
 
+## Word-class table
+
+- File: `pos/en_US.pos`
+- Derived from the LibreOffice English dictionaries listed above, by
+  `tools/build_pos_lexicon.py`. It is a transformation of `en_US.dic` and
+  `en_US.aff` and carries the same licence and attribution; no other source
+  contributes to it.
+
 ## SymSpell English frequency dictionary
 
 - Project: SymSpell
