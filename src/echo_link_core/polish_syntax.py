@@ -266,25 +266,34 @@ def fix_subject_verb_agreement(text: str) -> str:
 # thesis statement. Its subject is the text too, but it tells the reader what
 # the essay covers. A rule keyed on self-reference alone would delete the
 # thesis of every essay, so the predicate has to be the writing judging itself.
+# Four markers survive an adversarial review that reproduced sixteen damaging
+# inputs against the first version. Each one asserts a thing and its opposite,
+# or names the essay's own rhetoric, and none of them has a reading in which it
+# says something about a topic.
+#
+# Deleted after that review, with the input that killed each:
+#
+#   "this part does not connect"    "This part does not connect to the battery,
+#                                   and the circuit stays open" is a physics lab
+#                                   write-up, and the finding was the deletion.
+#   "this paragraph should be about" "This paragraph should probably be about the
+#                                   battle, but Orwell delays it" is literary
+#                                   analysis about someone else's paragraph.
+#   "it still counts"               "A draw is not a win, and it still counts"
+#                                   became "A draw is not a win", which inverts
+#                                   the writer's meaning rather than shortening
+#                                   it. That is the worst outcome available.
+#   "responsibility comes back"     ambiguous in the same way, kept out for the
+#                                   same reason.
+#
+# The corpus loses some coverage. A rule that deletes a student's lab finding is
+# not worth the points.
 _SELF_JUDGING = (
-    # subject is the writing, predicate is about whether the writing works
-    # The subject is "this part" or "this paragraph", never a bare "it": the
-    # first version accepted "it does not ..." and deleted "It does not need
-    # batteries, although some habitats do need lights", which is content.
-    r"this[ \t]+(?:part|paragraph)[ \t]+(?:does[ \t]+not|doesn't|dont)"
-    r"[ \t]+connect",
-    r"this[ \t]+(?:part|paragraph)[ \t]+should[ \t]+probably[ \t]+be[ \t]+about",
-    # "it still counts" ends the sentence when it is the writing excusing
-    # itself. "The owner counts the hours and it still counts as work" carries
-    # on into real content, and deleting from there took the sentence with it.
-    r"it[ \t]+still[ \t]+counts[ \t]*(?=[.!?]|$)",
-    r"(?:this[ \t]+essay[ \t]+is[ \t]+mostly[ \t]+saying|"
-    r"now[ \t]+it[ \t]+suddenly[ \t]+sounds[ \t]+like[ \t]+instructions)",
-    # a claim and its own denial in one breath
     r"good[ \t]+but[ \t]+also[ \t]+not",
-    r"two[ \t]+reasons[ \t]+at[ \t]+once",
-    r"maybe[ \t]+the[ \t]+same[ \t]+reason",
-    r"responsibility[ \t]+(?:comes?|came)[ \t]+back[ \t]+again",
+    r"two[ \t]+reasons[ \t]+at[ \t]+once[ \t]+and[ \t]+maybe[ \t]+the[ \t]+same"
+    r"[ \t]+reason",
+    r"this[ \t]+essay[ \t]+is[ \t]+mostly[ \t]+saying",
+    r"now[ \t]+it[ \t]+suddenly[ \t]+sounds[ \t]+like[ \t]+instructions",
 )
 _META_MARKER = re.compile("|".join(_SELF_JUDGING), re.IGNORECASE)
 # Where a trailing clause begins: a comma with a conjunction, or a relative
@@ -336,6 +345,54 @@ def _clause_end(text: str, after_marker: int, sentence_end: int) -> int:
     return sentence_end if comma == -1 else comma
 
 
+def _merge(text: str, removals: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Join removals separated by nothing, and take an orphaned terminator.
+
+    A sentence carrying two markers produced two removals with a comma and a
+    conjunction between them, and stitching them left "information.  . Still,"
+    - a full stop with nothing in front of it. Merging first, then swallowing a
+    terminator whose sentence has been emptied, keeps the seam honest.
+    """
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(removals):
+        if merged and text[merged[-1][1] : start].strip(" \t,;:and") == "":
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            continue
+        merged.append((start, end))
+    grown: list[tuple[int, int]] = []
+    for start, end in merged:
+        sentence_start, _ = _sentence_bounds(text, start)
+        if not text[sentence_start:start].strip(" \t,;:"):
+            tail = re.compile(r"[ \t]*[.!?][\"'”’)\]]*").match(text, end)
+            if tail is not None:
+                end = tail.end()
+        grown.append((start, end))
+    return grown
+
+
+def _seam(text: str, start: int, end: int) -> str:
+    """What to put where a removal was, looking only at its own edges.
+
+    Returns the joining text, never touching anything beyond the few characters
+    on either side of the cut.
+    """
+    before = text[:start]
+    after = text[end:]
+    ends_sentence = bool(re.search(r"[.!?][\"'”’)\]]*[ \t]*\Z", before))
+    if ends_sentence:
+        # "you., The owner" and "habits.. The owner" both came from stitching a
+        # sentence end onto punctuation the deleted clause had carried.
+        return " " if after[:1] not in ("", " ", "\t", "\n") else ""
+    if re.search(r"[ \t]*[,;:][ \t]*\Z", before) and after[:1] in (".", "!", "?", ""):
+        return ""
+    if not before.strip() and after[:1] in (",", ";"):
+        # The removal opened the text; the comma it left has nothing to attach
+        # to, and "this part does not connect properly, which is why the oil
+        # leaks" came out beginning with a comma.
+        return ""
+    return ""
+
+
 def remove_self_judging_clauses(text: str) -> str:
     """Drop the clauses that comment on the writing rather than the topic.
 
@@ -368,32 +425,26 @@ def remove_self_judging_clauses(text: str) -> str:
         removals.append(removal)
     if not removals:
         return text
+    removals = _merge(text, removals)
+    # Each removal is stitched and tidied at its own seam. The first version
+    # ran the tidying regexes over the whole document once any removal fired,
+    # which edited sentences the rule had never examined: "So did her sister"
+    # became "Did her sister", "Which surprised everyone" lost its "Which", and
+    # an ellipsis three sentences away was collapsed to two dots. Collateral
+    # damage from a cleanup step is still damage.
     pieces: list[str] = []
     index = 0
     for start, end in removals:
-        pieces.append(text[index:start])
+        kept = text[index:start]
+        # The space that preceded the removed clause and the one that follows
+        # it are the same gap; keeping both left "information.  Still,".
+        if kept[-1:] in (" ", "\t") and text[end : end + 1] in (" ", "\t"):
+            kept = kept.rstrip(" \t")
+        pieces.append(kept)
+        pieces.append(_seam(text, start, end))
         index = end
     pieces.append(text[index:])
     joined = "".join(pieces)
-    # Deleting a sentence leaves the space that separated it from the next one.
-    joined = re.sub(r"[ \t]{2,}", " ", joined)
-    joined = re.sub(r"[ \t]+([.!?,;:])", r"\1", joined)
-    # Tidy what a removal leaves at the seam: a comma with nothing after it, a
-    # doubled full stop where the deleted clause carried its own, and a
-    # conjunction left dangling at the start of what remains.
-    joined = re.sub(r"[ \t]*,(?=[ \t]*[.!?])", "", joined)
-    joined = re.sub(r"([.!?])[ \t]*,", r"\1", joined)
-    joined = re.sub(r"\.[ \t]*\.", ".", joined)
-    # Dropping a dangling conjunction leaves the next word starting the
-    # sentence, so it has to be capitalised in the same step. Without this the
-    # pass produced ". the person wakes up" and left the repair to the next
-    # one, which meant the document could be written with a lowercase sentence.
-    joined = re.sub(
-        r"(\A|[.!?][ \t]+)(?:but|and|so|which|yet)\b[ \t,]*(\w)",
-        lambda match: match.group(1) + match.group(2).upper(),
-        joined,
-        flags=re.IGNORECASE,
-    )
     joined = joined.strip()
     # A capture that is nothing but self-judgement is left alone: emptying a
     # paragraph is a bigger change than the defect, and the writer asked for a
@@ -406,13 +457,101 @@ def remove_self_judging_clauses(text: str) -> str:
     return joined
 
 
+# Stock filler from speech. The rule in writing_suggestions removes these only
+# between a determiner and its noun, which left 76 of them in the corpus spread
+# across forty different positions: after a verb, after a coordinator, inside a
+# comma pair, at the start of a sentence.
+#
+# Enumerating positions was the wrong shape. These nine phrases are discourse
+# markers: no sentence requires one, in any position, so the rule removes the
+# phrase and repairs the seam it leaves. "like" and "maybe" are deliberately
+# absent - both are ordinary words here ("just like a dog", "maybe the same
+# reason") and removing them would change what the writer said.
+_DISCOURSE_FILLER = re.compile(
+    r"(?:(?<=\s)|(?<=^)|(?<=,))[ \t]*\b(?:or[ \t]+whatever|you[ \t]+know|"
+    r"to[ \t]+be[ \t]+honest|for[ \t]+real|i[ \t]+guess|anyways|sorta|"
+    r"and[ \t]+stuff|basically)\b[ \t]*,?",
+    re.IGNORECASE,
+)
+
+
+_SENTENCE_LEAD = re.compile(r"(?:\A|[.!?][\"'”’)\]]*)[ \t]*\Z")
+
+
+class _Span:
+    """The two positions of a removal, named the way a match object names them."""
+
+    __slots__ = ("_start", "_end")
+
+    def __init__(self, start: int, end: int) -> None:
+        self._start = start
+        self._end = end
+
+    def start(self) -> int:
+        return self._start
+
+    def end(self) -> int:
+        return self._end
+
+
+def remove_discourse_filler(text: str) -> str:
+    """Take out speech filler wherever it landed, then tidy the seam."""
+    # Adjacent fillers are one removal. "To be honest, you know, even if" has
+    # two, and treating them separately capitalised the "y" of "you know"
+    # before that phrase had been removed, leaving "laughs. Y even if".
+    spans: list[tuple[int, int]] = []
+    for match in _DISCOURSE_FILLER.finditer(text):
+        if spans and not text[spans[-1][1] : match.start()].strip(" \t,"):
+            spans[-1] = (spans[-1][0], match.end())
+            continue
+        spans.append((match.start(), match.end()))
+
+    pieces: list[str] = []
+    index = 0
+    for span_start, span_end in spans:
+        match = _Span(span_start, span_end)
+        pieces.append(text[index : match.start()])
+        # Filler that opened a sentence takes the capital with it: "everybody
+        # laughs. To be honest, you know, even if the event was not funny"
+        # became "... laughs. even if ...", and the document can be written
+        # before any later pass would repair it.
+        opens_sentence = bool(_SENTENCE_LEAD.search("".join(pieces)))
+        rest = text[match.end() :]
+        letter = re.match(r"[ \t]*([a-z])(\w*)", rest)
+        if opens_sentence and letter is not None and not letter.group(2)[:1].isupper():
+            pieces.append(" " + letter.group(1).upper())
+            index = match.end() + letter.end(1)
+            continue
+        pieces.append(" ")
+        index = match.end()
+    pieces.append(text[index:])
+    cleaned = "".join(pieces)
+    if cleaned.strip() in ("", ",", "."):
+        return text
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"[ \t]+([.!?,;:])", r"\1", cleaned)
+    cleaned = re.sub(r",[ \t]*,", ",", cleaned)
+    cleaned = re.sub(r"([,;:])[ \t]*(?=[.!?])", "", cleaned)
+    # A sentence that now begins with a comma lost its opener to the filler.
+    cleaned = re.sub(r"(\A|[.!?][ \t]+)[,;][ \t]*", r"\1", cleaned)
+    cleaned = cleaned.strip()
+    if not cleaned.strip(" .,;:!?\"'"):
+        return text
+    # Restore the capital where the filler had been the first word.
+    if text[:1].isupper() and cleaned[:1].islower():
+        cleaned = cleaned[:1].upper() + cleaned[1:]
+    return cleaned
+
+
 def apply_syntax_rules(text: str) -> str:
     # Self-judgement is removed last, after the run-on splitter has put in the
     # full stops it needs to find where a sentence begins and ends. Run first,
     # on text the writer never punctuated, it could not tell how much it was
     # deleting and took whole paragraphs.
     return remove_self_judging_clauses(
-        fix_subject_verb_agreement(
-            punctuate_bare_list(split_run_on_sentences(text))
+        remove_discourse_filler(
+            fix_subject_verb_agreement(
+                punctuate_bare_list(split_run_on_sentences(text))
+            )
         )
     )

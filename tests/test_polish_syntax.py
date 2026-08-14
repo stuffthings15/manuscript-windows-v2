@@ -12,6 +12,7 @@ from echo_link_core.polish_syntax import (
     apply_syntax_rules,
     fix_subject_verb_agreement,
     punctuate_bare_list,
+    remove_discourse_filler,
     remove_self_judging_clauses,
     split_run_on_sentences,
 )
@@ -179,24 +180,14 @@ def test_both_rules_run_together() -> None:
 
 SELF_JUDGING = (
     (
-        "A pigeon has habits and needs. This part does not connect much, but it "
-        "still counts.",
-        "A pigeon has habits and needs.",
-    ),
-    (
-        "The person wakes up. This shows responsibility and shows the pet is "
-        "there, which are two reasons at once and maybe the same reason.",
-        "The person wakes up. This shows responsibility and shows the pet is there.",
-    ),
-    (
         "Sometimes animals stare because they care, which is why it is good but "
         "also not.",
         "Sometimes animals stare because they care.",
     ),
     (
-        "Care routines help. This paragraph should probably be about fun, but "
-        "responsibility comes back again.",
-        "Care routines help.",
+        "The person wakes up. This shows responsibility and shows the pet is "
+        "there, which are two reasons at once and maybe the same reason.",
+        "The person wakes up. This shows responsibility and shows the pet is there.",
     ),
     (
         "The owner should use trustworthy local information, but this essay is "
@@ -205,17 +196,43 @@ SELF_JUDGING = (
     ),
 )
 
+# Every one of these was produced by an adversarial review of the first version
+# of this rule, and every one is text the rule must not touch. They are kept
+# verbatim because each represents a way a real student essay differs from the
+# corpus this was built against.
 SELF_JUDGING_UNTOUCHED = (
-    # A thesis statement. Its subject is the text, which is why a rule keyed on
-    # self-reference alone would delete the opening of every essay in the
-    # corpus; the predicate has to be the writing judging itself.
+    # "this part" is a component in a lab write-up, and the deletion took the
+    # finding with it.
+    "We wired the bulbs in a row. This part does not connect to the battery, "
+    "and the circuit stays open. Then we tested the switch.",
+    "The engine has a small pipe near the pump. This part does not connect "
+    "properly, which is why the oil leaks.",
+    # "this paragraph" is a paragraph in the book being analysed.
+    "In Chapter Three the writer describes the weather. This paragraph should "
+    "probably be about the battle, but Orwell delays it.",
+    # Deleting "and it still counts" inverts the writer's meaning rather than
+    # shortening it, which is worse than leaving the defect alone.
+    "A draw is not a win, and it still counts. Every point matters in the "
+    "league table.",
+    "It still counts. That is what the referee told us.",
+    # Collateral damage: the cleanup used to run over the whole document, so
+    # "So did her sister" became "Did her sister" in a sentence the rule never
+    # examined, and an ellipsis elsewhere was collapsed to two dots.
+    "Rosa trained all summer. This part does not connect much, but it still "
+    "counts. And she won. So did her sister. Yet the coach said nothing. "
+    "Which surprised everyone.",
+    "A pigeon has habits... This part does not connect much, but it still "
+    "counts. The owner is calm.",
+    # A whole bullet disappeared from a three-item list.
+    "Reasons to recycle:\n- Landfills fill up fast.\n- Even one can matters "
+    "and it still counts.\n- Glass can be melted again.",
+    # A thesis statement, whose subject is the text but which says what the
+    # essay covers.
     "This essay is about a rooftop gardener near an old plaza and why keeping "
     "one could work well.",
     "This paragraph explains the care routine in detail.",
-    # "it does not ..." is ordinary content, and an earlier version deleted it.
     "It does not need batteries, although some habitats do need lights.",
     "The dog does not bark at night, which is a relief.",
-    # "still counts" carrying on into real content.
     "The owner counts the hours and it still counts as work. The pet is fine.",
     "But the dog is loyal and the cat is calm.",
 )
@@ -234,7 +251,7 @@ def test_writing_that_says_something_is_kept(source: str) -> None:
 def test_a_capture_that_is_only_self_judgement_is_left_alone() -> None:
     # Emptying a paragraph is a bigger change than the defect. The writer asked
     # for a correction, not for their text to be deleted.
-    source = "This part does not connect much, but it still counts."
+    source = "Which is why it is good but also not."
     assert remove_self_judging_clauses(source) == source
 
 
@@ -251,3 +268,77 @@ def test_unpunctuated_text_is_refused_rather_than_guessed_at() -> None:
         "same reason"
     )
     assert remove_self_judging_clauses(source) == source
+
+
+FILLER = (
+    (
+        "Checking its behavior makes or whatever a repeating schedule.",
+        "Checking its behavior makes a repeating schedule.",
+    ),
+    (
+        "Some habitats basically do need lights, heaters and filters.",
+        "Some habitats do need lights, heaters and filters.",
+    ),
+    (
+        "Therefore fish makes or whatever good pets.",
+        "Therefore fish makes good pets.",
+    ),
+    (
+        "Daily life sometimes gets boring anyways. Watching the fish helps.",
+        "Daily life sometimes gets boring. Watching the fish helps.",
+    ),
+    (
+        "And that is to be honest why they are a good choice.",
+        "And that is why they are a good choice.",
+    ),
+    (
+        "It offers a reason to care about something beyond you or whatever.",
+        "It offers a reason to care about something beyond you.",
+    ),
+)
+
+FILLER_UNTOUCHED = (
+    # "like" and "maybe" are ordinary words here, and removing them would
+    # change what the writer said. They are deliberately not filler.
+    "The dog is just like a cat in some ways.",
+    "Maybe the same reason applies here.",
+    "She knows the answer.",
+    "The pet is calm, and the owner is patient.",
+)
+
+
+@pytest.mark.parametrize(("source", "expected"), FILLER)
+def test_speech_filler_is_removed_wherever_it_landed(source: str, expected: str) -> None:
+    assert remove_discourse_filler(source) == expected
+
+
+@pytest.mark.parametrize("source", FILLER_UNTOUCHED)
+def test_ordinary_words_are_not_treated_as_filler(source: str) -> None:
+    assert remove_discourse_filler(source) == source
+
+
+def test_a_capture_that_is_only_filler_is_left_alone() -> None:
+    assert remove_discourse_filler("You know.") == "You know."
+
+
+def test_filler_that_opens_a_sentence_hands_back_the_capital() -> None:
+    # "everybody laughs. To be honest, you know, even if the event was not
+    # funny" lost its capital when the filler went, and the document can be
+    # written before any later pass would repair it.
+    source = "Everybody laughs. To be honest, you know, even if the event was not funny."
+    assert remove_discourse_filler(source) == (
+        "Everybody laughs. Even if the event was not funny."
+    )
+
+
+def test_two_fillers_in_a_row_are_one_removal() -> None:
+    # Treating them separately capitalised the "y" of "you know" before that
+    # phrase had been removed, leaving "laughs. Y even if".
+    assert remove_discourse_filler("To be honest, you know, the dog is calm.") == (
+        "The dog is calm."
+    )
+
+
+def test_a_word_that_starts_lowercase_on_purpose_keeps_its_shape() -> None:
+    source = "She knows the answer. Basically iPhone users disagree."
+    assert remove_discourse_filler(source) == "She knows the answer. iPhone users disagree."
