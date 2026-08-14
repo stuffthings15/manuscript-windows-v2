@@ -65,10 +65,21 @@ FILLER = re.compile(
     r"and stuff|basically)\b",
     re.IGNORECASE,
 )
-# Sentences whose subject is the text itself rather than its subject matter.
+# Sentences that comment on the writing rather than the topic, and judge it.
+#
+# "This essay is about a rooftop gardener" is a thesis statement and belongs in
+# the essay. An earlier version of this pattern matched any self-reference and
+# so charged every one of the twenty essays 2.5 points for having one, which is
+# the proxy marking correct writing as a defect. The subject has to be
+# self-referential AND the predicate has to be about whether the writing works.
 META_COMMENTARY = re.compile(
-    r"\b(this (?:part|paragraph|essay)|which is why it is good but also not|"
-    r"it still counts|comes? back again|maybe the same reason)\b",
+    r"\b(?:this (?:part|paragraph)|it) (?:does not|doesn't|should probably)\b"
+    r"|\bit still counts\b"
+    r"|\bgood but also not\b"
+    r"|\bresponsibility (?:comes?|came) back again\b"
+    r"|\btwo reasons at once\b"
+    r"|\bmaybe the same reason\b"
+    r"|\bnow it suddenly sounds like instructions\b",
     re.IGNORECASE,
 )
 ORDINAL_MARKER = re.compile(r"\b(the first reason|to begin with|firstly)\b", re.IGNORECASE)

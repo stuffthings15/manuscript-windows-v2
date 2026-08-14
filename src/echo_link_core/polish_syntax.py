@@ -256,7 +256,158 @@ def fix_subject_verb_agreement(text: str) -> str:
     return "".join(pieces)
 
 
+# Writing that judges itself instead of saying something: "This part does not
+# connect much, but it still counts", "which is why it is good but also not",
+# "which are two reasons at once and maybe the same reason". A reader loses
+# nothing when these go, because they assert nothing about the subject.
+#
+# The distinction that matters, and the one an earlier version of the grader
+# got wrong: "This essay is about a rooftop gardener near an old plaza" is a
+# thesis statement. Its subject is the text too, but it tells the reader what
+# the essay covers. A rule keyed on self-reference alone would delete the
+# thesis of every essay, so the predicate has to be the writing judging itself.
+_SELF_JUDGING = (
+    # subject is the writing, predicate is about whether the writing works
+    # The subject is "this part" or "this paragraph", never a bare "it": the
+    # first version accepted "it does not ..." and deleted "It does not need
+    # batteries, although some habitats do need lights", which is content.
+    r"this[ \t]+(?:part|paragraph)[ \t]+(?:does[ \t]+not|doesn't|dont)"
+    r"[ \t]+connect",
+    r"this[ \t]+(?:part|paragraph)[ \t]+should[ \t]+probably[ \t]+be[ \t]+about",
+    # "it still counts" ends the sentence when it is the writing excusing
+    # itself. "The owner counts the hours and it still counts as work" carries
+    # on into real content, and deleting from there took the sentence with it.
+    r"it[ \t]+still[ \t]+counts[ \t]*(?=[.!?]|$)",
+    r"(?:this[ \t]+essay[ \t]+is[ \t]+mostly[ \t]+saying|"
+    r"now[ \t]+it[ \t]+suddenly[ \t]+sounds[ \t]+like[ \t]+instructions)",
+    # a claim and its own denial in one breath
+    r"good[ \t]+but[ \t]+also[ \t]+not",
+    r"two[ \t]+reasons[ \t]+at[ \t]+once",
+    r"maybe[ \t]+the[ \t]+same[ \t]+reason",
+    r"responsibility[ \t]+(?:comes?|came)[ \t]+back[ \t]+again",
+)
+_META_MARKER = re.compile("|".join(_SELF_JUDGING), re.IGNORECASE)
+# Where a trailing clause begins: a comma with a conjunction, or a relative
+# "which" opening a comment on what came before.
+_CLAUSE_START = re.compile(
+    r",[ \t]+(?:but|and|so|which|although|though|yet)\b", re.IGNORECASE
+)
+_SENTENCE_END = re.compile(r"[.!?](?:[\"'”’)\]]*)")
+_MINIMUM_REMAINING_WORDS = 4
+# Two limits that exist because the sweep found this rule eating paragraphs.
+#
+# In text the writer never punctuated, a "sentence" runs to the end of the
+# paragraph, so deleting one deleted 90 words of real content: "In the case of
+# a family in a house at the edge of town the animal becomes part of the day
+# ..." went with it. If no boundary is within reach, the rule cannot tell what
+# it is deleting and refuses.
+_MAXIMUM_SENTENCE_WORDS = 60
+_MAXIMUM_REMOVED_WORDS = 30
+
+
+def _sentence_bounds(text: str, position: int) -> tuple[int, int]:
+    start = 0
+    for match in _SENTENCE_END.finditer(text, 0, position):
+        start = match.end()
+    end = len(text)
+    match = _SENTENCE_END.search(text, position)
+    if match is not None:
+        end = match.end()
+    while start < len(text) and text[start] in " \t":
+        start += 1
+    return start, end
+
+
+def _clause_end(text: str, after_marker: int, sentence_end: int) -> int:
+    """Where the self-judging clause stops, which is not always the sentence.
+
+    "... sounds like instructions still, it connects because a pet can only be
+    great when its needs are met." has no full stop between the comment and the
+    clause that follows, so deleting to the sentence end took twenty words of
+    real content with it, and in one essay kept the comment and deleted the
+    content instead.
+
+    The first comma after the marker is the boundary. A comment of this kind is
+    short and ends at a comma or a full stop; when the whole sentence is the
+    comment, the second half carries its own marker and is removed by the next
+    pass, so nothing is lost by stopping early.
+    """
+    comma = text.find(",", after_marker, sentence_end)
+    return sentence_end if comma == -1 else comma
+
+
+def remove_self_judging_clauses(text: str) -> str:
+    """Drop the clauses that comment on the writing rather than the topic.
+
+    Deletes the smallest span that carries the comment: a trailing clause when
+    the sentence starts with real content, the whole sentence when it does not.
+    Refuses when too little would be left, because a sentence reduced to three
+    words is a new defect rather than a repair.
+    """
+    removals: list[tuple[int, int]] = []
+    for match in _META_MARKER.finditer(text):
+        if any(existing_start <= match.start() < existing_end
+               for existing_start, existing_end in removals):
+            continue
+        start, end = _sentence_bounds(text, match.start())
+        if len(text[start:end].split()) > _MAXIMUM_SENTENCE_WORDS:
+            continue
+        end = _clause_end(text, match.end(), end)
+        cut = start
+        for boundary in _CLAUSE_START.finditer(text, start, match.start()):
+            cut = boundary.start()
+        if cut > start:
+            kept = text[start:cut]
+            if len(kept.split()) < _MINIMUM_REMAINING_WORDS:
+                continue
+            removal = (cut, end - 1 if text[end - 1 : end] in (".", "!", "?") else end)
+        else:
+            removal = (start, end)
+        if len(text[removal[0] : removal[1]].split()) > _MAXIMUM_REMOVED_WORDS:
+            continue
+        removals.append(removal)
+    if not removals:
+        return text
+    pieces: list[str] = []
+    index = 0
+    for start, end in removals:
+        pieces.append(text[index:start])
+        index = end
+    pieces.append(text[index:])
+    joined = "".join(pieces)
+    # Deleting a sentence leaves the space that separated it from the next one.
+    joined = re.sub(r"[ \t]{2,}", " ", joined)
+    joined = re.sub(r"[ \t]+([.!?,;:])", r"\1", joined)
+    # Tidy what a removal leaves at the seam: a comma with nothing after it, a
+    # doubled full stop where the deleted clause carried its own, and a
+    # conjunction left dangling at the start of what remains.
+    joined = re.sub(r"[ \t]*,(?=[ \t]*[.!?])", "", joined)
+    joined = re.sub(r"\.[ \t]*\.", ".", joined)
+    joined = re.sub(
+        r"(\A|[.!?][ \t]+)(?:but|and|so|which|yet)\b[ \t,]*",
+        r"\1",
+        joined,
+        flags=re.IGNORECASE,
+    )
+    joined = joined.strip()
+    # A capture that is nothing but self-judgement is left alone: emptying a
+    # paragraph is a bigger change than the defect, and the writer asked for a
+    # correction rather than for their text to go. Measured on what is left
+    # after punctuation, so a short but real sentence survives; an earlier
+    # version counted words and refused to repair "Care routines help." because
+    # three words looked like a fragment.
+    if not joined.strip(" .,;:!?\"'"):
+        return text
+    return joined
+
+
 def apply_syntax_rules(text: str) -> str:
-    return fix_subject_verb_agreement(
-        punctuate_bare_list(split_run_on_sentences(text))
+    # Self-judgement is removed last, after the run-on splitter has put in the
+    # full stops it needs to find where a sentence begins and ends. Run first,
+    # on text the writer never punctuated, it could not tell how much it was
+    # deleting and took whole paragraphs.
+    return remove_self_judging_clauses(
+        fix_subject_verb_agreement(
+            punctuate_bare_list(split_run_on_sentences(text))
+        )
     )

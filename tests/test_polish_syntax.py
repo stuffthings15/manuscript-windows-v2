@@ -12,6 +12,7 @@ from echo_link_core.polish_syntax import (
     apply_syntax_rules,
     fix_subject_verb_agreement,
     punctuate_bare_list,
+    remove_self_judging_clauses,
     split_run_on_sentences,
 )
 
@@ -174,3 +175,79 @@ def test_both_rules_run_together() -> None:
         "The gardener lives in Athens Greece. It offers companionship, routine, "
         "education, and a reason to care."
     )
+
+
+SELF_JUDGING = (
+    (
+        "A pigeon has habits and needs. This part does not connect much, but it "
+        "still counts.",
+        "A pigeon has habits and needs.",
+    ),
+    (
+        "The person wakes up. This shows responsibility and shows the pet is "
+        "there, which are two reasons at once and maybe the same reason.",
+        "The person wakes up. This shows responsibility and shows the pet is there.",
+    ),
+    (
+        "Sometimes animals stare because they care, which is why it is good but "
+        "also not.",
+        "Sometimes animals stare because they care.",
+    ),
+    (
+        "Care routines help. This paragraph should probably be about fun, but "
+        "responsibility comes back again.",
+        "Care routines help.",
+    ),
+    (
+        "The owner should use trustworthy local information, but this essay is "
+        "mostly saying pets are good, and now it suddenly sounds like instructions.",
+        "The owner should use trustworthy local information.",
+    ),
+)
+
+SELF_JUDGING_UNTOUCHED = (
+    # A thesis statement. Its subject is the text, which is why a rule keyed on
+    # self-reference alone would delete the opening of every essay in the
+    # corpus; the predicate has to be the writing judging itself.
+    "This essay is about a rooftop gardener near an old plaza and why keeping "
+    "one could work well.",
+    "This paragraph explains the care routine in detail.",
+    # "it does not ..." is ordinary content, and an earlier version deleted it.
+    "It does not need batteries, although some habitats do need lights.",
+    "The dog does not bark at night, which is a relief.",
+    # "still counts" carrying on into real content.
+    "The owner counts the hours and it still counts as work. The pet is fine.",
+    "But the dog is loyal and the cat is calm.",
+)
+
+
+@pytest.mark.parametrize(("source", "expected"), SELF_JUDGING)
+def test_writing_that_judges_itself_is_removed(source: str, expected: str) -> None:
+    assert remove_self_judging_clauses(source) == expected
+
+
+@pytest.mark.parametrize("source", SELF_JUDGING_UNTOUCHED)
+def test_writing_that_says_something_is_kept(source: str) -> None:
+    assert remove_self_judging_clauses(source) == source
+
+
+def test_a_capture_that_is_only_self_judgement_is_left_alone() -> None:
+    # Emptying a paragraph is a bigger change than the defect. The writer asked
+    # for a correction, not for their text to be deleted.
+    source = "This part does not connect much, but it still counts."
+    assert remove_self_judging_clauses(source) == source
+
+
+def test_unpunctuated_text_is_refused_rather_than_guessed_at() -> None:
+    # Without full stops a "sentence" runs to the end of the paragraph, and the
+    # first version deleted ninety words of argument on the strength of one
+    # marker. Over sixty words with no boundary in reach, the rule refuses.
+    source = (
+        "in the case of a family in a house at the edge of town the animal "
+        "becomes part of the day instead of just being decoration the person "
+        "wakes up checks the habitat says hello then maybe forgets their keys "
+        "because the morning got busy and this shows responsibility and also "
+        "shows the pet is there which are two reasons at once and maybe the "
+        "same reason"
+    )
+    assert remove_self_judging_clauses(source) == source
