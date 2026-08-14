@@ -97,6 +97,15 @@ WEIGHTS = {
 
 
 def paragraphs(path: Path) -> list[str]:
+    if path.suffix.lower() == ".txt":
+        # The held-out essays are plain text, one paragraph per line. They are
+        # graded by the same rubric so a gain on the corpus can be compared
+        # against text no rule was tuned to.
+        return [
+            unicodedata.normalize("NFC", line.strip())
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
     xml = zipfile.ZipFile(path).read("word/document.xml").decode("utf-8")
     found: list[str] = []
     for block in _WORD_PARAGRAPH.findall(xml):
@@ -207,7 +216,7 @@ def main() -> int:
     directory = ROOT / arguments.directory
     paths = [
         path
-        for path in sorted(directory.glob("*.docx"))
+        for path in sorted([*directory.glob("*.docx"), *directory.glob("*.txt")])
         # Word writes a "~$name.docx" owner file beside any open document.
         if not path.name.startswith("~$")
     ]
