@@ -382,10 +382,15 @@ def remove_self_judging_clauses(text: str) -> str:
     # doubled full stop where the deleted clause carried its own, and a
     # conjunction left dangling at the start of what remains.
     joined = re.sub(r"[ \t]*,(?=[ \t]*[.!?])", "", joined)
+    joined = re.sub(r"([.!?])[ \t]*,", r"\1", joined)
     joined = re.sub(r"\.[ \t]*\.", ".", joined)
+    # Dropping a dangling conjunction leaves the next word starting the
+    # sentence, so it has to be capitalised in the same step. Without this the
+    # pass produced ". the person wakes up" and left the repair to the next
+    # one, which meant the document could be written with a lowercase sentence.
     joined = re.sub(
-        r"(\A|[.!?][ \t]+)(?:but|and|so|which|yet)\b[ \t,]*",
-        r"\1",
+        r"(\A|[.!?][ \t]+)(?:but|and|so|which|yet)\b[ \t,]*(\w)",
+        lambda match: match.group(1) + match.group(2).upper(),
         joined,
         flags=re.IGNORECASE,
     )
