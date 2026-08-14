@@ -40,7 +40,10 @@ from repro_zero_of_zero import (  # noqa: E402
     press_hotkey,
 )
 
-WORD = re.compile(r"[A-Za-z][A-Za-z']*")
+# A word may contain accented letters. [A-Za-z][A-Za-z']* split "cafe" written
+# with an accent and reported the fragment as an unknown word, so three of the
+# unknown words in the 2026-08-13 batch were this pattern, not any essay.
+WORD = re.compile(r"[^\W\d_][\w']*", re.UNICODE)
 ARTEFACT = re.compile(r"[.!?]\s*,|,\s*,|\s+,|\(\s|\s\)")
 
 
