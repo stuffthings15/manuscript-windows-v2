@@ -887,45 +887,12 @@ _HOMOPHONE_RULES: tuple[tuple[str, re.Pattern[str], str, str], ...] = (
 _DOUBLED_FULL_STOP = re.compile(r"(?<!\.)(?P<dots>\.\.)(?!\.)|(?P<many>\.{4,})")
 
 
-# A plural subject with a third-person singular verb: "pigeons makes good
-# pets", "its needs is met", "some habitats does need lights". The verb set is
-# closed to the copulas plus "makes" on purpose. Measured across the corpus, a
-# wider set matched "a gecko got habits needs and a personality" and "daily life
-# sometimes gets boring", where the word after the -s noun is another noun, not
-# a verb. "is", "was", "has" and "does" are never plural nouns, which is the
-# whole reason they are safe here.
-_SINGULAR_VERB_PLURAL_FORM = {
-    "is": "are",
-    "was": "were",
-    "has": "have",
-    "does": "do",
-    "makes": "make",
-}
-# Nouns that end in s and are singular. A rule keyed on the -s ending alone
-# rewrites the verb after every one of these.
-_SINGULAR_S_NOUNS = frozenset(
-    {
-        "always", "anyways", "das", "his", "its", "less", "news", "perhaps",
-        "series", "sometimes", "species", "this", "thus", "yes",
-    }
-)
-# Endings that mark a singular noun rather than a plural: -us (campus, virus,
-# and the lowercased place name "aarhus" the corpus produced), -ss (business,
-# illness), -is and -sis (analysis, crisis), -ics (physics, politics).
-_SINGULAR_S_ENDINGS = ("us", "ss", "is", "ics")
-_PREPOSITIONS = frozenset(
-    {
-        "about", "across", "after", "among", "around", "at", "before",
-        "behind", "below", "beside", "between", "beyond", "by", "during",
-        "for", "from", "in", "inside", "into", "near", "of", "on", "onto",
-        "outside", "over", "through", "throughout", "to", "toward", "under",
-        "until", "with", "within", "without",
-    }
-)
-_PLURAL_SUBJECT_SINGULAR_VERB = re.compile(
-    r"(?<!\w)(?P<before>(?:[a-z]+[ \t]+){0,2})(?P<noun>[a-z]{3,}s)[ \t]+"
-    r"(?P<verb>" + "|".join(_SINGULAR_VERB_PLURAL_FORM) + r")(?!\w)"
-)
+# The plural-subject rule that used to live here now lives in polish_syntax.py,
+# because it needs the word-class table and this module must stay free of I/O.
+# Four hand-written lists went with it: singular nouns ending in -s, the
+# endings -us -ss -is -ics, a preposition set and a correlative set. Each had
+# been grown one false positive at a time; the lexicon answers all four by
+# asking whether the singular of the word is itself a word.
 # A plural pronoun subject, which needs no noun analysis at all.
 _PRONOUN_PLURAL_FORM = {
     "they": {"is": "are", "was": "were", "has": "have", "does": "do"},
@@ -962,44 +929,6 @@ def _agreement_candidates(
                 start,
                 end,
                 _match_case(match.group("verb"), _PRONOUN_PLURAL_FORM[subject][verb]),
-            )
-        )
-    for match in _PLURAL_SUBJECT_SINGULAR_VERB.finditer(text):
-        noun = match.group("noun")
-        verb = match.group("verb")
-        if noun in _SINGULAR_S_NOUNS or noun.endswith(_SINGULAR_S_ENDINGS):
-            continue
-        # "behavior makes makes a schedule" is a doubled word, not an agreement
-        # error; the duplicate rule owns it and rewriting the second one to
-        # "make" would hide the real defect.
-        if noun == verb:
-            continue
-        # A plural inside a prepositional phrase is not the subject: "one of
-        # the dogs is friendly", "engaging in additional shifts has to be done
-        # voluntarily". Two words of lead are read because the preposition is
-        # usually separated from the noun by a determiner or an adjective.
-        before_words = (match.group("before") or "").lower().split()
-        if _PREPOSITIONS.intersection(before_words):
-            continue
-        # "Neither erased values or estimated temperatures is allowed" takes its
-        # agreement from the correlative, not from the nearest plural, and the
-        # rule that repairs "or" to "nor" keys on "is allowed". Correcting the
-        # verb here left that repair unmatched and the sentence half fixed.
-        if {"or", "nor", "neither", "either"}.intersection(before_words):
-            continue
-        start = match.start("verb")
-        end = match.end("verb")
-        if _is_protected(start, end, protected):
-            continue
-        found.append(
-            _Candidate(
-                "plural-subject-agreement",
-                SuggestionCategory.GRAMMAR,
-                "Fix subject and verb agreement",
-                f'"{noun}" is plural and takes a plural verb.',
-                start,
-                end,
-                _match_case(verb, _SINGULAR_VERB_PLURAL_FORM[verb]),
             )
         )
     return found

@@ -19,17 +19,11 @@ def _corrected(text: str) -> str:
     return apply_all_suggestions(text, engine.analyze(text))
 
 
+# The plural-subject cases moved to tests/test_polish_syntax.py with the rule
+# itself, which now asks the word-class table instead of four hand-written
+# lists. The pronoun rule stays here: it needs no lexicon, so it can live in
+# the module that must not do I/O.
 CORRECTED = (
-    ("Therefore pigeons makes good pets.", "Therefore pigeons make good pets."),
-    (
-        "A pet can only be great when its needs is met.",
-        "A pet can only be great when its needs are met.",
-    ),
-    (
-        "Some habitats does need lights and heaters.",
-        "Some habitats do need lights and heaters.",
-    ),
-    ("The turtles is a patient pet.", "The turtles are a patient pet."),
     ("They was late again.", "They were late again."),
     ("We is ready now.", "We are ready now."),
     ("People has different opinions.", "People have different opinions."),
@@ -54,22 +48,6 @@ CORRECTED = (
 )
 
 UNTOUCHED = (
-    # Singular nouns that end in s. A rule keyed on the ending alone rewrites
-    # the verb after every one of these.
-    "The bus is late.",
-    "Her analysis is finished.",
-    "The business has three owners.",
-    "Physics is hard.",
-    "The news was good.",
-    "This is the plan.",
-    "The species is protected.",
-    "She is a witness.",
-    "The class was quiet.",
-    # The subject is "one"; the plural is inside a prepositional phrase.
-    "One of the dogs is friendly.",
-    # The word after the -s noun is another noun, not a verb.
-    "A gecko got habits needs and a personality.",
-    "Daily life sometimes gets boring.",
     # Real adverbs, outside a noun phrase, which the author meant.
     "The essay is basically finished.",
     "He was, to be honest, exhausted.",
@@ -87,7 +65,3 @@ def test_correct_writing_is_left_alone(source: str) -> None:
     assert _corrected(source) == source
 
 
-def test_a_doubled_word_is_not_read_as_an_agreement_error() -> None:
-    # "behavior makes makes a schedule" is a duplicate, and rewriting the
-    # second one to "make" would hide the defect the duplicate rule owns.
-    assert "makes make" not in _corrected("Checking its behavior makes makes a schedule.")

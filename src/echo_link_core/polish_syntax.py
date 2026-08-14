@@ -169,5 +169,94 @@ def punctuate_bare_list(text: str) -> str:
     return "".join(pieces)
 
 
+# A plural subject with a singular verb. The verb set is closed to the copulas
+# plus "makes": those are the words that are never also plural nouns, which is
+# what makes them safe to key on.
+#
+# The other direction, a singular subject with a plural verb ("The report are
+# ready"), is deliberately absent. It needs to know that a noun is singular,
+# and the evidence for that is far weaker: "people are" and "children are" are
+# correct, "report" is not in the bundled dictionary at all, and every attempt
+# either rewrote those or fired on almost nothing.
+_PLURAL_FORM = {"is": "are", "was": "were", "has": "have", "does": "do", "makes": "make"}
+_AGREEMENT = re.compile(
+    r"(?<!\w)(?P<before>(?:[a-z]+[ \t]+){0,3})(?P<noun>[a-z]{3,})[ \t]+"
+    r"(?P<verb>is|was|has|does|makes)(?!\w)"
+)
+# Nouns that end in -s and do not change in the plural. This is the one hand
+# written list that survived the move to the lexicon, and it survived because
+# it is a closed class of English rather than a list of sentences: "news" looks
+# like the plural of "new" and "species" like the plural of "specie", and both
+# of those singulars are real words, so no amount of morphology separates them.
+# It replaces four lists, one of which was fourteen assorted words.
+_INVARIANT_NOUNS = frozenset(
+    {
+        "barracks", "corps", "crossroads", "economics", "ethics",
+        "headquarters", "mathematics", "means", "measles", "mumps", "news",
+        "physics", "politics", "series", "species", "statistics",
+    }
+)
+# A correlative decides its own agreement from the coordination rather than
+# from the nearest noun, and a compound subject joined by "and" is plural
+# however singular its last noun looks.
+_COORDINATORS = frozenset({"or", "nor", "neither", "either", "and"})
+
+
+def _is_plural_noun(word: str) -> bool:
+    """True when the word is a noun and is the plural of a known noun.
+
+    This replaced four hand-written lists: singular nouns ending in -s, the
+    endings -us -ss -is -ics, a preposition set, and a correlative set. Asking
+    whether the singular exists answers all of the first two at once, and
+    answers them for words nobody thought to list: "analysis" fails because
+    "analysi" is not a word, and the lowercased place name "aarhus" fails
+    because "aarhu" is not either.
+    """
+    if word in _INVARIANT_NOUNS or NOUN not in tags(word):
+        return False
+    for singular in _singular_forms(word):
+        if NOUN in tags(singular):
+            return True
+    return False
+
+
+def _singular_forms(word: str):
+    if word.endswith("ies") and len(word) > 4:
+        yield word[:-3] + "y"
+    if word.endswith("es") and len(word) > 3:
+        yield word[:-2]
+    if word.endswith("s") and len(word) > 2:
+        yield word[:-1]
+
+
+def fix_subject_verb_agreement(text: str) -> str:
+    pieces: list[str] = []
+    index = 0
+    for match in _AGREEMENT.finditer(text):
+        noun = match.group("noun")
+        verb = match.group("verb")
+        before = (match.group("before") or "").split()
+        if noun == verb:
+            # "behavior makes makes a schedule" is a doubled word, and the
+            # duplicate rule owns it.
+            continue
+        if _COORDINATORS.intersection(before):
+            continue
+        # A noun inside a prepositional phrase is not the subject: "one of the
+        # dogs is friendly", "engaging in additional shifts has to be done".
+        if any(PREPOSITION in tags(word) for word in before):
+            continue
+        if not _is_plural_noun(noun):
+            continue
+        replacement = _PLURAL_FORM[verb]
+        pieces.append(text[index : match.start("verb")])
+        pieces.append(replacement)
+        index = match.end("verb")
+    pieces.append(text[index:])
+    return "".join(pieces)
+
+
 def apply_syntax_rules(text: str) -> str:
-    return punctuate_bare_list(split_run_on_sentences(text))
+    return fix_subject_verb_agreement(
+        punctuate_bare_list(split_run_on_sentences(text))
+    )

@@ -10,6 +10,7 @@ import pytest
 
 from echo_link_core.polish_syntax import (
     apply_syntax_rules,
+    fix_subject_verb_agreement,
     punctuate_bare_list,
     split_run_on_sentences,
 )
@@ -87,6 +88,74 @@ def test_a_bare_list_gets_its_commas(source: str, expected: str) -> None:
 @pytest.mark.parametrize("source", LISTS_UNTOUCHED)
 def test_text_that_is_not_a_bare_list_is_left_alone(source: str) -> None:
     assert punctuate_bare_list(source) == source
+
+
+AGREEMENT = (
+    ("Therefore pigeons makes good pets.", "Therefore pigeons make good pets."),
+    (
+        "A pet can only be great when its needs is met.",
+        "A pet can only be great when its needs are met.",
+    ),
+    (
+        "Some habitats does need lights and heaters.",
+        "Some habitats do need lights and heaters.",
+    ),
+    ("The turtles is a patient pet.", "The turtles are a patient pet."),
+    (
+        "Unresolved failures is reported immediately.",
+        "Unresolved failures are reported immediately.",
+    ),
+)
+
+AGREEMENT_UNTOUCHED = (
+    # Singular nouns ending in -s. The lexicon answers these by asking whether
+    # the singular is itself a word: "analysi" and "busines" are not, and
+    # neither is "aarhu", which is how the lowercased place name in the corpus
+    # stopped being corrected without anyone listing it.
+    "The bus is late.",
+    "Her analysis is finished.",
+    "The business has three owners.",
+    "The crisis is over.",
+    "The campus is closed.",
+    "She is a witness.",
+    "The class was quiet.",
+    # Invariant nouns, where the singular *is* a word and morphology cannot
+    # help: "new" and "specie" are both real.
+    "Physics is hard.",
+    "The news was good.",
+    "The species is protected.",
+    "The series is ending.",
+    "The statistics is clear.",
+    # The subject is "one"; the plural is in a prepositional phrase.
+    "One of the dogs is friendly.",
+    "Engaging in additional shifts has to be done.",
+    # A compound subject and a correlative decide their own agreement.
+    "The dog and the cat are happy.",
+    "Neither values or temperatures is allowed.",
+    # The word after the -s noun is another noun, not a verb.
+    "A gecko got habits needs and a personality.",
+    "Daily life sometimes gets boring.",
+    # The other direction is deliberately not implemented; see the note in
+    # polish_syntax.py. "report" is not even in the bundled dictionary.
+    "The report are ready.",
+)
+
+
+@pytest.mark.parametrize(("source", "expected"), AGREEMENT)
+def test_a_plural_subject_gets_a_plural_verb(source: str, expected: str) -> None:
+    assert fix_subject_verb_agreement(source) == expected
+
+
+@pytest.mark.parametrize("source", AGREEMENT_UNTOUCHED)
+def test_correct_agreement_is_left_alone(source: str) -> None:
+    assert fix_subject_verb_agreement(source) == source
+
+
+def test_a_doubled_word_is_not_read_as_an_agreement_error() -> None:
+    # "behavior makes makes a schedule" is a duplicate, and rewriting the
+    # second one would hide the defect the duplicate rule owns.
+    source = "Checking its behavior makes makes a schedule."
+    assert "makes make " not in fix_subject_verb_agreement(source)
 
 
 def test_an_unknown_word_makes_the_list_rule_refuse() -> None:
