@@ -1,5 +1,27 @@
 # Working in this repository
 
+## Read the AI Brain first. Before anything else.
+
+`C:\Users\stuff\Documents\AI Brain` is the authoritative cross-session record.
+It survives account switches, session switches, and the Claude Code session
+registry getting wiped by an app update. Read it in this order before touching
+this project:
+
+1. `AI Brain/instructions.md`
+2. `AI Brain/context.md`
+3. `AI Brain/memory.md`
+4. `AI Brain/Echo-Link/context.md` and `AI Brain/Echo-Link/memory.md`
+
+At session end, append one dated bullet to `AI Brain/Echo-Link/memory.md`
+saying what was decided, what was done, and what is still open. Append-only,
+no approval needed.
+
+This is not optional and it is not a formality. On 2026-08-14 a session skipped
+it, rebuilt a measurement path that already existed, ran the corpus headless
+past a guard built to prevent exactly that, and reported a false product
+regression to Curtis. Three weeks of "constant regression" is mostly this: the
+record exists and the session did not read it.
+
 Manuscript is a local-only Windows voice dictation and writing assistant. No
 cloud runtime, no telemetry, no network calls in the correction path. Every
 engineering decision below follows from that: the user's text never leaves the
@@ -29,6 +51,21 @@ a cleanup, unless it is an intentional known defect recorded in
 .venv/Scripts/python.exe run_manuscript.py
 ```
 
+Correction quality is measured through Word and the HUD, one essay per Word
+session, accepting each section the way a writer does. Ask first: it takes the
+screen for up to 45 minutes.
+
+```bash
+.venv/Scripts/python.exe tools/word_essay_session.py --essay 1 --first-wait 200 --section-wait 150
+```
+
+```bash
+.venv/Scripts/python.exe tools/run_essays_batch.py --from 1 --to 20
+```
+
+Both take `--corpus` and both glob `*.docx`, so a corpus that arrives as plain
+text needs converting before the harness can see it.
+
 ## Non-negotiables
 
 These are not preferences. Breaking one has already cost a session's work.
@@ -40,6 +77,15 @@ These are not preferences. Breaking one has already cost a session's work.
   change, with its regression test.
 - **`test-corpus/animal-pet-20` is integrity locked.** Read from it, copy essays
   out, never write into it.
+- **Never measure correction quality headlessly.** Going straight at
+  `PolishEngine` skips `tools/word_essay_session.py`, which refuses to start
+  when the local AI has fallen back to deterministic rules, because a
+  rules-only essay comes back thin and unchanged and reads exactly like a
+  broken corrector. On 2026-08-14 a headless run scored a corpus at a mean of
+  62 and it was reported to the user as a product regression; the AI had
+  latched off after two truncated answers and the real harness would have
+  refused the run. A headless harness is a debugging aid. It is never the
+  number.
 - **Never weaken a safety property or a test to make something pass.** A failing
   test is an implementation defect, an incorrect test, or a changed requirement.
   Work out which before touching anything.
