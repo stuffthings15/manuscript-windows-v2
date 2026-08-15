@@ -153,13 +153,25 @@ def essay_documents(directory: Path) -> list[Path]:
 
 def paragraphs(path: Path) -> list[str]:
     if path.suffix.lower() == ".txt":
-        # The held-out essays are plain text, one paragraph per line. They are
-        # graded by the same rubric so a gain on the corpus can be compared
-        # against text no rule was tuned to.
+        raw = path.read_text(encoding="utf-8")
+        # Two plain-text shapes, and reading one as the other changes what is
+        # being measured. The held-out essays put one paragraph per line with
+        # no blank lines. The error-riddled corpus separates paragraphs with a
+        # blank line and injects stray line breaks *inside* a paragraph as one
+        # of its formatting defects, so reading line by line handed the engine
+        # fragments that begin mid-sentence - a harder and different job than
+        # the one the app does, where a captured Word paragraph keeps its own
+        # line breaks.
+        #
+        # A blank line anywhere means blank lines are the separator.
+        if re.search(r"\r?\n[ \t]*\r?\n", raw):
+            blocks = re.split(r"\r?\n[ \t]*\r?\n", raw)
+        else:
+            blocks = raw.splitlines()
         return [
-            unicodedata.normalize("NFC", line.strip())
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
+            unicodedata.normalize("NFC", block.strip())
+            for block in blocks
+            if block.strip()
         ]
     xml = zipfile.ZipFile(path).read("word/document.xml").decode("utf-8")
     found: list[str] = []
