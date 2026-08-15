@@ -477,6 +477,31 @@ _DISCOURSE_FILLER = re.compile(
 
 _SENTENCE_LEAD = re.compile(r"(?:\A|[.!?][\"'”’)\]]*)[ \t]*\Z")
 
+# The words on each side of a removed filler, as far as an unbroken run of them
+# reaches. Only spaces and tabs may separate them, so any punctuation ends the
+# run, which is what keeps a repeat from being read across a sentence boundary
+# or across the comma of a list. The one comma allowed is the one the filler
+# itself introduced, and it can only sit at the very end of the kept text.
+_TRAILING_RUN = re.compile(r"(?<![\w'])((?:[\w']+[ \t]+)*[\w']+)[ \t]*,?[ \t]*\Z")
+_LEADING_RUN = re.compile(r"[ \t]*((?:[\w']+[ \t]+)*[\w']+)")
+
+
+def _repeated_words(
+    before: re.Match[str] | None, after: re.Match[str] | None
+) -> int:
+    """How many words the filler was holding two copies of, longest first.
+
+    Zero when there is no repeat, which is the answer for almost every filler.
+    """
+    if before is None or after is None:
+        return 0
+    tail = [word.casefold() for word in before.group(1).split()]
+    head = [word.casefold() for word in after.group(1).split()]
+    for length in range(min(len(tail), len(head)), 0, -1):
+        if tail[-length:] == head[:length]:
+            return length
+    return 0
+
 
 class _Span:
     """The two positions of a removal, named the way a match object names them."""
@@ -533,20 +558,23 @@ def remove_discourse_filler(text: str) -> str:
         # A full stop is not allowed there. Two copies either side of a sentence
         # boundary are two sentences using the same word, not a duplicate, and
         # "He left. You know, Left early" must keep both.
+        #
+        # What repeats can be a phrase rather than a word. "The plan, you know,
+        # the plan worked" restarts two of them, and a comparison that read one
+        # word either side left that pair standing.
         kept = "".join(pieces)
-        repeated = re.search(r"(\b[\w']+)[ \t]*,?[ \t]*\Z", kept)
-        follows = re.match(r"[ \t]*([\w']+)", text[match.end() :])
-        if (
-            repeated is not None
-            and follows is not None
-            and repeated.group(1).casefold() == follows.group(1).casefold()
-        ):
-            # Cut back to the word itself. Leaving the comma that introduced the
-            # filler behind gives "Feeding, is the hard part." once the second
-            # copy has gone, which is worse than the duplicate it replaced.
-            pieces = [kept[: repeated.end(1)]]
+        before = _TRAILING_RUN.search(kept)
+        after = _LEADING_RUN.match(text[match.end() :])
+        repeated = _repeated_words(before, after)
+        if before is not None and after is not None and repeated:
+            # Cut back to the last word before the filler. Leaving the comma
+            # that introduced it gives "Feeding, is the hard part." once the
+            # second copy has gone, which is worse than the duplicate it
+            # replaced.
+            words = list(re.finditer(r"[\w']+", after.group(0)))
+            pieces = [kept[: before.end(1)]]
             pieces.append(" ")
-            index = match.end() + follows.end(1)
+            index = match.end() + words[repeated - 1].end()
             continue
         pieces.append(" ")
         index = match.end()

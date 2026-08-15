@@ -391,12 +391,36 @@ def test_the_same_word_either_side_of_a_full_stop_is_two_sentences() -> None:
     )
 
 
-def test_a_repeated_phrase_rather_than_a_repeated_word_is_a_known_gap() -> None:
-    # Only one word either side of the filler is compared, so a two-word restart
-    # survives. Recorded rather than hidden; it doubles with or without a comma.
+def test_a_repeated_phrase_is_not_doubled_either() -> None:
+    # Comparing one word either side left this pair standing, because "plan"
+    # sits against "the".
     assert remove_discourse_filler("The plan, you know, the plan worked.") == (
-        "The plan, the plan worked."
+        "The plan worked."
     )
+
+
+def test_a_repeated_phrase_needs_no_comma_to_be_seen() -> None:
+    assert remove_discourse_filler("The plan or whatever the plan worked.") == (
+        "The plan worked."
+    )
+
+
+def test_the_longest_repeat_is_the_one_removed() -> None:
+    # Stopping at the first match would take "the park" and leave "to".
+    source = "We walked to the park, you know, to the park after lunch."
+    assert remove_discourse_filler(source) == "We walked to the park after lunch."
+
+
+def test_a_phrase_that_repeats_further_along_is_not_a_restart() -> None:
+    # "the dog" comes back at the end of the list, not against the filler, and
+    # the words that do meet there are "dog" and "the".
+    source = "She saw the dog, you know, the cat and the dog."
+    assert remove_discourse_filler(source) == "She saw the dog, the cat and the dog."
+
+
+def test_a_run_stops_at_the_comma_of_a_list() -> None:
+    source = "She packed apples, oranges, you know, oranges and water."
+    assert remove_discourse_filler(source) == "She packed apples, oranges and water."
 
 
 def test_two_different_words_around_a_filler_both_survive() -> None:
