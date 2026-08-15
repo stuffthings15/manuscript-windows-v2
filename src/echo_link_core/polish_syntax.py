@@ -522,6 +522,20 @@ def remove_discourse_filler(text: str) -> str:
             pieces.append(" " + letter.group(1).upper())
             index = match.end() + letter.end(1)
             continue
+        # The filler can be holding two copies of the same word apart:
+        # "without proper or whatever proper care" became "proper proper care",
+        # a duplicate this rule created and no earlier pass will see.
+        kept = "".join(pieces)
+        repeated = re.search(r"(\b[\w']+)[ \t]*\Z", kept)
+        follows = re.match(r"[ \t]*([\w']+)", text[match.end() :])
+        if (
+            repeated is not None
+            and follows is not None
+            and repeated.group(1).casefold() == follows.group(1).casefold()
+        ):
+            pieces.append(" ")
+            index = match.end() + follows.end(1)
+            continue
         pieces.append(" ")
         index = match.end()
     pieces.append(text[index:])

@@ -342,3 +342,31 @@ def test_two_fillers_in_a_row_are_one_removal() -> None:
 def test_a_word_that_starts_lowercase_on_purpose_keeps_its_shape() -> None:
     source = "She knows the answer. Basically iPhone users disagree."
     assert remove_discourse_filler(source) == "She knows the answer. iPhone users disagree."
+
+
+def test_a_word_the_filler_was_holding_apart_is_not_doubled() -> None:
+    # The removal itself creates the duplicate, so no earlier pass has a chance
+    # to see it: "without proper or whatever proper care" left "proper proper".
+    source = "The bird needs without proper or whatever proper care every day."
+    assert remove_discourse_filler(source) == (
+        "The bird needs without proper care every day."
+    )
+
+
+def test_the_duplicate_is_matched_whatever_its_case() -> None:
+    assert remove_discourse_filler("She wanted proper or whatever Proper training.") == (
+        "She wanted proper training."
+    )
+
+
+def test_a_duplicate_the_filler_left_behind_a_comma_is_a_known_gap() -> None:
+    # The kept text ends at the comma, so the word before it is not read as the
+    # first of the pair. Recorded rather than hidden: this shape still doubles.
+    assert remove_discourse_filler("Feeding, you know, Feeding is the hard part.") == (
+        "Feeding, Feeding is the hard part."
+    )
+
+
+def test_two_different_words_around_a_filler_both_survive() -> None:
+    source = "They kept the cage clean and stuff dry all week."
+    assert remove_discourse_filler(source) == "They kept the cage clean dry all week."
