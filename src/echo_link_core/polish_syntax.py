@@ -524,15 +524,27 @@ def remove_discourse_filler(text: str) -> str:
             continue
         # The filler can be holding two copies of the same word apart:
         # "without proper or whatever proper care" became "proper proper care",
-        # a duplicate this rule created and no earlier pass will see.
+        # a duplicate this rule created and no earlier pass will see. A comma is
+        # allowed between the word and the filler because a filler set off by
+        # commas owns both of them, and the match only ever consumes the second:
+        # "Feeding, you know, Feeding is the hard part" kept both copies while
+        # the pattern stopped at a word boundary.
+        #
+        # A full stop is not allowed there. Two copies either side of a sentence
+        # boundary are two sentences using the same word, not a duplicate, and
+        # "He left. You know, Left early" must keep both.
         kept = "".join(pieces)
-        repeated = re.search(r"(\b[\w']+)[ \t]*\Z", kept)
+        repeated = re.search(r"(\b[\w']+)[ \t]*,?[ \t]*\Z", kept)
         follows = re.match(r"[ \t]*([\w']+)", text[match.end() :])
         if (
             repeated is not None
             and follows is not None
             and repeated.group(1).casefold() == follows.group(1).casefold()
         ):
+            # Cut back to the word itself. Leaving the comma that introduced the
+            # filler behind gives "Feeding, is the hard part." once the second
+            # copy has gone, which is worse than the duplicate it replaced.
+            pieces = [kept[: repeated.end(1)]]
             pieces.append(" ")
             index = match.end() + follows.end(1)
             continue

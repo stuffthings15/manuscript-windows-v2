@@ -361,11 +361,41 @@ def test_the_duplicate_is_matched_whatever_its_case() -> None:
     )
 
 
-def test_a_duplicate_the_filler_left_behind_a_comma_is_a_known_gap() -> None:
-    # The kept text ends at the comma, so the word before it is not read as the
-    # first of the pair. Recorded rather than hidden: this shape still doubles.
+def test_a_duplicate_the_filler_was_set_off_from_by_commas_is_not_doubled() -> None:
+    # The match consumes the comma after the filler and not the one before it,
+    # so the kept text used to end at that first comma and the word in front of
+    # it was never read as the first of the pair.
     assert remove_discourse_filler("Feeding, you know, Feeding is the hard part.") == (
-        "Feeding, Feeding is the hard part."
+        "Feeding is the hard part."
+    )
+
+
+def test_the_comma_that_introduced_the_filler_goes_with_it() -> None:
+    # Keeping it leaves "It was hot, enough to melt." once the second "hot" has
+    # gone, which is a worse sentence than the duplicate it replaced.
+    assert remove_discourse_filler("It was hot, you know, hot enough to melt.") == (
+        "It was hot enough to melt."
+    )
+
+
+def test_a_comma_that_is_not_holding_a_duplicate_is_kept() -> None:
+    source = "The dog was calm, you know, quiet and friendly."
+    assert remove_discourse_filler(source) == "The dog was calm, quiet and friendly."
+
+
+def test_the_same_word_either_side_of_a_full_stop_is_two_sentences() -> None:
+    # Not a duplicate: each sentence uses the word once, and merging them would
+    # delete a subject rather than a repeat.
+    assert remove_discourse_filler("He left. You know, Left early.") == (
+        "He left. Left early."
+    )
+
+
+def test_a_repeated_phrase_rather_than_a_repeated_word_is_a_known_gap() -> None:
+    # Only one word either side of the filler is compared, so a two-word restart
+    # survives. Recorded rather than hidden; it doubles with or without a comma.
+    assert remove_discourse_filler("The plan, you know, the plan worked.") == (
+        "The plan, the plan worked."
     )
 
 
