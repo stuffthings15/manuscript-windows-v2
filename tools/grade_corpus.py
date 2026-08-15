@@ -72,14 +72,33 @@ FILLER = re.compile(
 # so charged every one of the twenty essays 2.5 points for having one, which is
 # the proxy marking correct writing as a defect. The subject has to be
 # self-referential AND the predicate has to be about whether the writing works.
+#
+# The version after that still failed the same way, in two places. It allowed a
+# bare "it" as the self-reference, which is ordinary English: "It does not take
+# much staff to keep that going" and "It is not a movie, and it does not need
+# batteries" were both charged. And it carried six literal phrases copied out of
+# the twenty essays it was written beside - "it still counts", "good but also
+# not", "responsibility comes back again" among them - so it charged "if a kid
+# reads comics all afternoon it still counts as reading" while flattering the
+# corpus the strings came from. Six of the six coherence hits across the three
+# held-out essays were correct writing.
+#
+# So the subject now has to name the writing, and "this part of the yard" is not
+# that. "works" is not a judgement either, because "This essay is about a tour
+# guide who works early mornings" is the thesis sentence the note above already
+# said belongs in the essay.
+#
+# The second arm is a sentence that asserts something and takes it back before
+# the full stop with nothing in between. That is incoherent whatever the subject
+# is, so it needs no self-reference.
+_SELF_REFERENCE = r"this\s+(?:part|paragraph|essay|sentence|section)\b(?!\s+of\b)"
+_JUDGES_THE_WRITING = (
+    r"(?:does not|doesn't|should probably|is mostly|sounds like|"
+    r"counts|connects?|belongs?|fits?)"
+)
 META_COMMENTARY = re.compile(
-    r"\b(?:this (?:part|paragraph)|it) (?:does not|doesn't|should probably)\b"
-    r"|\bit still counts\b"
-    r"|\bgood but also not\b"
-    r"|\bresponsibility (?:comes?|came) back again\b"
-    r"|\btwo reasons at once\b"
-    r"|\bmaybe the same reason\b"
-    r"|\bnow it suddenly sounds like instructions\b",
+    rf"\b{_SELF_REFERENCE}[^.!?]{{0,80}}\b{_JUDGES_THE_WRITING}\b"
+    r"|\b(?:but|and) also not\b\s*[.!?]",
     re.IGNORECASE,
 )
 ORDINAL_MARKER = re.compile(r"\b(the first reason|to begin with|firstly)\b", re.IGNORECASE)
