@@ -68,6 +68,31 @@ from echo_link_core.insertion import (  # noqa: E402
 OUTPUT_ROOT = ROOT / "build" / "corrected"
 LOG_PATH = Path.home() / "AppData/Local/ManuscriptWindowsV2/echo-link.log"
 
+_FOCUS_LINE = re.compile(
+    r"Writing HUD editable focus detected title='(?P<title>.*?)' scope=(?P<scope>\w+)"
+)
+
+
+def captured_document_title() -> str | None:
+    """The window the HUD most recently built its review from, per the app.
+
+    The app states this itself on every capture, which makes it better
+    evidence than anything this harness could infer: the HUD follows focus by
+    design, so the window it captured is a fact only the app holds.
+
+    Returns None when the log says nothing, because an absent log is not
+    evidence that the capture was wrong.
+    """
+    try:
+        text = LOG_PATH.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in reversed(text.splitlines()):
+        found = _FOCUS_LINE.search(line)
+        if found:
+            return found.group("title")
+    return None
+
 
 def local_ai_state(window_seconds: float = 900.0) -> tuple[bool, str]:
     """Whether the running app has the model loaded, read from its own log.
@@ -401,6 +426,60 @@ def run_session(
         if badge is not None:
             report["badge"] = settled or str(badge.Name)
             _click(badge)
+        # Before a single button is pressed, confirm the review on screen was
+        # built from THIS document.
+        #
+        # 2026-08-15: it was not, and nothing noticed. The Claude Code window
+        # took focus part-way through a run, the HUD did what it is designed
+        # to do and captured the focused window instead, and a review of 26
+        # characters of chat text appeared. This harness then clicked Replace
+        # five times against it, every apply failed with "No selected text was
+        # found", and the run was reported as "sections=5 accepted=5". The
+        # essay came back byte-identical and the report said success. A false
+        # success is worse than a failure, because it becomes a number.
+        # Losing focus once is ordinary on a machine in use, so try to take it
+        # back rather than abandoning a 45-minute batch over one blip. Each
+        # attempt re-focuses Word, re-triggers the capture, and re-reads what
+        # the app says it captured.
+        captured = captured_document_title()
+        for _attempt in range(3):
+            if captured is None or working.stem.lower() in captured.lower():
+                break
+            report.setdefault("focus_recoveries", 0)
+            report["focus_recoveries"] += 1
+            focus_named_word_window(working.stem)
+            time.sleep(1.5)
+            press_hud_hotkey(hotkey)
+            time.sleep(3.0)
+            hud = _hud_window(20.0) or hud
+            opening = _badge_button(hud)
+            if opening is not None:
+                _click(opening)
+                time.sleep(2.0)
+                hud = _hud_window(20.0) or hud
+            captured = captured_document_title()
+        if captured is not None and working.stem.lower() not in captured.lower():
+            report["error"] = (
+                "the review on screen was captured from "
+                f"{captured!r}, not from {working.name}. Nothing was clicked. "
+                "Another window took focus during the run; close it or leave "
+                "the machine alone while this runs."
+            )
+            report["captured_window"] = captured
+            # Nothing was clicked, so the document is untouched and the
+            # normal tail has nothing to measure. These mirror what it would
+            # have computed, because the caller prints them and a KeyError
+            # here would hide the very message this guard exists to deliver.
+            report["characters_after"] = len(before)
+            report["changed"] = False
+            report["accepted_sections"] = 0
+            report["skipped_sections"] = 0
+            report["sections_that_fell_back_to_rules"] = 0
+            report["total_seconds"] = round(time.monotonic() - started, 3)
+            report["finished_at"] = datetime.now(timezone.utc).isoformat(
+                timespec="seconds"
+            )
+            return report
         expected = len(paragraphs(before))
         offered = 0
         badge_name = str(report.get("badge") or "")
@@ -614,7 +693,11 @@ def main(argv: list[str] | None = None) -> int:
         f"error={report.get('error', '')}",
         flush=True,
     )
-    print(f"review this: {report['review_file']}", flush=True)
+    # A run that stopped before writing a review has no file to point at, and
+    # a KeyError here would bury the error message that says why.
+    review_file = report.get("review_file")
+    if review_file:
+        print(f"review this: {review_file}", flush=True)
     return 0 if report.get("changed") and not report.get("error") else 5
 
 
