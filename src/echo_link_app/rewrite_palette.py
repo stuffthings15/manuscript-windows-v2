@@ -1762,6 +1762,17 @@ class RewritePalette(QDialog):
                 len(text),
             )
         except (RuntimeError, TypeError, ValueError) as exc:
+            # Say so in the log, not only on screen. This path emptied a
+            # 25-section review of a 9630 character document on 2026-08-15 and
+            # wrote nothing at all, so the app's own account of that essay was
+            # a capture, a badge, and then 41 minutes of silence. A status
+            # message the reader may not be looking at is not a diagnosis.
+            logger.warning(
+                "Writing HUD review preparation failed characters=%d: %s: %s",
+                len(text),
+                type(exc).__name__,
+                exc,
+            )
             self._suggestions = ()
             self._review_progress_total = 0
             self._render_suggestions()
