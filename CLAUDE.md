@@ -12,6 +12,23 @@ this project:
 3. `AI Brain/memory.md`
 4. `AI Brain/Echo-Link/context.md` and `AI Brain/Echo-Link/memory.md`
 
+You should not have to read those files by hand: hooks load them at session
+start, at every compaction, and in short form on every turn.
+
+**If no AI Brain block arrived before your first reply, the hooks are gone.**
+That is the one failure that silently restores the old behaviour, because a
+missing safety net looks exactly like a session that read everything. Check it
+and say so before doing any work:
+
+```bash
+python "C:/Users/stuff/Documents/AI Brain/tools/brain_context.py" --doctor
+```
+
+Claude Code reports this session's working directory as `Documents`, the parent
+of every project, so path matching alone cannot tell which project you are in.
+If the reminder says NO PROJECT MEMORY IS LOADED, clear it once with
+`--set-project Echo-Link --session <id>`; the id is in the reminder.
+
 At session end, append one dated bullet to `AI Brain/Echo-Link/memory.md`
 saying what was decided, what was done, and what is still open. Append-only,
 no approval needed.
