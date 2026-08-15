@@ -1,0 +1,21 @@
+number,title,characters,words_approx,baseline_error_operations,additional_error_operations,total_error_operations,spelling_operations,grammar_operations,punctuation_operations,formatting_spacing_operations
+1,Urban Beekeeping and the Ecology of Cities,9786,1403,32,160,192,56,31,28,20
+2,How Public Libraries Strengthen Communities,9574,1333,33,165,198,39,41,36,19
+3,The Promise and Limits of Solar Microgrids,9635,1359,34,170,204,44,34,46,24
+4,Coral Reef Restoration in a Warming Ocean,9149,1292,35,175,210,57,40,40,19
+5,Space Debris and the Future of Earth Orbit,9356,1304,36,180,216,49,34,51,21
+6,The Psychology of Habit Formation,8922,1308,32,160,192,52,34,26,19
+7,Community Gardens and Local Food Access,9145,1309,33,165,198,52,33,34,14
+8,Cybersecurity for Small Businesses,9171,1271,34,170,204,56,37,34,20
+9,Volcano Monitoring and Early Warning,8923,1256,35,175,210,46,36,38,24
+10,Public Transportation and the Shape of Cities,9025,1258,36,180,216,57,41,37,15
+11,The History and Continuing Influence of Jazz,9662,1333,32,160,192,50,40,31,23
+12,Food Waste Across the Supply Chain,8964,1284,33,165,198,55,43,27,22
+13,Preserving Indigenous Languages,9259,1286,34,170,204,48,34,37,16
+14,Robotics in Elder Care,9158,1289,35,175,210,43,43,47,24
+15,Exploring the Deep Sea,8938,1244,36,180,216,54,41,43,19
+16,Sustainable Fashion and Textile Waste,9073,1253,32,160,192,53,31,43,15
+17,What Ancient Roads Reveal to Archaeologists,9166,1289,33,165,198,37,42,47,16
+18,Artificial Intelligence in Education,9277,1280,34,170,204,61,31,39,16
+19,Mathematics and the Rise of Sports Analytics,9036,1291,35,175,210,61,31,43,26
+20,Freshwater Conservation in Arid Regions,9643,1298,36,180,216,51,36,34,25
