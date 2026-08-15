@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+
+logger = logging.getLogger(__name__)
 
 
 FILTERS = ("All", "Spelling", "Grammar", "Formatting", "Clarity")
@@ -45,34 +48,89 @@ def _group_sentence_suggestions(
     text: str,
     suggestions: Sequence[object],
 ) -> tuple[_SentenceSuggestion, ...]:
+    # Sections must not overlap, and every edit must sit inside the section it
+    # is filed under. Both were violated by filing an edge case under its own
+    # sentence bounds and hoping those bounds did not collide with a review
+    # span that already existed.
+    #
+    # Measured on the 500-percent corpus, 2026-08-15: 30 overlapping pairs
+    # across 15 of the 20 essays, nearly all of them a whitespace run like
+    # "    ." sitting against the sentence that follows it. Overlap is not
+    # cosmetic. Accepting one section leaves its overlapping sibling
+    # unshiftable, `_shift_remaining_sentence_suggestions` refuses with
+    # "Pending sentence suggestions overlap accepted text", and the review
+    # cannot advance: essay 16 spent 457 seconds retrying 25 sections 56 times
+    # and left the whole tail of the document uncorrected.
+    #
+    # So the bounds are decided first and merged into disjoint intervals, and
+    # only then do edits get filed. An edit can then always be placed, and
+    # placed in exactly one section.
     review_spans = _review_spans(text)
+    bounds_by_start: list[tuple[int, int, int]] = list(review_spans)
+    for suggestion in suggestions:
+        start = int(getattr(suggestion, "start"))
+        end = int(getattr(suggestion, "end"))
+        if any(item[0] <= start and end <= item[1] for item in bounds_by_start):
+            continue
+        left, right = _sentence_bounds(text, start, end)
+        bounds_by_start.append((min(left, start), max(right, end), 1))
+
+    merged: list[list[int]] = []
+    for left, right, count in sorted(bounds_by_start):
+        if merged and left < merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], right)
+            merged[-1][2] += count
+        else:
+            merged.append([left, right, count])
+
     grouped: dict[tuple[int, int, int], list[object]] = {
-        bounds: [] for bounds in review_spans
+        (left, right, count): [] for left, right, count in merged
     }
     for suggestion in suggestions:
         start = int(getattr(suggestion, "start"))
         end = int(getattr(suggestion, "end"))
         bounds = next(
-            (
-                item
-                for item in grouped
-                if item[0] <= start <= item[1] and end <= item[1]
-            ),
-            (*_sentence_bounds(text, start, end), 1),
+            (item for item in grouped if item[0] <= start and end <= item[1]),
+            None,
         )
-        grouped.setdefault(bounds, []).append(suggestion)
+        if bounds is None:
+            # Nothing to file it under without reintroducing an overlap. Say
+            # so rather than dropping it in silence.
+            logger.warning(
+                "Review span found no section for an edit: edit=[%d,%d)", start, end
+            )
+            continue
+        grouped[bounds].append(suggestion)
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:20]
     result: list[_SentenceSuggestion] = []
     for (start, end, sentence_count), edits in sorted(grouped.items()):
         original = text[start:end]
         replacement = original
+        applied = []
         for edit in sorted(edits, key=lambda item: (int(item.start), int(item.end)), reverse=True):
             local_start = int(edit.start) - start
             local_end = int(edit.end) - start
             expected = str(edit.original)
-            if replacement[local_start:local_end] != expected:
-                raise ValueError("Sentence suggestion no longer matches its source text.")
+            # Refusing to apply an edit whose source text has moved is a
+            # safety property and it stays. Throwing that refusal out of this
+            # function was not: one unusable edit discarded every section in
+            # the document, and the caller turned that into a badge reading
+            # "0 reviews ready" with nothing in the log to say why. The edit
+            # is dropped, loudly, and the other sections survive.
+            if local_start < 0 or replacement[local_start:local_end] != expected:
+                logger.warning(
+                    "Review span dropped an edit that no longer matches its "
+                    "source: span=[%d,%d) edit=[%d,%d) title=%r",
+                    start,
+                    end,
+                    int(edit.start),
+                    int(edit.end),
+                    str(edit.title),
+                )
+                continue
+            applied.append(edit)
             replacement = replacement[:local_start] + str(edit.replacement) + replacement[local_end:]
+        edits = applied
         categories = tuple(dict.fromkeys(_category_name(item) for item in edits))
         titles = tuple(dict.fromkeys(str(item.title).strip() for item in edits))
         explanations = tuple(
@@ -366,13 +424,23 @@ def _sentence_bounds(text: str, start: int, end: int) -> tuple[int, int]:
     left = 0
     for match in re.finditer(r"[.!?]+[\"'\u201d\u2019)\]]*|[\r\n]+", text[:start]):
         left = match.end()
-    while left < len(text) and text[left].isspace():
+    # Trim the whitespace that separates this sentence from the one before,
+    # but never walk past the edit being bounded. When the edit IS that
+    # whitespace - a double space sitting between two sentences - this loop
+    # skipped over it and returned a span beginning after it. The local offset
+    # then went negative, Python sliced backwards to an empty string, and the
+    # match guard below rejected an edit it had been handed out of range.
+    #
+    # Measured 2026-08-15: two characters at index 7833 of essay 20 in the
+    # 500-percent corpus took the whole 25-section review to zero.
+    while left < start and text[left].isspace():
         left += 1
     right = len(text)
     boundary = re.search(r"[.!?]+[\"'\u201d\u2019)\]]*|[\r\n]+", text[max(start, end) :])
     if boundary is not None:
         right = max(start, end) + boundary.end()
-    while right > left and text[right - 1].isspace():
+    # Same rule at the other end: trailing whitespace goes, the edit stays.
+    while right > max(left, end) and text[right - 1].isspace():
         right -= 1
     if right <= left:
         return max(0, start), min(len(text), max(start + 1, end))

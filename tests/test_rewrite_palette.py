@@ -3310,3 +3310,105 @@ def test_a_section_that_raises_still_returns_the_text(app, tmp_path, monkeypatch
     assert "local runtime unavailable" in message
     window._quitting = True
     window.close()
+
+
+def test_double_space_before_a_sentence_keeps_its_own_edit_in_range():
+    """A whitespace edit must land inside the span that is supposed to hold it.
+
+    `_sentence_bounds` finds the end of the previous sentence and then skips
+    whitespace forward to where the next sentence really begins. When the edit
+    IS that whitespace, the skip walks straight past it and returns a span
+    starting after the edit. The local offset then goes negative, Python slices
+    backwards to an empty string, and the guard in `_group_sentence_suggestions`
+    correctly reports a mismatch it was never given a fair chance to pass.
+
+    Measured on 2026-08-15: essay 20 of the 500-percent corpus has a double
+    space at index 7833, immediately before a sentence starting at 7835. One
+    "Use one space" edit there raised ValueError out of the grouper, the HUD
+    caught it, emptied the review and logged nothing. The badge sat at
+    "Manuscript, 0 reviews ready" for 41 minutes while the harness timed out
+    section after section. Every one of that document's 25 sections was lost to
+    two characters of whitespace.
+    """
+    from echo_link_app.review_spans import _sentence_bounds
+
+    text = "The first sentence ends here.  Seen together these factors connect."
+    gap = text.index(".  ") + 1
+    start, end = gap, gap + 2
+    assert text[start:end] == "  "
+
+    left, right = _sentence_bounds(text, start, end)
+    assert left <= start, (
+        f"span [{left},{right}) starts after the edit at [{start},{end})"
+    )
+    assert right >= end
+
+
+def test_one_unusable_edit_does_not_destroy_the_whole_document_review():
+    """One bad edit costs its own correction, not every section in the essay.
+
+    Refusing to apply an edit whose source text no longer matches is a safety
+    property and stays. Throwing that refusal out of the grouper is not: it
+    took a 25-section review down to zero, with nothing on screen but a badge
+    reading 0 reviews ready.
+    """
+    from echo_link_app.review_spans import _group_sentence_suggestions
+
+    class _Edit:
+        def __init__(self, start, end, original, replacement):
+            self.start, self.end = start, end
+            self.original, self.replacement = original, replacement
+            self.title, self.explanation = "Edit", ""
+            self.category = "Spelling"
+
+    text = "The cat sat on the mat. The dog barked loudly at noon."
+    good = _Edit(text.index("barked"), text.index("barked") + 6, "barked", "bayed")
+    # Claims text that is not there, so it can never be applied safely.
+    bad = _Edit(text.index("cat"), text.index("cat") + 3, "cot", "cut")
+
+    grouped = _group_sentence_suggestions(text, [bad, good])
+    assert grouped, "the whole review was discarded because of one bad edit"
+    assert any("bayed" in item.replacement for item in grouped), (
+        "the sound edit was lost along with the bad one"
+    )
+
+
+def test_review_sections_never_overlap_each_other():
+    """Two sections covering the same characters cannot both be accepted.
+
+    Accepting one leaves the other unshiftable:
+    `_shift_remaining_sentence_suggestions` refuses with "Pending sentence
+    suggestions overlap accepted text" and the review stops advancing.
+
+    Measured on the 500-percent corpus, 2026-08-15: 30 overlapping pairs
+    across 15 of 20 essays, nearly all a whitespace run against the sentence
+    after it. Essay 16 spent 457 seconds retrying 25 sections 56 times and
+    left the whole tail of the document uncorrected, scoring 52.
+    """
+    from echo_link_app.review_spans import _group_sentence_suggestions
+
+    class _Edit:
+        def __init__(self, start, end, original, replacement):
+            self.start, self.end = start, end
+            self.original, self.replacement = original, replacement
+            self.title, self.explanation = "Edit", ""
+            self.category = "Formatting"
+
+    # A run of spaces before a sentence, plus a normal edit inside it. The
+    # whitespace used to be filed under its own bounds, which overlapped the
+    # sentence span that followed.
+    text = "The first part ends here.    Seen together these factors connect."
+    gap = text.index(".    ") + 1
+    edits = [
+        _Edit(gap, gap + 4, "    ", " "),
+        _Edit(text.index("factors"), text.index("factors") + 7, "factors", "points"),
+    ]
+
+    sections = sorted(
+        _group_sentence_suggestions(text, edits), key=lambda s: (s.start, s.end)
+    )
+    for earlier, later in zip(sections, sections[1:]):
+        assert later.start >= earlier.end, (
+            f"sections overlap: [{earlier.start},{earlier.end}) and "
+            f"[{later.start},{later.end})"
+        )
