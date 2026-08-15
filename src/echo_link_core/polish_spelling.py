@@ -498,6 +498,22 @@ class PolishRuleEngine:
                 continue
             if frequency < 20:
                 continue
+            # A word carrying a stray apostrophe may only have the apostrophe
+            # taken out. Letting it be respelled as well would let one typo
+            # authorise a second, larger guess on the same word.
+            #
+            # Defensive, and say so rather than let the next reader assume it
+            # is load-bearing: on today's dictionary it cannot be triggered,
+            # because the distance-1 requirement above already means the single
+            # edit on an apostrophe word IS the apostrophe. Every attempt to
+            # build a case that reaches here returned no suggestion at all. It
+            # stays because a dictionary change could make it reachable, and
+            # there is no test, because a test that cannot fail is decoration.
+            if (
+                "'" in word
+                and word.replace("'", "").casefold() != replacement.casefold()
+            ):
+                continue
             if not _capitalized_repair_is_safe(word, replacement):
                 continue
             material = (
@@ -683,12 +699,39 @@ def _dictionary_form(value: str) -> str:
     return unicodedata.normalize("NFC", str(value)).strip("'").casefold()
 
 
+# The endings an apostrophe legitimately makes: a possessive, or one of the
+# contractions English actually has. Anything else in the middle of a word is a
+# stray keystroke.
+_CONTRACTION_ENDINGS = frozenset({"s", "t", "d", "m", "ll", "re", "ve", "clock"})
+
+
+def _apostrophe_is_doing_its_job(word: str) -> bool:
+    """Whether the apostrophe forms a possessive or a contraction."""
+    head, _, tail = word.rpartition("'")
+    return not head or tail.casefold() in _CONTRACTION_ENDINGS
+
+
 def _should_skip_word(text: str, start: int, word: str) -> bool:
     if len(word) <= 3 or len(word) > 32:
         return True
     if any(character.isdigit() for character in word):
         return True
-    if word.isupper() or "-" in word or "'" in word:
+    if word.isupper() or "-" in word:
+        return True
+    # An apostrophe used to skip the word outright, and that cost every repair
+    # of a stray one: "critics may foc'us on serious failures" and "review
+    # failures as i'nformation about the system" both survived a whole essay,
+    # eleven of them across the 500-percent corpus, while the dictionary held
+    # the answer the entire time - it ranks "focus" one edit away with a
+    # frequency of 65 million.
+    #
+    # The skip was buying nothing, because the words it was there to protect
+    # never reach this far: "dog's", "don't", "it's" and "o'clock" are all in
+    # the dictionary, so `contains` returns before any repair is considered.
+    # What is skipped now is the shape rather than the character, so a
+    # possessive of a word the dictionary does not know - "microgrid's" - is
+    # still left alone rather than flattened into a plural.
+    if "'" in word and _apostrophe_is_doing_its_job(word):
         return True
     # Capitalized words are NOT skipped here. A capitalized token can be a
     # name, so it used to be refused outright - but that also left every

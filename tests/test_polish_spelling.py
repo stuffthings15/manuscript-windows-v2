@@ -236,3 +236,56 @@ def test_the_corpus_cannot_answer_for_a_word_the_speller_declines():
     for word in _AMBIGUOUS_LEAVE_TO_MODEL:
         assert word not in pairs, word
     assert "esay" not in _repairs("the adress is wrong in esay 1 with a pett")
+
+
+# A stray apostrophe inside a word.
+#
+# Eleven of these survived the whole 500-percent corpus while the dictionary
+# held the answer: it ranks "focus" one edit from "foc'us" with a frequency of
+# 65 million. Every word carrying an apostrophe was skipped before the repair
+# was ever considered.
+STRAY_APOSTROPHE = (
+    ("critics may foc'us on serious failures", "foc'us", "focus"),
+    ("review failures as i'nformation about the system", "i'nformation", "information"),
+    ("could prepare s'hoes near the door", "s'hoes", "shoes"),
+    ("measure total people moved rath'er than automobiles", "rath'er", "rather"),
+    ("the triba'l council met on Tuesday", "triba'l", "tribal"),
+    ("this approach requir'e patience", "requir'e", "require"),
+)
+
+# The apostrophe doing its job. None of these may be touched.
+HONEST_APOSTROPHE = (
+    ("the dog's bowl is empty", "dog's"),
+    ("they don't agree with it", "don't"),
+    ("it's raining again outside", "it's"),
+    ("we met at six o'clock today", "o'clock"),
+    ("she can't come tomorrow", "can't"),
+    ("the council's decision stands", "council's"),
+    ("we've seen this before", "we've"),
+    # A possessive of a word the dictionary does not know. This is the one the
+    # shape test earns: flattening it to a plural would be a real edit to the
+    # writer's meaning, and "microgrids" is exactly one apostrophe away.
+    ("the microgrid's output fell", "microgrid's"),
+)
+
+
+def test_a_stray_apostrophe_inside_a_word_is_taken_out():
+    for text, wrong, right in STRAY_APOSTROPHE:
+        assert _repairs(text).get(wrong) == right, text
+
+
+def test_a_possessive_or_a_contraction_is_left_alone():
+    for text, word in HONEST_APOSTROPHE:
+        assert word not in _repairs(text), text
+
+
+def test_every_repair_here_only_removes_the_apostrophe():
+    """The engine's answer, not the fixture's: nothing else about the word moves.
+
+    A word the reader misspelled once must not be respelled twice on the
+    strength of that. This reads what the engine actually returned, so it fails
+    if a future change lets the repair wander.
+    """
+    for text, wrong, _ in STRAY_APOSTROPHE:
+        repaired = _repairs(text)[wrong]
+        assert repaired.casefold() == wrong.replace("'", "").casefold(), text
