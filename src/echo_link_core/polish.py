@@ -120,11 +120,32 @@ _FAILED_PACK_TTL_SECONDS = 300.0
 # back with two or three corrected paragraphs out of ten, over and over. The
 # window has to be shorter than one rules-only paragraph.
 _VALIDATION_FAILURE_TTL_SECONDS = 0.25
+# A truncated or malformed answer is the same kind of fact as a refused one: it
+# describes one generation, not the pack. It was treated like a lost GPU and
+# cost the pack five minutes.
+#
+# Measured on the 500-percent error corpus, 2026-08-14: two paragraphs came
+# back as "Local AI returned incomplete text", and the remaining 278 of 302
+# paragraphs ran rules-only in 0.03 seconds each. The whole run was 303
+# seconds, so a 300-second blacklist covered all of it. Essay 1, corrected
+# before the first truncation, scored 92; every essay after it averaged 62.
+#
+# Repeated truncation is a different claim, so the window escalates: after
+# three in a row the pack really is failing and the long window applies.
+_INVALID_RESPONSE_STREAK = 3
+# Two failures far apart are not a streak. This is longer than a rules-only
+# paragraph and shorter than a page of them.
+_FAILURE_STREAK_WINDOW_SECONDS = 30.0
 
 
-def _failed_pack_ttl(kind: "RuntimeFailureKind") -> float:
+def _failed_pack_ttl(kind: "RuntimeFailureKind", consecutive: int = 1) -> float:
     """How long a pack stays out of service after a failure of this kind."""
     if kind is RuntimeFailureKind.VALIDATION_FAILURE:
+        return _VALIDATION_FAILURE_TTL_SECONDS
+    if (
+        kind is RuntimeFailureKind.INVALID_RESPONSE
+        and consecutive < _INVALID_RESPONSE_STREAK
+    ):
         return _VALIDATION_FAILURE_TTL_SECONDS
     return _FAILED_PACK_TTL_SECONDS
 _CRITICAL = re.compile(
@@ -539,6 +560,24 @@ class _FailedPackState:
     kind: RuntimeFailureKind
     failed_at: float
     sequence: int
+    consecutive: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class _FailureStreak:
+    """How many times in a row a pack has failed the same way.
+
+    Deliberately separate from `_FailedPackState`. That record is pruned as
+    soon as its window expires, which for a truncated answer is a quarter of a
+    second, so it has forgotten the previous generation before the next one
+    starts and a counter kept there always reads 1. The streak is the thing
+    that decides between one bad answer and a failing pack, so it has to
+    outlive the blacklist entry.
+    """
+
+    kind: RuntimeFailureKind
+    failed_at: float
+    count: int
 
 
 def _contradiction_failures(source: str, candidate: str) -> tuple[str, ...]:
@@ -1001,6 +1040,7 @@ class PolishEngine:
         ] = {}
         self._failed_pack_lock = threading.Lock()
         self._failed_pack_states: dict[str, _FailedPackState] = {}
+        self._failure_streaks: dict[str, _FailureStreak] = {}
         self._failed_pack_sequence = 0
 
     def warm(self) -> dict[str, bool]:
@@ -2464,18 +2504,32 @@ class PolishEngine:
         failed_at = self._monotonic()
         with self._failed_pack_lock:
             self._failed_pack_sequence += 1
+            previous = self._failure_streaks.get(pack_id)
+            consecutive = 1
+            if (
+                previous is not None
+                and previous.kind is failure_kind
+                and failed_at - previous.failed_at < _FAILURE_STREAK_WINDOW_SECONDS
+            ):
+                consecutive = previous.count + 1
+            self._failure_streaks[pack_id] = _FailureStreak(
+                kind=failure_kind,
+                failed_at=failed_at,
+                count=consecutive,
+            )
             self._failed_pack_states[pack_id] = _FailedPackState(
                 reason=safe_reason,
                 kind=failure_kind,
                 failed_at=failed_at,
                 sequence=self._failed_pack_sequence,
+                consecutive=consecutive,
             )
 
     def _prune_failed_packs_locked(self, now: float) -> None:
         expired = tuple(
             pack_id
             for pack_id, state in self._failed_pack_states.items()
-            if now - state.failed_at >= _failed_pack_ttl(state.kind)
+            if now - state.failed_at >= _failed_pack_ttl(state.kind, state.consecutive)
         )
         for pack_id in expired:
             self._failed_pack_states.pop(pack_id, None)

@@ -5679,3 +5679,88 @@ def test_cair_inside_a_longer_word_is_untouched():
     from echo_link_core.writing_suggestions import repair_cair
 
     assert repair_cair("haircair cairo") == "haircair cairo"
+
+
+def test_one_truncated_answer_does_not_disable_the_pack_for_five_minutes():
+    """An incomplete answer describes one generation, not the pack.
+
+    Measured on the 500-percent error corpus, 2026-08-14: two paragraphs came
+    back as "Local AI returned incomplete text", which maps to
+    INVALID_RESPONSE, and INVALID_RESPONSE took the pack out of service for
+    300 seconds. The run lasted 303 seconds, so 278 of the remaining 302
+    paragraphs ran rules-only in 0.03 seconds each with nothing said to the
+    reader. Essay 1, corrected before the first truncation, scored 92 on the
+    rubric; the nineteen essays after it averaged 62.
+
+    Repeated truncation is a different claim from one truncation, so the window
+    escalates rather than staying short forever.
+    """
+    from echo_link_core.polish import (
+        PolishEngine,
+        _FAILED_PACK_TTL_SECONDS,
+        _INVALID_RESPONSE_STREAK,
+        _VALIDATION_FAILURE_TTL_SECONDS,
+    )
+    from echo_link_core.polish_types import RuntimeFailureKind
+
+    engine = PolishEngine()
+    clock = [1000.0]
+    engine._monotonic = lambda: clock[0]
+
+    engine._remember_failed_pack(
+        "gemma4-e4b-qat-v1",
+        "Local AI returned incomplete text.",
+        kind=RuntimeFailureKind.INVALID_RESPONSE,
+    )
+    # Recorded, so this request can still cascade to a smaller pack.
+    assert "gemma4-e4b-qat-v1" in engine._failed_pack_ids()
+
+    # Gone before the next paragraph is sent.
+    clock[0] += _VALIDATION_FAILURE_TTL_SECONDS + 0.01
+    assert engine._failed_pack_ids() == set()
+
+    # A pack that keeps truncating really is failing, and the long window
+    # applies once the failures are consecutive.
+    #
+    # The clock advances and the blacklist is read between attempts because
+    # that is what the engine does between paragraphs: selecting a pack prunes
+    # expired entries. A streak counter kept on the blacklist entry itself is
+    # erased by that prune and reads 1 forever, and a version of this test
+    # without these two lines passed against exactly that defect.
+    for _attempt in range(_INVALID_RESPONSE_STREAK):
+        engine._remember_failed_pack(
+            "gemma4-e4b-qat-v1",
+            "Local AI returned incomplete text.",
+            kind=RuntimeFailureKind.INVALID_RESPONSE,
+        )
+        clock[0] += 1.0
+        engine._failed_pack_ids()
+    clock[0] += _VALIDATION_FAILURE_TTL_SECONDS + 0.01
+    assert "gemma4-e4b-qat-v1" in engine._failed_pack_ids()
+    clock[0] += _FAILED_PACK_TTL_SECONDS
+    assert engine._failed_pack_ids() == set()
+
+
+def test_two_truncations_far_apart_are_not_a_streak():
+    """Failures separated by real work are unrelated, and must not escalate."""
+    from echo_link_core.polish import (
+        PolishEngine,
+        _FAILURE_STREAK_WINDOW_SECONDS,
+        _VALIDATION_FAILURE_TTL_SECONDS,
+    )
+    from echo_link_core.polish_types import RuntimeFailureKind
+
+    engine = PolishEngine()
+    clock = [1000.0]
+    engine._monotonic = lambda: clock[0]
+
+    for _attempt in range(4):
+        engine._remember_failed_pack(
+            "gemma4-e4b-qat-v1",
+            "Local AI returned incomplete text.",
+            kind=RuntimeFailureKind.INVALID_RESPONSE,
+        )
+        clock[0] += _FAILURE_STREAK_WINDOW_SECONDS + 1.0
+
+    clock[0] += _VALIDATION_FAILURE_TTL_SECONDS + 0.01
+    assert engine._failed_pack_ids() == set()
