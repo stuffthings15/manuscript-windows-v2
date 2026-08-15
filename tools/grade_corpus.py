@@ -136,6 +136,21 @@ WEIGHTS = {
 }
 
 
+def essay_documents(directory: Path) -> list[Path]:
+    """The essays in a corpus directory, and nothing else.
+
+    `test-corpus/animal-pet-20` carries a README beside the twenty essays, and
+    grading it produced a 21st row scoring 98 that dragged nothing and meant
+    nothing. Word also writes a "~$name.docx" owner file beside any document it
+    has open, and correcting one of those produces garbage.
+    """
+    return [
+        path
+        for path in sorted([*directory.glob("*.docx"), *directory.glob("*.txt")])
+        if not path.name.startswith("~$") and path.stem.casefold() != "readme"
+    ]
+
+
 def paragraphs(path: Path) -> list[str]:
     if path.suffix.lower() == ".txt":
         # The held-out essays are plain text, one paragraph per line. They are
@@ -364,12 +379,7 @@ def main() -> int:
     arguments = parser.parse_args()
 
     directory = ROOT / arguments.directory
-    paths = [
-        path
-        for path in sorted([*directory.glob("*.docx"), *directory.glob("*.txt")])
-        # Word writes a "~$name.docx" owner file beside any open document.
-        if not path.name.startswith("~$")
-    ]
+    paths = essay_documents(directory)
     if not paths:
         print(f"no documents in {directory}", file=sys.stderr)  # noqa: T201
         return 1
