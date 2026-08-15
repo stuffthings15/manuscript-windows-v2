@@ -26,6 +26,17 @@ Read the limits before trusting a number:
 * Organization is judged only by where an ordinal discourse marker lands.
 * Both are proxies. A gain here that does not also appear on essays the rules
   were never tuned against is overfitting, not a gain.
+
+Nothing that scores may ask the correction rules what they would still change.
+Three categories did, and a document that has been through those rules therefore
+scored full marks by construction: held-out essay 2 was given 15 of 15 for
+homophones while it read "the print in the textbook is to small for her" and
+"while your putting it away". Homophones, punctuation and grammar are now scored
+on a residual measured independently - confusable words in impossible positions,
+clauses joined with no punctuation, and the ported grammar error score - and the
+rule-based counts survive only as diagnostics, because they say which rule
+missed. A rule that cannot see an error has to cost points, or the number moves
+when a rule fires rather than when the writing improves.
 """
 from __future__ import annotations
 
@@ -40,6 +51,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
+from echo_link_core.polish_error_score import error_score  # noqa: E402
+from echo_link_core.polish_pos import ADJECTIVE, NOUN, VERB, tags  # noqa: E402
 from echo_link_core.polish_spelling import EnglishDictionary  # noqa: E402
 from echo_link_core.polish_syntax import (  # noqa: E402
     fix_subject_verb_agreement,
@@ -103,6 +116,14 @@ META_COMMENTARY = re.compile(
 )
 ORDINAL_MARKER = re.compile(r"\b(the first reason|to begin with|firstly)\b", re.IGNORECASE)
 SENTENCE = re.compile(r"[^.!?]*[.!?]")
+TOKEN = re.compile(r"[A-Za-z']+")
+# Two independent clauses joined with a conjunction and no punctuation at all.
+# Length alone is not the defect - a long single clause is merely long - so the
+# conjunction has to be there. Measured over both corpora: at 25 words every hit
+# is a real run-on, and at 20 the count triples with correct sentences in it.
+_RUN_ON_WORDS = 25
+_COORDINATOR = re.compile(r"\b(?:and|but|so|or|yet)\b", re.IGNORECASE)
+_COPULA = ("is", "are", "was", "were", "feels", "felt", "seems", "seemed", "got", "gets")
 _WORD_TEXT = re.compile(r"<w:t[^>]*>(.*?)</w:t>", re.S)
 _WORD_PARAGRAPH = re.compile(r"<w:p[ >].*?</w:p>", re.S)
 WEIGHTS = {
@@ -160,6 +181,99 @@ def _known(word: str, dictionary: EnglishDictionary) -> bool:
     return stripped != folded and dictionary.contains(stripped)
 
 
+# Confusable words the speller can never see, because both spellings are real.
+#
+# These are written here rather than read from the correction rules on purpose.
+# Asking the rules what they would still change measures the rules against
+# themselves: text that has already been through them scores full marks whatever
+# is left in it. Held-out essay 2 scored 15 of 15 for homophones while reading
+# "the print in the textbook is to small for her" and "while your putting it
+# away". A grader has to be able to see an error the product cannot.
+#
+# Each one was swept over the held-out essays, the twenty-essay corpus and every
+# English sentence embedded in tests/, 2464 sentences, and ships only at zero
+# false positives. The first version of the "to" rule charged "from noon to
+# five", "worked together to correct the problem" and "moved to New York".
+
+
+def _confusable_hits(sentence: str) -> list[str]:
+    """Every confusable word used in a position its spelling cannot take."""
+    found: list[str] = []
+    tokens = TOKEN.findall(sentence)
+    for index, token in enumerate(tokens):
+        lowered = token.casefold()
+        following = tokens[index + 1] if index + 1 < len(tokens) else ""
+        after = tokens[index + 2] if index + 2 < len(tokens) else ""
+        previous = tokens[index - 1].casefold() if index else ""
+        if lowered == "to" and following:
+            # "small" is also a noun, so asking for an unambiguous adjective
+            # finds nothing. Nothing can be a noun in this position anyway,
+            # because "to" is in front of it and there is no determiner. A word
+            # that can be a verb is the infinitive, not a degree phrase. What
+            # follows settles the rest: a degree word takes "for" or "to", and
+            # anything else is the preposition doing its ordinary job.
+            if (
+                ADJECTIVE in tags(following)
+                and VERB not in tags(following)
+                and after.casefold() in ("for", "to")
+            ):
+                found.append(f"to {following} -> too")
+        elif lowered == "your" and following and _is_only_verb(following):
+            found.append(f"your {following} -> you're")
+        elif lowered == "then" and previous and _is_comparative(tokens[index - 1]):
+            found.append(f"{tokens[index - 1]} then -> than")
+        elif lowered == "lose" and previous in _COPULA:
+            found.append(f"{previous} lose -> loose")
+        elif lowered == "loose" and previous in ("to", "will", "would", "might", "could", "may"):
+            found.append(f"{previous} loose -> lose")
+        elif lowered == "its" and following:
+            # Same shape as "to": an adjective after a possessive is normally
+            # modifying the noun that follows it, so the word after decides.
+            if (
+                ADJECTIVE in tags(following)
+                and VERB not in tags(following)
+                and NOUN not in tags(following)
+                and not (after and (NOUN in tags(after) or ADJECTIVE in tags(after)))
+            ):
+                found.append(f"its {following} -> it's")
+    return found
+
+
+def _is_only_verb(word: str) -> bool:
+    classes = tags(word)
+    return bool(classes) and classes == frozenset({VERB})
+
+
+def _is_comparative(word: str) -> bool:
+    """Whether the word is a comparative, judged from its base form.
+
+    The bundled lexicon holds base forms only, so "wider" and "taller" are not
+    in it at all and asking about the inflected word finds nothing. The base is,
+    which is why this strips the ending rather than looking the whole word up.
+    """
+    lowered = word.casefold()
+    if lowered in ("more", "less", "fewer", "better", "worse"):
+        return True
+    if not lowered.endswith("er"):
+        return False
+    bases = [lowered[:-2], lowered[:-1]]
+    # "bigger" doubles the consonant, so the base is three letters shorter.
+    if len(lowered) > 4 and lowered[-3] == lowered[-4]:
+        bases.append(lowered[:-3])
+    return any(tags(base) == frozenset({ADJECTIVE}) for base in bases)
+
+
+def _run_on_sentences(sentences: list[str]) -> list[str]:
+    """Sentences that join clauses with a conjunction and no punctuation."""
+    return [
+        sentence
+        for sentence in sentences
+        if len(sentence.split()) > _RUN_ON_WORDS
+        and not re.search(r"[,;:]", sentence)
+        and _COORDINATOR.search(sentence)
+    ]
+
+
 def grade(path: Path, dictionary: EnglishDictionary, engine: WritingSuggestionEngine) -> dict:
     body = paragraphs(path)
     text = "\n".join(body)
@@ -172,31 +286,39 @@ def grade(path: Path, dictionary: EnglishDictionary, engine: WritingSuggestionEn
     ]
     spelling = max(0.0, WEIGHTS["spelling"] - 1.5 * len(unknown))
 
-    # Anything the deterministic rules would still change is one they missed.
-    residual = 0
+    # Three categories used to be scored on what the deterministic rules would
+    # still change, which grades the rules against themselves: any document that
+    # has been through them scores full marks by construction. Those counts are
+    # still computed, because they say which rule missed, but they no longer
+    # score. What scores is a residual measured without asking the rules.
+    caught = 0
     for line in body:
         repaired = apply_all_suggestions(line, engine.analyze(line))
-        residual += sum(1 for a, b in zip(line.split(), repaired.split()) if a != b)
-    homophones = max(0.0, WEIGHTS["homophones"] - 2.0 * residual)
+        caught += sum(1 for a, b in zip(line.split(), repaired.split()) if a != b)
+    sentences = SENTENCE.findall(text)
+    confusables = [hit for sentence in sentences for hit in _confusable_hits(sentence)]
+    homophones = max(0.0, WEIGHTS["homophones"] - 2.0 * len(confusables))
 
     artefacts = len(ARTEFACT.findall(text))
     unsplit = sum(1 for line in body if split_run_on_sentences(line) != line)
     unlisted = sum(1 for line in body if punctuate_bare_list(line) != line)
-    long_runs = sum(
-        1 for sentence in SENTENCE.findall(text) if len(sentence.split()) > 45
-    )
+    long_runs = [sentence for sentence in sentences if len(sentence.split()) > 45]
+    # A sentence long enough to be charged as a run-on is not charged twice.
+    run_ons = [
+        sentence for sentence in _run_on_sentences(sentences) if sentence not in long_runs
+    ]
     punctuation = max(
         0.0,
         WEIGHTS["punctuation"]
         - 3.0 * artefacts
-        - 3.0 * unsplit
-        - 2.0 * unlisted
-        - 2.0 * long_runs,
+        - 2.0 * len(run_ons)
+        - 2.0 * len(long_runs),
     )
 
     agreement = sum(1 for line in body if fix_subject_verb_agreement(line) != line)
     filler = len(FILLER.findall(text))
-    grammar = max(0.0, WEIGHTS["grammar"] - 3.0 * agreement - 1.5 * filler)
+    errors = error_score(text)
+    grammar = max(0.0, WEIGHTS["grammar"] - 2.0 * errors - 1.5 * filler)
 
     organization = float(WEIGHTS["organization"])
     for index, line in enumerate(body):
@@ -207,7 +329,7 @@ def grade(path: Path, dictionary: EnglishDictionary, engine: WritingSuggestionEn
             organization = max(0.0, WEIGHTS["organization"] - 2.0 * max(0, index - 3))
             break
 
-    meta = sum(1 for sentence in SENTENCE.findall(text) if META_COMMENTARY.search(sentence))
+    meta = sum(1 for sentence in sentences if META_COMMENTARY.search(sentence))
     coherence = max(0.0, WEIGHTS["coherence"] - 2.5 * meta)
 
     return {
@@ -220,10 +342,19 @@ def grade(path: Path, dictionary: EnglishDictionary, engine: WritingSuggestionEn
         "organization": organization,
         "coherence": coherence,
         "unknown": len(unknown),
+        "confusable": len(confusables),
+        "run_ons": len(run_ons) + len(long_runs),
+        "errors": errors,
         "artefacts": artefacts,
-        "agreement": agreement,
         "filler": filler,
         "meta": meta,
+        # Diagnostics only. These say which rule missed; they do not score,
+        # because they are the rules being asked about themselves.
+        "caught": caught,
+        "agreement": agreement,
+        "unsplit": unsplit,
+        "unlisted": unlisted,
+        "hits": confusables,
     }
 
 
@@ -250,16 +381,21 @@ def main() -> int:
 
     print(  # noqa: T201
         f"{'essay':34}{'/100':>5}{'spell':>7}{'homo':>6}{'punct':>7}"
-        f"{'gram':>6}{'org':>6}{'coh':>6}   unknown/artefact/agree/filler/meta"
+        f"{'gram':>6}{'org':>6}{'coh':>6}   unknown/confusable/runon/error/filler/meta"
     )
     for row in rows:
         print(  # noqa: T201
             f"{row['name'][:32]:34}{row['total']:>5}{row['spelling']:>7.0f}"
             f"{row['homophones']:>6.0f}{row['punctuation']:>7.0f}"
             f"{row['grammar']:>6.0f}{row['organization']:>6.0f}{row['coherence']:>6.0f}"
-            f"      {row['unknown']}/{row['artefacts']}/{row['agreement']}/"
-            f"{row['filler']}/{row['meta']}"
+            f"      {row['unknown']}/{row['confusable']}/{row['run_ons']}/"
+            f"{row['errors']}/{row['filler']}/{row['meta']}"
         )
+    # The confusable words are named, because a homophone the reader can see is
+    # the one number here that is worth acting on directly.
+    for row in rows:
+        for hit in row["hits"]:
+            print(f"  {row['name'][:32]:34}{hit}")  # noqa: T201
     mean = sum(row["total"] for row in rows) / len(rows)
     lowest = min(rows, key=lambda row: row["total"])
     print(  # noqa: T201
