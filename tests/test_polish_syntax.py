@@ -11,6 +11,8 @@ import pytest
 from echo_link_core.polish_syntax import (
     apply_syntax_rules,
     fix_subject_verb_agreement,
+    misplaced_first_reason,
+    move_paragraph,
     punctuate_bare_list,
     remove_discourse_filler,
     remove_self_judging_clauses,
@@ -370,3 +372,49 @@ def test_a_duplicate_the_filler_left_behind_a_comma_is_a_known_gap() -> None:
 def test_two_different_words_around_a_filler_both_survive() -> None:
     source = "They kept the cage clean and stuff dry all week."
     assert remove_discourse_filler(source) == "They kept the cage clean dry all week."
+
+
+def test_the_first_reason_paragraph_is_found_and_placed():
+    paragraphs = [
+        "Why Pigeons Make Good Pets",
+        "Intentionally error-filled practice essay.",
+        "Lots of people only think about dogs or cats when they hear the word pet.",
+        "Another benefit is the way a pigeon makes a place feel interesting.",
+        "Visitors could be nervous at first because they have never been close.",
+        "The first reason is companionship, which is important in every country.",
+        "In conclusion a pigeon can make a great pet.",
+    ]
+    move = misplaced_first_reason(paragraphs)
+
+    assert move == (5, 3)
+    moved = move_paragraph(paragraphs, *move)
+    assert moved[3].startswith("The first reason")
+    # Every other paragraph keeps its order, and none is lost.
+    assert sorted(moved) == sorted(paragraphs)
+
+
+def test_a_first_reason_already_in_place_is_left_alone():
+    paragraphs = [
+        "Why Pigeons Make Good Pets",
+        "A practice essay.",
+        "Lots of people only think about dogs or cats.",
+        "The first reason is companionship.",
+        "Another benefit is the way a pigeon makes a place feel interesting.",
+    ]
+    assert misplaced_first_reason(paragraphs) is None
+
+
+def test_a_short_document_is_not_reordered():
+    # Three paragraphs are not an essay with a structure to fix.
+    assert misplaced_first_reason(["A title", "The first reason is cost."]) is None
+
+
+def test_an_essay_with_no_ordinal_marker_is_not_reordered():
+    paragraphs = [
+        "A title",
+        "A practice essay.",
+        "Lots of people only think about dogs or cats.",
+        "Another benefit is the way a pigeon makes a place feel interesting.",
+        "In conclusion a pigeon can make a great pet.",
+    ]
+    assert misplaced_first_reason(paragraphs) is None

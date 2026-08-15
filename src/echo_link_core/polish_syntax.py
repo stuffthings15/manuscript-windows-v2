@@ -557,6 +557,48 @@ def remove_discourse_filler(text: str) -> str:
     return cleaned
 
 
+# A paragraph that announces the first reason belongs before the paragraphs
+# that give the rest of them. In the corpus it lands anywhere from fourth to
+# ninth, after two or three supporting paragraphs have already argued the case.
+#
+# This is the only rule here that moves text rather than editing it, so it
+# returns a proposal and never writes: the caller shows it and the writer
+# decides. Nothing in the correction path calls it yet, and that is deliberate
+# - a whole-document rewrite is the largest write this application can make and
+# it has not been exercised against a live document.
+_ORDINAL_OPENER = re.compile(
+    r"\A[ \t]*(?:the[ \t]+first[ \t]+reason|to[ \t]+begin[ \t]+with|firstly)\b",
+    re.IGNORECASE,
+)
+_INTRODUCTION_PARAGRAPHS = 3
+
+
+def misplaced_first_reason(paragraphs: list[str]) -> tuple[int, int] | None:
+    """Where the first-reason paragraph is, and where it should go.
+
+    Returns None when the essay is short, when no paragraph announces a first
+    reason, or when it is already in place. The target sits directly after the
+    introduction, which is the title, any subtitle, and the opening paragraph.
+    """
+    if len(paragraphs) < _INTRODUCTION_PARAGRAPHS + 2:
+        return None
+    for index, paragraph in enumerate(paragraphs):
+        if not _ORDINAL_OPENER.search(paragraph):
+            continue
+        if index <= _INTRODUCTION_PARAGRAPHS:
+            return None
+        return index, _INTRODUCTION_PARAGRAPHS
+    return None
+
+
+def move_paragraph(paragraphs: list[str], source: int, target: int) -> list[str]:
+    """The paragraphs with one moved, leaving every other order untouched."""
+    remaining = list(paragraphs)
+    moved = remaining.pop(source)
+    remaining.insert(target, moved)
+    return remaining
+
+
 def apply_syntax_rules(text: str) -> str:
     # Self-judgement is removed last, after the run-on splitter has put in the
     # full stops it needs to find where a sentence begins and ends. Run first,
