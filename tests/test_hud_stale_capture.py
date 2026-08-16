@@ -76,48 +76,106 @@ def test_a_failing_probe_never_discards_a_review(monkeypatch):
     assert _alive(_stub(4851442)) is True
 
 
-def _in_focus(stub, incoming_handle: int | None) -> bool:
-    incoming = SimpleNamespace(
-        window=SimpleNamespace(handle=incoming_handle)
-        if incoming_handle is not None
-        else None
+# The handle comparison that used to live here was removed on 2026-08-15, and
+# the four tests that pinned it went with it. It asked whether the focused
+# window WAS the review's window and let every other window through, which is
+# right for a second document and wrong for every other window on the machine.
+# What replaces it is below. The case it protected - moving to a second
+# document - is now served by the writer pressing the shortcut, which reads a
+# fresh capture and replaces the review.
+
+
+# The other half of the same gate, decided by Curtis on 2026-08-15.
+#
+# The check above briefly also asked whether the focused window WAS the
+# review's window, letting every other window through so the writer could move
+# to a second document. That is right for a second document and wrong for every
+# other window on the machine: in ten minutes the HUD captured the chat
+# application eleven times and the essay it was correcting twice, rebuilding the
+# review each time. A writer sees that as the card spamming them on every click.
+#
+# A focus signal is the machine noticing, not the writer asking, so it may not
+# take a review off the screen. Moving to a second document is served by the
+# shortcut, which reads a fresh capture and replaces the review.
+
+
+def _detected(handle: int, text: str = "some text a writer selected"):
+    from echo_link_core.windows_selection import DetectedSelection
+    from echo_link_core.insertion import SelectionRecord, WindowSnapshot
+
+    return DetectedSelection(
+        record=SelectionRecord(text, WindowSnapshot(handle, 4242, "Another window")),
+        anchor=(0, 0, 10, 10),
     )
-    # The check consults the liveness probe, so the stub carries the real one.
-    stub._hud_source_window_alive = lambda: _alive(stub)
-    return window_module.EchoLinkWindow._hud_review_still_in_focus(stub, incoming)
 
 
-def test_a_review_does_not_block_a_different_document(is_window):
-    """The second half of the same bug, and the one that cost three essays.
+def _window_showing(view: str, *, automatic: bool, source_handle: int):
+    """A stub window whose only real answers are the ones the gate reads.
 
-    The source window was alive, so the gate kept the review and swallowed
-    every focus signal from the document the writer had moved to. Replace was
-    then refused against a document the review had never captured, and the
-    counter read "0 of 0".
+    A mock stands in for the rest of the window because the handler runs on
+    past the decision into badge timers and status labels, and none of that is
+    what these tests are about. The assertion is behavioural either way: did a
+    focus signal put a new capture on screen, or did it leave the review alone.
     """
+    from unittest.mock import MagicMock
+
+    stub = MagicMock()
+    stub.selection_monitor = None
+    stub.rewrite_palette.isVisible.return_value = True
+    stub.rewrite_palette.view = view
+    stub.rewrite_palette.automatic = automatic
+    # A real record, because the handler reads more of it than a stub would
+    # suggest: the scope and the control it came from, not only the handle.
+    stub.selected_text_record = _detected(source_handle, "the review on screen").record
+    stub.engine.settings.automatic_writing_hud = True
+    stub.engine.is_busy = False
+    stub._quitting = False
+    stub._automatic_hud_suppress_until = 0.0
+    stub._hud_source_window_alive.return_value = True
+    stub._badge_clear_timer = None
+    return stub
+
+
+def _showed_a_capture(stub) -> bool:
+    return stub.rewrite_palette.show_capture.called
+
+
+@pytest.fixture
+def quiet_status(monkeypatch):
+    """Past the decision the handler announces to a real Qt accessible object.
+
+    A mock is not one, so the announcement raises and hides the result these
+    tests are about. Silencing it leaves the decision itself untouched.
+    """
+    monkeypatch.setattr(window_module, "update_status_label", lambda *a, **k: None)
+
+
+def test_a_click_into_another_window_does_not_rebuild_an_open_review(is_window):
+    """The card the writer is reading survives them clicking somewhere else."""
     is_window(1)
+    stub = _window_showing("card", automatic=True, source_handle=4851442)
 
-    assert _in_focus(_stub(4851442), 9927001) is False
+    window_module.EchoLinkWindow._handle_automatic_selection(stub, _detected(9927001))
+
+    assert _showed_a_capture(stub) is False
 
 
-def test_a_review_still_blocks_signals_from_its_own_document(is_window):
-    """Moving the caret inside the same document must not restart the review."""
+def test_a_badge_is_still_replaced_by_a_new_capture(is_window, quiet_status):
+    """Only a review the writer is working in is protected, not a bare badge."""
     is_window(1)
+    stub = _window_showing("badge", automatic=True, source_handle=4851442)
 
-    assert _in_focus(_stub(4851442), 4851442) is True
+    window_module.EchoLinkWindow._handle_automatic_selection(stub, _detected(9927001))
 
-
-def test_a_dead_source_window_is_stale_whatever_has_focus(is_window):
-    is_window(0)
-
-    assert _in_focus(_stub(4851442), 4851442) is False
+    assert _showed_a_capture(stub) is True
 
 
-def test_an_unidentifiable_window_keeps_the_review(is_window):
-    """Never discard a live review because a handle could not be read."""
+def test_a_review_whose_document_has_closed_stops_blocking(is_window, quiet_status):
+    """A card with no document behind it must not block the machine forever."""
     is_window(1)
+    stub = _window_showing("card", automatic=True, source_handle=4851442)
+    stub._hud_source_window_alive.return_value = False
 
-    assert _in_focus(_stub(4851442), 0) is True
-    assert _in_focus(_stub(4851442), None) is True
-    assert _in_focus(_stub(0), 9927001) is True
-    assert _in_focus(_stub(None), 9927001) is True
+    window_module.EchoLinkWindow._handle_automatic_selection(stub, _detected(9927001))
+
+    assert _showed_a_capture(stub) is True

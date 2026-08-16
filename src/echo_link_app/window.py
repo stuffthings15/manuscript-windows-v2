@@ -1588,7 +1588,23 @@ class EchoLinkWindow(QMainWindow):
                 # previous one's review: an eleven-section job was served to a
                 # ten-section document and the counter read "4 of 11" for text
                 # it had never seen.
-                and self._hud_review_still_in_focus(detected.record)
+                #
+                # It briefly also asked whether the focused window WAS the
+                # review's window, letting any other window through so the
+                # writer could move to a second document. That is the right
+                # answer for a second document and the wrong one for every
+                # other window on the machine. Measured 2026-08-15: in ten
+                # minutes the HUD captured the chat application eleven times
+                # and the essay it was correcting twice, rebuilding the review
+                # on each one, which is what a writer sees as the card
+                # spamming them every time they click.
+                #
+                # A focus signal is the machine noticing, not the writer
+                # asking. It may not take a review off the screen. Moving to a
+                # second document is served by the writer pressing the
+                # shortcut, which reads a fresh capture and replaces the
+                # review, and by dismissing the card they are looking at.
+                and self._hud_source_window_alive()
             )
         ):
             return
@@ -1668,41 +1684,6 @@ class EchoLinkWindow(QMainWindow):
             self.rewrite_palette.x(),
             self.rewrite_palette.y(),
         )
-
-    def _hud_review_still_in_focus(self, incoming: object) -> bool:
-        """Is the review on screen the one for the document now being edited?
-
-        A visible review blocks later focus signals so that moving the caret
-        inside the same document does not restart it. That gate only asked
-        whether the source window still existed, so a review stayed on screen
-        while the writer moved to a *different* document. Every Replace was
-        then correctly refused - the captured text belongs to another file -
-        and after two refusals the review asked for a fresh capture and the
-        counter read "0 of 0". Three essays of a twenty-essay run died this
-        way, with the focus watcher logging one document's title while the
-        edits were going into another.
-
-        A window that cannot be identified on either side keeps the old
-        behaviour: never discard a live review on a guess.
-        """
-        if not self._hud_source_window_alive():
-            return False
-        record = self.selected_text_record
-        if record is None:
-            return True
-        source = int(getattr(record.window, "handle", 0) or 0)
-        target = int(getattr(getattr(incoming, "window", None), "handle", 0) or 0)
-        if source <= 0 or target <= 0:
-            return True
-        if source != target:
-            logger.info(
-                "Writing HUD review belongs to another window source=%d focus=%d; "
-                "letting the new document capture",
-                source,
-                target,
-            )
-            return False
-        return True
 
     def _hud_source_window_alive(self) -> bool:
         """Does the review currently on screen still have a source document?
