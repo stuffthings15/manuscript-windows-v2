@@ -154,3 +154,58 @@ def test_no_corpus_wording_is_memorised_in_the_pattern() -> None:
         "instructions",
     ):
         assert memorised not in META_COMMENTARY.pattern
+
+
+def _docx(tmp_path, body: str):
+    """A minimal .docx carrying one document.xml body."""
+    import zipfile
+
+    path = tmp_path / "essay.docx"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(
+            "word/document.xml",
+            '<?xml version="1.0"?><w:document xmlns:w="http://schemas.'
+            'openxmlformats.org/wordprocessingml/2006/main"><w:body>'
+            f"{body}</w:body></w:document>",
+        )
+    return path
+
+
+def test_a_tab_does_not_turn_word_markup_into_prose(tmp_path) -> None:
+    """The reader must not read "<w:tab/>" as the start of a text run.
+
+    "<w:t[^>]*>" matched "<w:tab/>" because the character class ate "ab/", and
+    the non-greedy scan then ran on to the next "</w:t>" taking every tag in
+    between with it. Eleven of the twenty essays in the 500-percent corpus
+    contain a tab, and each one put a run of Word markup into the graded text,
+    where "proofErr" and "gramStart" were charged as misspelled words. It was
+    very nearly reported as the app corrupting documents.
+    """
+    from grade_corpus import paragraphs
+
+    path = _docx(
+        tmp_path,
+        "<w:p><w:r><w:t>A serious discussion</w:t></w:r>"
+        "<w:r><w:tab/></w:r>"
+        '<w:proofErr w:type="gramStart"/>'
+        "<w:r><w:t>must examine the people involved.</w:t></w:r></w:p>",
+    )
+
+    found = paragraphs(path)
+
+    assert found == ["A serious discussionmust examine the people involved."]
+    assert "proofErr" not in found[0]
+    assert "w:" not in found[0]
+
+
+def test_a_text_run_with_attributes_is_still_read(tmp_path) -> None:
+    """Tightening the pattern must not cost the ordinary case."""
+    from grade_corpus import paragraphs
+
+    path = _docx(
+        tmp_path,
+        '<w:p><w:r><w:t xml:space="preserve">Managed hives can </w:t></w:r>'
+        "<w:r><w:t>support education.</w:t></w:r></w:p>",
+    )
+
+    assert paragraphs(path) == ["Managed hives can support education."]

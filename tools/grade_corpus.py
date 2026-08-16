@@ -124,7 +124,19 @@ TOKEN = re.compile(r"[A-Za-z']+")
 _RUN_ON_WORDS = 25
 _COORDINATOR = re.compile(r"\b(?:and|but|so|or|yet)\b", re.IGNORECASE)
 _COPULA = ("is", "are", "was", "were", "feels", "felt", "seems", "seemed", "got", "gets")
-_WORD_TEXT = re.compile(r"<w:t[^>]*>(.*?)</w:t>", re.S)
+# The space before the attributes is load-bearing. Without it "<w:t[^>]*>" also
+# matches "<w:tab/>", because [^>]* happily eats "ab/", and the non-greedy scan
+# that follows then runs on to the next "</w:t>" swallowing every tag in
+# between. Eleven of the twenty essays in the 500-percent corpus contain a tab,
+# and each one put a run of Word markup into the graded text:
+#
+#     </w:r><w:proofErr w:type="gramStart"/><w:r><w:t>rather
+#
+# That was read as prose. "proofErr" and "gramStart" were counted as misspelled
+# words and charged to the essay, and it was very nearly reported to the owner
+# as the app corrupting his documents. An XML parser says the text nodes are
+# clean; the reader was the only thing broken.
+_WORD_TEXT = re.compile(r"<w:t(?:\s[^>]*)?>(.*?)</w:t>", re.S)
 _WORD_PARAGRAPH = re.compile(r"<w:p[ >].*?</w:p>", re.S)
 WEIGHTS = {
     "spelling": 15,

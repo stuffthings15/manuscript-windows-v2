@@ -40,7 +40,11 @@ from echo_link_core.writing_suggestions import (  # noqa: E402
 
 CORPUS = ROOT / "test-corpus" / "animal-pet-20"
 TESTS = ROOT / "tests"
-_WORD_TEXT = re.compile(r"<w:t[^>]*>(.*?)</w:t>", re.S)
+# The space before the attributes keeps this from also matching "<w:tab/>" and
+# then swallowing markup up to the next "</w:t>". See the note beside the same
+# pattern in grade_corpus.py; it charged Word's own tags to essays as
+# misspellings.
+_WORD_TEXT = re.compile(r"<w:t(?:\s[^>]*)?>(.*?)</w:t>", re.S)
 _WORD_PARAGRAPH = re.compile(r"<w:p[ >].*?</w:p>", re.S)
 # A fixture string is worth sweeping when it reads as English prose. Regex
 # patterns, file paths and identifiers share the quotes but not the shape, and
