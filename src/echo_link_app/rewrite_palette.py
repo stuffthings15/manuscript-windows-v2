@@ -207,7 +207,16 @@ class RewritePalette(QDialog):
         self._pulse_step = 0
         self._analysis_timer = QTimer(self)
         self._analysis_timer.setSingleShot(True)
-        self._analysis_timer.setInterval(180)
+        # Long enough that typing does not trigger it. The badge defers its
+        # analysis so a burst of focus signals costs one review rather than
+        # several, and at 180ms it was not deferring anything a person could
+        # produce: measured 2026-08-16, three captures of a chat window 600 to
+        # 900ms apart each completed a full review before the next arrived, so
+        # the writer got a fresh card on every pause between words.
+        #
+        # Somebody who has stopped to look at the badge has stopped for longer
+        # than this. Somebody still typing has not.
+        self._analysis_timer.setInterval(1200)
         self._analysis_timer.timeout.connect(self._finish_automatic_analysis)
         self._pulse_timer = QTimer(self)
         self._pulse_timer.setInterval(90)

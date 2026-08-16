@@ -3412,3 +3412,49 @@ def test_review_sections_never_overlap_each_other():
             f"sections overlap: [{earlier.start},{earlier.end}) and "
             f"[{later.start},{later.end})"
         )
+
+
+def test_typing_does_not_cost_a_review_between_words(app):
+    """The badge waits for a pause, and a pause is longer than a keystroke.
+
+    The analysis is deferred so a burst of focus signals costs one review
+    rather than several, but at 180 milliseconds it deferred nothing a person
+    could produce. Measured 2026-08-16 against the running app: three captures
+    of a chat window 600 to 900 milliseconds apart each completed a full review
+    before the next arrived, so the writer was handed a fresh card on every
+    pause between words.
+
+    This waits longer than the old interval and shorter than the new one, so it
+    fails outright if the badge goes back to analysing that eagerly.
+    """
+    import time
+
+    palette = RewritePalette(suggestion_engine=_SuggestionEngine())
+    palette.show_capture("teh draft is redy", automatic=True)
+
+    deadline = time.monotonic() + 0.7
+    while time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.02)
+
+    # Still waiting for the writer to stop, so nothing has been analysed.
+    assert palette._analysis_pending is True
+    assert palette._suggestions == ()
+    palette.finish_choice()
+
+
+def test_the_badge_still_analyses_once_the_writer_stops(app):
+    """Deferring must not mean never: the pause has to produce the review."""
+    import time
+
+    palette = RewritePalette(suggestion_engine=_SuggestionEngine())
+    palette.show_capture("teh draft is redy", automatic=True)
+
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline and palette._analysis_pending:
+        app.processEvents()
+        time.sleep(0.02)
+
+    assert palette._analysis_pending is False
+    assert palette._suggestions != ()
+    palette.finish_choice()
