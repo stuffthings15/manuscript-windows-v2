@@ -554,15 +554,22 @@ class RewritePalette(QDialog):
         tone_label.setObjectName("hudEyebrow")
         tone_row.addWidget(tone_label)
         self.tone_combo = QComboBox()
+        # Six on the owner's instruction, 2026-08-16, down from seven on
+        # 2026-08-13 and twenty-two before that. These are the same six Android
+        # cut to under the same instruction the day before, in commit 1aed13d
+        # of that tree: its "Proofread" is this menu's "Clear", which maps to
+        # the Rewrite command and becomes Proofread on an automatic review.
+        # Matching it deliberately, so one product does not offer two different
+        # menus. "Academic" and "Simplified" are what left; both are still
+        # reachable as commands and still carry their tone contracts.
         self.tone_combo.addItems(
             (
                 "Clear",
                 "Improve",
+                "Rephrase",
                 "Shorten",
-                "Friendly",
                 "Formal",
-                "Academic",
-                "Simplified",
+                "Friendly",
             )
         )
         self.tone_combo.setAccessibleName("Rewrite tone")

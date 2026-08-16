@@ -24,11 +24,10 @@ from echo_link_app.review_spans import _review_spans
 TONES = (
     "Clear",
     "Improve",
+    "Rephrase",
     "Shorten",
-    "Friendly",
     "Formal",
-    "Academic",
-    "Simplified",
+    "Friendly",
 )
 TONE_COMMANDS = {tone: ("Rewrite" if tone == "Clear" else tone) for tone in TONES}
 HARD_TERMS = (

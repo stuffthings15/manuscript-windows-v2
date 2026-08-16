@@ -37,14 +37,21 @@ def test_probe_covers_every_visible_hud_tone():
     )
 
     assert TONES == visible
+    # Six on the owner's instruction, 2026-08-16. The menu has grown back
+    # before; this pins the number rather than only the membership.
+    assert len(visible) == 6
+    # Matches Android's six exactly: its "Proofread" is this menu's "Clear".
+    assert "Simplified" not in visible
+    assert "Academic" not in visible
     assert TONE_COMMANDS["Clear"] == "Rewrite"
     assert all(TONE_COMMANDS[tone] == tone for tone in TONES if tone != "Clear")
 
 
 def test_engine_supports_every_master_specification_style():
     # The tone menu was cut to seven on 2026-08-13 because the long list was
-    # mostly synonyms. The styles below are still reachable as commands and
-    # still carry their tone contracts; only the menu shrank.
+    # mostly synonyms, and to six on 2026-08-16. The styles below are still
+    # reachable as commands and still carry their tone contracts; only the
+    # menu shrank.
     app = QApplication.instance() or QApplication([])
     required = {
         "Professional",
@@ -71,7 +78,7 @@ def test_engine_supports_every_master_specification_style():
         for index in range(palette.tone_combo.count())
     }
 
-    assert visible <= required | {"Clear", "Improve", "Shorten"}
+    assert visible <= required | {"Clear", "Improve", "Rephrase", "Shorten"}
     assert required <= set(TONE_CONTRACTS)
     assert required <= set(COMMANDS)
     palette.close()

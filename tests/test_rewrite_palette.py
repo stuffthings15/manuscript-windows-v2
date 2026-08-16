@@ -1462,18 +1462,17 @@ def test_palette_timeout_then_tone_rewrite_shows_text_unlocks_accept_and_resizes
 @pytest.mark.parametrize(
     "option",
     (
-        # The seven the menu offers. This test drives the combo box, so it can
+        # The six the menu offers. This test drives the combo box, so it can
         # only cover tones the menu lists; the styles cut from the menu on
-        # 2026-08-13 are still reachable as commands and are covered by
-        # tests/test_full_page_tone_quality_probe.py.
+        # 2026-08-13 and 2026-08-16 are still reachable as commands and are
+        # covered by tests/test_full_page_tone_quality_probe.py.
         # "Clear" is deliberately absent: it maps to the "Rewrite" command
         # rather than to itself, which the tone probe asserts separately.
         "Improve",
+        "Rephrase",
         "Shorten",
-        "Friendly",
         "Formal",
-        "Academic",
-        "Simplified",
+        "Friendly",
     ),
 )
 def test_palette_maps_every_requested_tone_to_its_local_writing_command(app, option):

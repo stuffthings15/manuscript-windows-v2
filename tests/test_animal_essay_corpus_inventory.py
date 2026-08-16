@@ -43,12 +43,13 @@ def test_inventory_is_stable_and_matches_the_physical_hud_loader() -> None:
     )
 
 
-def test_complete_visible_matrix_is_twenty_essays_by_eight_modes() -> None:
+def test_complete_visible_matrix_is_twenty_essays_by_seven_modes() -> None:
     records = corpus.load_inventory()
 
     assert corpus.VISIBLE_TONES == TONES
-    assert len(corpus.ALL_VISIBLE_MODES) == 8
-    assert len(corpus.expected_case_matrix(records)) == 160
+    # Proofread plus the six visible tones, cut from seven on 2026-08-16.
+    assert len(corpus.ALL_VISIBLE_MODES) == 7
+    assert len(corpus.expected_case_matrix(records)) == 140
 
 
 def test_current_physical_hud_probe_covers_proofread_but_not_visible_tones() -> None:
@@ -59,6 +60,6 @@ def test_current_physical_hud_probe_covers_proofread_but_not_visible_tones() -> 
     gaps = corpus.coverage_gaps(records, current_cases)
 
     assert len(current_cases) == 20
-    assert len(gaps) == 140
+    assert len(gaps) == 120
     assert {mode for _page_id, mode in gaps} == set(corpus.VISIBLE_TONES)
     assert all(mode != "Proofread" for _page_id, mode in gaps)
