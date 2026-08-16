@@ -466,15 +466,35 @@ def main() -> int:
         action="store_true",
         help="do not restart the app between essays (measures the batch, not the essay)",
     )
+    parser.add_argument(
+        "--corpus",
+        type=Path,
+        default=CORPUS,
+        help="the folder of .docx essays to run; defaults to the animal-pet corpus",
+    )
+    parser.add_argument(
+        "--as-a-writer",
+        action="store_true",
+        help=(
+            "one Word session and one app for the whole run, the way somebody "
+            "actually works. Implies --no-restart and never kills Word."
+        ),
+    )
     args = parser.parse_args()
+    # Killing Word and restarting the app between essays is isolation, not use.
+    # It exists because the HUD carried one document's review into the next, and
+    # while it is switched on that defect cannot be seen and no run measures
+    # what a writer would get on their second document.
+    if args.as_a_writer:
+        args.no_restart = True
 
     from echo_link_core.polish_spelling import EnglishDictionary
 
     dictionary = EnglishDictionary()
     dictionary.warm()
 
-    essays = _essay_files(CORPUS)
-    corpus_text = [str(item.get("text", "")) for item in load_essays(CORPUS)]
+    essays = _essay_files(args.corpus)
+    corpus_text = [str(item.get("text", "")) for item in load_essays(args.corpus)]
     work = ROOT / "build" / "batch"
     work.mkdir(parents=True, exist_ok=True)
     out_dir = ROOT / "build" / "corrected"
@@ -490,7 +510,12 @@ def main() -> int:
 
         outcomes: list[str] = []
         for attempt in range(1, max(1, args.repeat) + 1):
-            close_word()  # release the previous run's lock before copying
+            # Release the previous run's lock before copying. A writer never
+            # does this, so --as-a-writer leaves Word alone and relies on
+            # word_essay_session closing the document it opened and waiting out
+            # a busy Word instead of killing it.
+            if not args.as_a_writer:
+                close_word()
             shutil.copy2(source, target)  # every run starts from the original
             if not args.no_restart:
                 restart_app()
@@ -557,7 +582,9 @@ def main() -> int:
     (ROOT / "build" / "batch-summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    close_word()
+    # Leave the writer's Word where they left it.
+    if not args.as_a_writer:
+        close_word()
     print(f"\nsummary: {ROOT / 'build' / 'batch-summary.json'}")
     return 0
 

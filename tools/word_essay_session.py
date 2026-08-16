@@ -173,6 +173,37 @@ def whole_document_button(hud):
     return None
 
 
+# Word answers "Call was rejected by callee" whenever it is busy: opening a
+# document, repaginating, saving. It means try again, not failure, and a writer
+# never meets it because their clicks arrive seconds apart. A script is faster
+# than that, so every call into Word has to be willing to wait and ask again.
+#
+# Without this the batch had to kill Word between essays, and killing Word
+# between essays is not how anybody writes. It also hid what the app restart is
+# there for - the HUD carrying one document's review into the next - so the
+# realistic run was never actually being measured. On 2026-08-15 a whole
+# 20-essay run died on essay 1 because a Word left open from the previous run
+# was still busy.
+_COM_BUSY = (
+    -2147418111,  # RPC_E_CALL_REJECTED
+    -2147417846,  # RPC_E_SERVERCALL_RETRYLATER
+)
+
+
+def com_retry(call, *, attempts: int = 8, pause: float = 1.5):
+    """Make a COM call, waiting out Word's "busy" answer rather than dying."""
+    from comtypes import COMError
+
+    for attempt in range(attempts):
+        try:
+            return call()
+        except COMError as exc:
+            if exc.hresult not in _COM_BUSY or attempt == attempts - 1:
+                raise
+            time.sleep(pause * (attempt + 1))
+    raise AssertionError("unreachable")
+
+
 def word_application():
     """The running Word, or a new one. Word need not already be open.
 
@@ -221,7 +252,8 @@ def focus_named_word_window(stem: str) -> int:
 
 
 def visible_text(document) -> str:
-    text, _spans = _word_visible_text_and_spans(str(document.Content.Text or ""))
+    content = com_retry(lambda: str(document.Content.Text or ""))
+    text, _spans = _word_visible_text_and_spans(content)
     return text
 
 
@@ -333,7 +365,7 @@ def run_session(
     except OSError:
         pass
     if not use_open_document:
-        document = word.Documents.Open(str(working.resolve()))
+        document = com_retry(lambda: word.Documents.Open(str(working.resolve())))
         time.sleep(2.5)
 
     before = visible_text(document)
@@ -604,8 +636,12 @@ def run_session(
         )
 
     try:
-        document.Save()
-        document.Close(SaveChanges=0)
+        # Closing the document and leaving Word open is what a writer does, and
+        # it is what lets the next essay run in the same session. Both calls
+        # wait out a busy Word rather than leaving the file locked for the run
+        # after this one.
+        com_retry(document.Save)
+        com_retry(lambda: document.Close(SaveChanges=0))
     except Exception:  # noqa: BLE001 - Word raises assorted COM errors here
         pass
     _dismiss_existing_hud()
