@@ -350,3 +350,53 @@ def test_a_single_comma_between_repeats_is_left_alone():
 
 def test_plain_repeated_words_still_collapse():
     assert _applied("the the pet needs care.") == "the pet needs care."
+
+
+def _repaired(source: str) -> str:
+    return apply_all_suggestions(source, WritingSuggestionEngine().analyze(source))
+
+
+# A stray line break between the two copies. The 500-percent corpus seeds this
+# 75 times across its 20 essays and every one survived, because only a space, a
+# tab or a run of commas was matched as a separator.
+REPEATED_ACROSS_A_BREAK = (
+    ("neither is sufficient by itself\nitself.", "itself itself"),
+    ("a serious discussion\ndiscussion must examine the people.", "discussion discussion"),
+    ("the report is credible\ncredible enough to use.", "credible credible"),
+)
+
+# A repeat the rule must refuse. Each is correct writing, and the first two were
+# being damaged before this: a reduplicated place name is not a stutter.
+NOT_A_STUTTER = (
+    ("We visited Bora Bora last spring.", "Bora"),
+    ("They met in Walla Walla, Washington.", "Walla"),
+    ("The band played in Baden Baden.", "Baden"),
+    # A capital at the start of a line is what a new paragraph or a heading
+    # looks like, and a captured Word document arrives with its paragraphs in
+    # one string.
+    ("Water\nWater management is expensive.", "Water"),
+    ("Chapter One\nOne of the birds escaped.", "One"),
+    # A blank line is a paragraph boundary, never a stray break.
+    ("the tank was full\n\nfull marks were given.", "full"),
+)
+
+
+@pytest.mark.parametrize(("source", "pair"), REPEATED_ACROSS_A_BREAK)
+def test_a_word_repeated_across_a_line_break_is_repaired(source: str, pair: str) -> None:
+    repaired = _repaired(source)
+    first, second = pair.split()
+    assert repaired.count(first) == 1, repaired
+    assert "\n" + second not in repaired
+
+
+@pytest.mark.parametrize(("source", "kept"), NOT_A_STUTTER)
+def test_a_repeat_that_is_not_a_stutter_is_left_alone(source: str, kept: str) -> None:
+    assert _repaired(source).count(kept) == 2, source
+
+
+def test_a_stutter_at_the_start_of_a_sentence_is_still_repaired() -> None:
+    """Only the second copy has to be lowercase, so these keep working."""
+    assert _repaired("By by the time the team arrived, the floor was wet.") == (
+        "By the time the team arrived, the floor was wet."
+    )
+    assert _repaired("This is the the gate.") == "This is the gate."

@@ -335,9 +335,24 @@ _WORD = re.compile(r"\b[A-Za-z][A-Za-z'-]*\b")
 # deliberately not matched: "New York, New York" and "Puebla, Puebla" are
 # correct English, and a rule that flattened them would be worse than the
 # defect it fixes.
+#
+# A single line break is also a separator. The 500-percent corpus seeds a stray
+# break between the two copies 75 times across its 20 essays - "sufficient by
+# itself\nitself" - and every one survived, because only spaces and tabs were
+# matched. A tab already worked, so the break was the last gap.
+#
+# Two conditions keep it away from a real line boundary, and both are needed
+# because a captured Word document arrives as one string with its paragraphs in
+# it. Only ONE newline may separate the copies, which "[ \t]" cannot span, so a
+# blank line between paragraphs never matches. And the second copy has to be
+# lowercase, because a capitalised word at the start of a line is what a new
+# paragraph or a heading looks like, and "Water\nWater management is expensive"
+# must keep its heading. That costs two of the corpus's 75, both real, and the
+# trade is deliberate: this rule deletes a word the writer typed, so it refuses
+# wherever the evidence is not plain.
 _DUPLICATE_WORD = re.compile(
     r"(?=\b(?P<first>[A-Za-z][A-Za-z'-]*)"
-    r"(?:[ \t]+|[ \t]*,[\s,]*,[ \t]*)"
+    r"(?:[ \t]+|[ \t]*,[\s,]*,[ \t]*|[ \t]*\r?\n[ \t]*(?=(?-i:[a-z])))"
     r"(?P<second>[A-Za-z][A-Za-z'-]*)\b)",
     re.IGNORECASE,
 )
@@ -616,7 +631,20 @@ def _duplicate_candidates(
 ) -> list[_Candidate]:
     found: list[_Candidate] = []
     for match in _DUPLICATE_WORD.finditer(text):
-        if match.group("first").casefold() != match.group("second").casefold():
+        first = match.group("first")
+        second = match.group("second")
+        if first.casefold() != second.casefold():
+            continue
+        # Two capitalised copies are a reduplicated name, not a stutter.
+        # "We visited Bora Bora last spring" came back "We visited Bora last
+        # spring", and "They met in Walla Walla, Washington" lost its town.
+        # polish_error_score has matched lowercase only from the start, for
+        # exactly this reason, and says so beside its pattern; this rule never
+        # got the same discipline and has been deleting place names.
+        #
+        # Only the second copy needs to be lowercase, so "By by the time" and
+        # "The the gate" are still repaired at the start of a sentence.
+        if first[:1].isupper() and second[:1].isupper():
             continue
         start = match.start("first")
         end = match.end("second")
