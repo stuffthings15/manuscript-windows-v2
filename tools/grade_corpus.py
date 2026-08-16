@@ -136,7 +136,18 @@ _COPULA = ("is", "are", "was", "were", "feels", "felt", "seems", "seemed", "got"
 # words and charged to the essay, and it was very nearly reported to the owner
 # as the app corrupting his documents. An XML parser says the text nodes are
 # clean; the reader was the only thing broken.
-_WORD_TEXT = re.compile(r"<w:t(?:\s[^>]*)?>(.*?)</w:t>", re.S)
+#
+# A break and a tab are read as well as the text, because they are whitespace
+# the writer can see and dropping them joins the words on either side. The
+# error-riddled corpus seeds stray line breaks inside a paragraph, so
+# "sufficient by itself\nitself" arrived as the single word "itselfitself",
+# was charged as a misspelling, and was very nearly reported as the app
+# doubling words in the writer's document. The plain-text branch below keeps
+# those breaks, and the same essay has to read the same whichever form it
+# arrives in.
+_WORD_PIECE = re.compile(
+    r"<w:t(?:\s[^>]*)?>(.*?)</w:t>|<w:(br|tab|cr)(?:\s[^>]*)?/>", re.S
+)
 _WORD_PARAGRAPH = re.compile(r"<w:p[ >].*?</w:p>", re.S)
 WEIGHTS = {
     "spelling": 15,
@@ -188,7 +199,13 @@ def paragraphs(path: Path) -> list[str]:
     xml = zipfile.ZipFile(path).read("word/document.xml").decode("utf-8")
     found: list[str] = []
     for block in _WORD_PARAGRAPH.findall(xml):
-        text = "".join(_WORD_TEXT.findall(block))
+        pieces: list[str] = []
+        for piece in _WORD_PIECE.finditer(block):
+            if piece.group(1) is not None:
+                pieces.append(piece.group(1))
+            else:
+                pieces.append("\t" if piece.group(2) == "tab" else "\n")
+        text = "".join(pieces)
         text = (
             text.replace("&amp;", "&")
             .replace("&lt;", "<")

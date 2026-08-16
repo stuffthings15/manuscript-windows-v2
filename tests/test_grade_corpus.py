@@ -193,9 +193,14 @@ def test_a_tab_does_not_turn_word_markup_into_prose(tmp_path) -> None:
 
     found = paragraphs(path)
 
-    assert found == ["A serious discussionmust examine the people involved."]
     assert "proofErr" not in found[0]
     assert "w:" not in found[0]
+    # The tab is whitespace the writer can see, so it separates the words
+    # rather than vanishing and joining them. That is the sister defect, tested
+    # on its own below.
+    assert found[0].split() == [
+        "A", "serious", "discussion", "must", "examine", "the", "people", "involved.",
+    ]
 
 
 def test_a_text_run_with_attributes_is_still_read(tmp_path) -> None:
@@ -209,3 +214,57 @@ def test_a_text_run_with_attributes_is_still_read(tmp_path) -> None:
     )
 
     assert paragraphs(path) == ["Managed hives can support education."]
+
+
+def test_a_line_break_inside_a_paragraph_still_separates_the_words(tmp_path) -> None:
+    """Dropping "<w:br/>" joins the words on either side of it.
+
+    The error-riddled corpus seeds a stray line break inside a paragraph, so
+    "sufficient by itself\nitself" arrived as the single word "itselfitself".
+    It was charged as a misspelling in seven of the twenty essays, and was very
+    nearly reported to the owner as the app doubling words in his document. The
+    seeded error is real; what was wrong was reading it as one word.
+    """
+    from grade_corpus import paragraphs
+
+    path = _docx(
+        tmp_path,
+        "<w:p><w:r><w:t>neither is sufficient by itself</w:t></w:r>"
+        "<w:r><w:br/></w:r>"
+        "<w:r><w:t>itself. A fair evaluation asks who defines success.</w:t></w:r></w:p>",
+    )
+
+    found = paragraphs(path)
+
+    assert "itselfitself" not in found[0]
+    assert found[0].split()[:6] == [
+        "neither", "is", "sufficient", "by", "itself", "itself.",
+    ]
+
+
+def test_a_tab_separates_the_words_around_it(tmp_path) -> None:
+    """Same defect, the other whitespace element the corpus seeds."""
+    from grade_corpus import paragraphs
+
+    path = _docx(
+        tmp_path,
+        "<w:p><w:r><w:t>A serious discussion</w:t></w:r>"
+        "<w:r><w:tab/></w:r>"
+        "<w:r><w:t>discussion must examine the people.</w:t></w:r></w:p>",
+    )
+
+    assert "discussiondiscussion" not in paragraphs(path)[0]
+
+
+def test_a_page_break_carrying_attributes_is_still_read(tmp_path) -> None:
+    """Word writes "<w:br w:type=\\"page\\"/>", not only the bare form."""
+    from grade_corpus import paragraphs
+
+    path = _docx(
+        tmp_path,
+        "<w:p><w:r><w:t>before</w:t></w:r>"
+        '<w:r><w:br w:type="page"/></w:r>'
+        "<w:r><w:t>after the break.</w:t></w:r></w:p>",
+    )
+
+    assert "beforeafter" not in paragraphs(path)[0]
