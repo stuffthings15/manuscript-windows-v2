@@ -235,6 +235,49 @@ def test_palette_groups_edits_into_one_full_sentence_and_applies_it(app):
     palette.finish_choice()
 
 
+def test_finished_review_says_so_and_then_collapses(app):
+    # The GUI build manual, section 14: "No Issues: show a short positive
+    # status, then collapse." Accepting the last section left the card open at
+    # "0 of 0" with nothing to click, which is what the owner reported on
+    # 2026-08-16 over a document whose sections were all done.
+    palette = RewritePalette()
+    replaced: list[str] = []
+    palette.replace_requested.connect(replaced.append)
+    palette.show_capture("teh draft")
+    app.processEvents()
+    assert palette.card_position.text() == "1 of 1"
+
+    palette.apply_suggestion_button.click()
+    app.processEvents()
+
+    # The correction went to the document before the card collapses, so the
+    # collapse cannot be losing it.
+    assert replaced == ["The draft."]
+    assert palette.suggestion_title.text() == "Nothing to correct here"
+    assert palette.card_position.text() == "0 of 0"
+    assert palette._no_issues_timer.isActive()
+
+    palette._no_issues_timer.stop()
+    palette._no_issues_timer.setInterval(1)
+    palette._no_issues_timer.start()
+    QTest.qWait(120)
+    app.processEvents()
+
+    assert not palette.isVisible()
+    palette.finish_choice()
+
+
+def test_a_section_still_under_review_keeps_the_card_open(app):
+    # The collapse must never fire over work the writer still has to do.
+    palette = RewritePalette()
+    palette.show_capture("teh draft")
+    app.processEvents()
+
+    assert palette.card_position.text() == "1 of 1"
+    assert not palette._no_issues_timer.isActive()
+    palette.finish_choice()
+
+
 def test_palette_applies_real_deterministic_suggestions(app):
     palette = RewritePalette()
     replaced = []

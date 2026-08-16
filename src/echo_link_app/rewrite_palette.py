@@ -218,6 +218,16 @@ class RewritePalette(QDialog):
         # than this. Somebody still typing has not.
         self._analysis_timer.setInterval(1200)
         self._analysis_timer.timeout.connect(self._finish_automatic_analysis)
+        # "No Issues: show a short positive status, then collapse" - the GUI
+        # build manual, section 14. Long enough to read one line, short enough
+        # that a document with nothing wrong does not leave a card sitting on
+        # the writer's screen. Before this, a finished document re-offered
+        # itself and the writer was left looking at "0 of 0" with no way
+        # forward, which is what they reported on 2026-08-16.
+        self._no_issues_timer = QTimer(self)
+        self._no_issues_timer.setSingleShot(True)
+        self._no_issues_timer.setInterval(3000)
+        self._no_issues_timer.timeout.connect(self._collapse_after_no_issues)
         self._pulse_timer = QTimer(self)
         self._pulse_timer.setInterval(90)
         self._pulse_timer.timeout.connect(self._pulse_badge)
@@ -825,6 +835,7 @@ class RewritePalette(QDialog):
         self._target_marking_enabled = False
         self.target_changed.emit(-1, -1)
         self._analysis_timer.stop()
+        self._no_issues_timer.stop()
         self._pulse_timer.stop()
         self._ai_timeout_timer.stop()
         self._ai_progress_timer.stop()
@@ -1338,9 +1349,19 @@ class RewritePalette(QDialog):
         if not self.isVisible():
             self._show_near_pointer(activate=True, anchor=self._anchor)
 
+    def _collapse_after_no_issues(self) -> None:
+        # Guard against the world moving under the timer: anything that gave
+        # the writer something to read or act on cancels the collapse.
+        if not self.isVisible() or self._busy:
+            return
+        if self._review_suggestions:
+            return
+        self.finish_choice()
+
     def finish_choice(self) -> None:
         self._target_marking_enabled = False
         self._user_opened = False
+        self._no_issues_timer.stop()
         self.target_changed.emit(-1, -1)
         self._analysis_timer.stop()
         self._pulse_timer.stop()
@@ -1991,7 +2012,17 @@ class RewritePalette(QDialog):
             self.rewrite_sentence_button.setEnabled(False)
             self.dismiss_suggestion_button.setEnabled(False)
             self.apply_changes_button.setEnabled(bool(self.result_text) and not self._busy)
+            # A clean document, and a document whose last section has just been
+            # accepted, both land here. Both should say so and then get out of
+            # the way. A non-empty result_text does not hold the collapse back:
+            # accepting a section already emitted the replacement, and
+            # `_replace` only re-sends the same text.
+            if captured and not self._busy:
+                self._no_issues_timer.start()
+            else:
+                self._no_issues_timer.stop()
             return
+        self._no_issues_timer.stop()
         # The empty-card branch above hides these, so restore them here rather
         # than leaving a real suggestion with no Original pane.
         self.before_heading.setVisible(True)
