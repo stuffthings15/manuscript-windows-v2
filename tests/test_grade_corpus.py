@@ -268,3 +268,75 @@ def test_a_page_break_carrying_attributes_is_still_read(tmp_path) -> None:
     )
 
     assert "beforeafter" not in paragraphs(path)[0]
+
+
+# Sentence length became advice rather than a punctuation charge on 2026-08-17.
+# Essay 1 of the 800-percent corpus lost 12 of its 20 punctuation points to six
+# sentences, every one of them correctly punctuated, and the source and the
+# corrected document held the same six - so the term returned the same value
+# whether the corrector had worked perfectly or never run.
+
+LONG_BUT_CORRECT = (
+    "Some people will disagree before hearing the reasons; however, the "
+    "reasons do not all connect perfectly, but they still show the animal can "
+    "belong in a home, so a dog has habits, needs, and a personality just "
+    "like more famous pets do, only in a different looking package."
+)
+
+
+def test_a_long_correct_sentence_is_advice_and_not_a_punctuation_charge() -> None:
+    from echo_link_core.polish_advice import long_sentence_advice
+
+    advice = long_sentence_advice(LONG_BUT_CORRECT)
+
+    assert len(advice) == 1
+    assert advice[0].kind == "long-sentence"
+    # It says how long, because "too long" without a number is not actionable.
+    assert "48 words" in advice[0].detail
+    # And it says the punctuation was not wrong, so the writer does not go
+    # looking for a mistake that is not there.
+    assert "not changed it" in advice[0].detail
+
+
+def test_ordinary_length_prose_earns_no_advice() -> None:
+    from echo_link_core.polish_advice import long_sentence_advice
+
+    assert long_sentence_advice(
+        "The dog waited by the door. It had learned the routine."
+    ) == ()
+
+
+def test_advice_never_rewrites_the_writers_sentence() -> None:
+    """The whole point of the split: advice is offered, corrections are applied.
+
+    A long correct sentence must come back untouched. Splitting it would
+    rewrite the writer's prose rather than repair it, which is why
+    split_run_on_sentences declines to touch these as well.
+    """
+    from echo_link_core.polish_advice import long_sentence_advice
+    from echo_link_core.polish_syntax import split_run_on_sentences
+
+    advice = long_sentence_advice(LONG_BUT_CORRECT)
+
+    assert advice  # it is worth telling the writer about
+    assert split_run_on_sentences(LONG_BUT_CORRECT) == LONG_BUT_CORRECT
+
+
+def test_a_long_correct_sentence_costs_no_punctuation_points(tmp_path) -> None:
+    """The scoring change itself, driven through the grader.
+
+    Without this the sentence above cost two points as a "long run", and the
+    report added charged run-ons and advisory long sentences into one column,
+    so essay 1 read "runon=7" when it had one run-on and six long sentences.
+    """
+    from grade_corpus import grade
+    from echo_link_core.polish_spelling import EnglishDictionary
+    from echo_link_core.writing_suggestions import WritingSuggestionEngine
+
+    path = _docx(tmp_path, f"<w:p><w:r><w:t>{LONG_BUT_CORRECT}</w:t></w:r></w:p>")
+
+    row = grade(path, EnglishDictionary(), WritingSuggestionEngine())
+
+    assert row["punctuation"] == 20
+    assert row["advice"] == 1
+    assert row["run_ons"] == 0

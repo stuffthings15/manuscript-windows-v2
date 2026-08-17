@@ -51,6 +51,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
+from echo_link_core.polish_advice import long_sentence_advice  # noqa: E402
 from echo_link_core.polish_error_score import error_score  # noqa: E402
 from echo_link_core.polish_pos import ADJECTIVE, NOUN, VERB, tags  # noqa: E402
 from echo_link_core.polish_spelling import EnglishDictionary  # noqa: E402
@@ -358,8 +359,24 @@ def grade(path: Path, dictionary: EnglishDictionary, engine: WritingSuggestionEn
     artefacts = len(ARTEFACT.findall(text))
     unsplit = sum(1 for line in body if split_run_on_sentences(line) != line)
     unlisted = sum(1 for line in body if punctuate_bare_list(line) != line)
+    # Sentence length is ADVICE, not a punctuation defect, and this stopped
+    # being scored on 2026-08-17 at the owner's decision.
+    #
+    # Every one of the six over-long sentences in essay 1 of the 800-percent
+    # corpus was correctly punctuated - semicolons, commas and conjunctions all
+    # right - and the source and the corrected document contained the same six.
+    # A term that returns an identical value whether the corrector worked
+    # perfectly or never ran measures the corpus, not the product, and it was
+    # costing 12 of the 20 punctuation points. `split_run_on_sentences` already
+    # declines to touch these on purpose: splitting a long correct sentence
+    # rewrites the writer's prose instead of repairing it.
+    #
+    # They are still counted and still reported, in the advice column, because
+    # the writer should hear about them. They are not charged.
+    advice = long_sentence_advice(text)
     long_runs = [sentence for sentence in sentences if len(sentence.split()) > 45]
-    # A sentence long enough to be charged as a run-on is not charged twice.
+    # A sentence long enough to be advised about is not also charged as a
+    # run-on, which is why long_runs is still computed.
     run_ons = [
         sentence for sentence in _run_on_sentences(sentences) if sentence not in long_runs
     ]
@@ -367,8 +384,7 @@ def grade(path: Path, dictionary: EnglishDictionary, engine: WritingSuggestionEn
         0.0,
         WEIGHTS["punctuation"]
         - 3.0 * artefacts
-        - 2.0 * len(run_ons)
-        - 2.0 * len(long_runs),
+        - 2.0 * len(run_ons),
     )
 
     agreement = sum(1 for line in body if fix_subject_verb_agreement(line) != line)
@@ -399,7 +415,12 @@ def grade(path: Path, dictionary: EnglishDictionary, engine: WritingSuggestionEn
         "coherence": coherence,
         "unknown": len(unknown),
         "confusable": len(confusables),
-        "run_ons": len(run_ons) + len(long_runs),
+        # Separated on 2026-08-17: these were added together, so a charged
+        # run-on and an advisory long sentence were indistinguishable in the
+        # report. Essay 1 read "runon=7" when it had one run-on and six long
+        # sentences, which is what sent a reader looking for seven defects.
+        "run_ons": len(run_ons),
+        "advice": len(advice),
         "errors": errors,
         "artefacts": artefacts,
         "filler": filler,
@@ -432,7 +453,7 @@ def main() -> int:
 
     print(  # noqa: T201
         f"{'essay':34}{'/100':>5}{'spell':>7}{'homo':>6}{'punct':>7}"
-        f"{'gram':>6}{'org':>6}{'coh':>6}   unknown/confusable/runon/error/filler/meta"
+        f"{'gram':>6}{'org':>6}{'coh':>6}   unknown/confusable/runon/error/filler/meta/advice"
     )
     for row in rows:
         print(  # noqa: T201
@@ -440,7 +461,7 @@ def main() -> int:
             f"{row['homophones']:>6.0f}{row['punctuation']:>7.0f}"
             f"{row['grammar']:>6.0f}{row['organization']:>6.0f}{row['coherence']:>6.0f}"
             f"      {row['unknown']}/{row['confusable']}/{row['run_ons']}/"
-            f"{row['errors']}/{row['filler']}/{row['meta']}"
+            f"{row['errors']}/{row['filler']}/{row['meta']}/{row['advice']}"
         )
     # The confusable words are named, because a homophone the reader can see is
     # the one number here that is worth acting on directly.
