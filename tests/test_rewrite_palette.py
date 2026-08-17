@@ -267,6 +267,115 @@ def test_finished_review_says_so_and_then_collapses(app):
     palette.finish_choice()
 
 
+def _undoable_palette(text="teh draft has erors in it."):
+    """A palette wired to a document the test can read back."""
+    document = {"text": None}
+    palette = RewritePalette()
+    palette.set_step_replacer(
+        lambda written, suggestion: (document.__setitem__("text", written), True)[1]
+    )
+    palette.set_undo_replacer(
+        lambda previous, suggestion: (document.__setitem__("text", previous), True)[1]
+    )
+    palette.show_capture(text)
+    return palette, document
+
+
+def test_accepting_the_last_section_offers_undo_before_it_closes(app):
+    # Section 14 of the GUI build manual: "Applied: show a brief success
+    # message and Undo." Closing the instant the last section was accepted
+    # gave the writer neither, and the only Undo in the product was in the
+    # main window, which a writer working in Word never sees.
+    palette, document = _undoable_palette()
+    app.processEvents()
+    original = palette._preview_base
+
+    palette.apply_suggestion_button.click()
+    app.processEvents()
+
+    assert document["text"] and document["text"] != original
+    assert palette.suggestion_title.text() == "Change applied"
+    assert not palette.undo_button.isHidden()
+    # And it is a brief message, not a new resting state.
+    assert palette._no_issues_timer.isActive()
+    palette.finish_choice()
+
+
+def test_undo_puts_the_text_back_and_returns_the_section(app):
+    palette, document = _undoable_palette()
+    app.processEvents()
+    original = palette._preview_base
+    assert palette.card_position.text() == "1 of 1"
+
+    palette.apply_suggestion_button.click()
+    app.processEvents()
+    palette.undo_button.click()
+    app.processEvents()
+
+    # The document, not just the card.
+    assert document["text"] == original
+    assert palette._preview_base == original
+    # The section is in play again rather than counted as done.
+    assert palette.card_position.text() == "1 of 1"
+    assert palette.undo_button.isHidden()
+    palette.finish_choice()
+
+
+def test_the_applied_message_collapses_into_a_normal_finish(app):
+    palette, _document = _undoable_palette()
+    app.processEvents()
+    applied = []
+    palette.applied.connect(lambda: applied.append(True))
+
+    palette.apply_suggestion_button.click()
+    app.processEvents()
+    palette._no_issues_timer.stop()
+    palette._no_issues_timer.setInterval(1)
+    palette._no_issues_timer.start()
+    QTest.qWait(120)
+    app.processEvents()
+
+    assert not palette.isVisible()
+    assert applied == [True]
+
+
+def test_a_host_that_cannot_reverse_is_never_offered_undo(app):
+    # A button that fails when pressed is worse than no button.
+    palette = RewritePalette()
+    palette.set_step_replacer(lambda written, suggestion: True)
+    palette.show_capture("teh draft has erors in it.")
+    app.processEvents()
+
+    palette.apply_suggestion_button.click()
+    app.processEvents()
+
+    assert palette.undo_button.isHidden()
+    assert not palette.isVisible()
+    palette.finish_choice()
+
+
+def test_a_refused_undo_leaves_the_applied_state_alone(app):
+    # If the document write fails the card must keep describing what is
+    # actually in the document, which is the accepted text.
+    palette = RewritePalette()
+    palette.set_step_replacer(lambda written, suggestion: True)
+    palette.set_undo_replacer(lambda previous, suggestion: False)
+    palette.show_capture("teh draft has erors in it.")
+    app.processEvents()
+    original = palette._preview_base
+
+    palette.apply_suggestion_button.click()
+    app.processEvents()
+    applied_text = palette._preview_base
+    palette.undo_button.click()
+    app.processEvents()
+
+    assert applied_text != original
+    assert palette._preview_base == applied_text
+    assert palette.suggestion_title.text() == "Change applied"
+    palette.finish_choice()
+
+
 def test_a_failed_analysis_is_not_reported_as_a_clean_document(app):
     # When preparing the review raises, the review is emptied and rendered
     # through the same empty-card branch a clean document uses, so a document

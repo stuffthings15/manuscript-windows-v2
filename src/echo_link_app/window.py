@@ -370,6 +370,7 @@ class EchoLinkWindow(QMainWindow):
             self._run_palette_sentence_rewrite
         )
         self.rewrite_palette.set_step_replacer(self._replace_palette_step)
+        self.rewrite_palette.set_undo_replacer(self._undo_palette_step)
         self.rewrite_palette.set_ai_width_provider(self._palette_ai_width)
         self.rewrite_palette.replace_requested.connect(self._replace_palette_result)
         self.rewrite_palette.stage_requested.connect(self._stage_palette_result)
@@ -2782,6 +2783,55 @@ class EchoLinkWindow(QMainWindow):
             self.writing_state,
             "Document updated." if scope == "document" else "Selection updated.",
         )
+
+    def _undo_palette_step(self, previous_text: str, suggestion: object) -> bool:
+        """Reverse the correction just written, by writing the original back.
+
+        Deliberately not `inserter.undo_last()`, which sends Ctrl+Z. That is
+        the editor's undo stack, not ours: it is gated on the same window and
+        120 seconds, and in Word it takes back whatever the writer did last,
+        which after a correction is often their own typing. Replaying the
+        reverse edit through the same range path touches exactly the span this
+        correction touched and nothing else.
+        """
+        current = self.selected_text_record
+        if current is None or not previous_text.strip():
+            return False
+        replacement = str(getattr(suggestion, "replacement", ""))
+        original = str(getattr(suggestion, "original", ""))
+        try:
+            if record_uses_word_document_adapter(current):
+                start = int(getattr(suggestion, "start"))
+                # The span moved when the replacement went in: it now runs from
+                # the same start for the length of what was written, not of
+                # what was there before.
+                restored = self.engine.inserter.replace_document_range(
+                    current,
+                    expected_document_text=current.text,
+                    start=start,
+                    end=start + len(replacement),
+                    expected_text=replacement,
+                    new_text=original,
+                )
+            else:
+                restored = self.engine.inserter.replace_selection(
+                    current, previous_text
+                )
+        except (RuntimeError, ValueError) as exc:
+            logger.warning("Writing HUD undo failed: %s", exc)
+            return False
+        if restored is None:
+            logger.warning(
+                "Writing HUD undo could not recheck the text it applied"
+            )
+            return False
+        if isinstance(restored, SelectionRecord):
+            self.selected_text_record = restored
+        self.writing_source.setPlainText(previous_text)
+        self._automatic_hud_suppress_until = time.monotonic() + 1.5
+        logger.info("Writing HUD undo restored characters=%d", len(original))
+        update_status_label(self.writing_state, "Correction undone.")
+        return True
 
     def _replace_palette_step(self, text: str, suggestion: object) -> bool:
         """Apply one accepted HUD correction now and preserve the remaining review."""

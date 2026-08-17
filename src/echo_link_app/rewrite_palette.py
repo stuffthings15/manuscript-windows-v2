@@ -189,6 +189,12 @@ class RewritePalette(QDialog):
         # recorded once per change rather than on every repaint.
         self._logged_progress = ""
         self._step_replacer: Callable[[str, object], bool] | None = None
+        # Undo is a second write to the document, not a re-run of the first.
+        # It is kept separate from _step_replacer so that a host which can
+        # apply but cannot reverse simply never offers Undo, rather than
+        # offering a button that fails when pressed.
+        self._undo_replacer: Callable[[str, object], bool] | None = None
+        self._undo_state: dict[str, object] | None = None
         self._accepted_external_changes = False
         self._preview_base = ""
         self._updating_result = False
@@ -211,6 +217,10 @@ class RewritePalette(QDialog):
         # The text is kept so Try Again has something to retry.
         self._analysis_failure = ""
         self._analysis_failure_text = ""
+        # True between the last section being accepted and the card closing,
+        # so the empty card says the change was applied rather than that there
+        # was nothing to correct.
+        self._applied_notice = False
         self._pulse_step = 0
         self._analysis_timer = QTimer(self)
         self._analysis_timer.setSingleShot(True)
@@ -284,6 +294,13 @@ class RewritePalette(QDialog):
         replacer: Callable[[str, object], bool] | None,
     ) -> None:
         self._step_replacer = replacer
+
+    def set_undo_replacer(
+        self,
+        replacer: Callable[[str, object], bool] | None,
+    ) -> None:
+        """Install the reverse of set_step_replacer, if the host has one."""
+        self._undo_replacer = replacer
 
     def set_ai_width_provider(self, provider: Callable[[], int] | None) -> None:
         """Let the host window scale concurrent AI prefetch to the hardware."""
@@ -603,6 +620,20 @@ class RewritePalette(QDialog):
         self.dismiss_suggestion_button.clicked.connect(self._dismiss_current_suggestion)
         self.dismiss_suggestion_button.setFixedHeight(32)
         actions.addWidget(self.dismiss_suggestion_button, 1)
+        # Section 14 of the GUI build manual: "Applied: show a brief success
+        # message and Undo." The success message existed as a status line; the
+        # Undo did not. The only undo in the product was "Undo last insert" in
+        # the main window, which a writer working in Word never sees, so a
+        # correction accepted by mistake could not be taken back from where it
+        # was accepted. Hidden until there is something to undo, because a
+        # permanently dead control is furniture.
+        self.undo_button = QPushButton("Undo")
+        self.undo_button.setAccessibleName("Undo the correction just applied")
+        self.undo_button.setObjectName("hudTextButton")
+        self.undo_button.setFixedHeight(32)
+        self.undo_button.clicked.connect(self._undo_last_applied)
+        self.undo_button.hide()
+        actions.addWidget(self.undo_button, 1)
         layout.addLayout(actions)
 
         self.previous_button = QPushButton("Previous", page)
@@ -850,6 +881,8 @@ class RewritePalette(QDialog):
         self.target_changed.emit(-1, -1)
         self._analysis_timer.stop()
         self._no_issues_timer.stop()
+        self._undo_state = None
+        self._applied_notice = False
         self._pulse_timer.stop()
         self._ai_timeout_timer.stop()
         self._ai_progress_timer.stop()
@@ -1379,12 +1412,17 @@ class RewritePalette(QDialog):
             return
         if self._review_suggestions:
             return
+        if self._applied_notice:
+            self._finish_after_apply()
+            return
         self.finish_choice()
 
     def finish_choice(self) -> None:
         self._target_marking_enabled = False
         self._user_opened = False
         self._no_issues_timer.stop()
+        # The document is not being un-corrected after the card has gone.
+        self._undo_state = None
         self.target_changed.emit(-1, -1)
         self._analysis_timer.stop()
         self._pulse_timer.stop()
@@ -1943,6 +1981,11 @@ class RewritePalette(QDialog):
             return
         available = self._available_suggestions()
         self._review_suggestions = available
+        # One place decides whether Undo exists, so it cannot be left visible
+        # over a review it no longer belongs to.
+        can_undo = self._undo_state is not None and self._undo_replacer is not None
+        self.undo_button.setVisible(can_undo)
+        self.undo_button.setEnabled(can_undo and not self._busy)
         if self._review_index >= len(available):
             self._review_index = max(0, len(available) - 1)
         category = self._active_filter()
@@ -2022,7 +2065,16 @@ class RewritePalette(QDialog):
             # know the difference or to ask for another attempt.
             captured = bool(source.strip())
             failed = bool(self._analysis_failure) and captured
-            if failed:
+            if self._applied_notice and captured and not failed:
+                self.suggestion_title.setText("Change applied")
+                self.suggestion_explanation.setText(
+                    "The correction was written to your document. Undo puts "
+                    "it back."
+                )
+                self.before_text.setPlainText(source)
+                self._set_suggested_text(source, source)
+                self.card_position.setText("0 of 0")
+            elif failed:
                 self.suggestion_title.setText("Could not check this text")
                 explanation = (
                     "Manuscript could not finish checking this text, so it has "
@@ -2474,6 +2526,22 @@ class RewritePalette(QDialog):
             self._set_status(str(exc), assertive=True)
             return
         changed_now = updated != self._preview_base
+        # Captured before anything moves, because after the accept the review
+        # list has been shifted and the index reset, and an Undo that only put
+        # the document back would leave the card describing a section that is
+        # no longer there.
+        undo_state = {
+            "suggestion": suggestion,
+            "preview_base": self._preview_base,
+            "result_text": self.result_text,
+            # The source tuple, not the derived review list: _review_suggestions
+            # is rebuilt from this by _render_suggestions, and storing the
+            # derived one would quietly drop anything already dismissed.
+            "suggestions": self._suggestions,
+            "index": self._review_index,
+            "completed": self._review_progress_completed,
+            "resolved": set(self._review_resolved),
+        }
         if changed_now and self._step_replacer is not None:
             try:
                 applied = bool(self._step_replacer(updated, suggestion))
@@ -2485,6 +2553,11 @@ class RewritePalette(QDialog):
                 logger.warning("Writing HUD immediate Accept was not applied")
                 return
             self._accepted_external_changes = True
+            # Only a write that actually reached the document can be undone,
+            # and only if the host installed a reverse. Anything else leaves
+            # the previous undo in place rather than offering a false one.
+            if self._undo_replacer is not None:
+                self._undo_state = undo_state
         self._preview_base = updated
         self._set_result_text(updated)
         self._dismissed_ids.clear()
@@ -2535,11 +2608,17 @@ class RewritePalette(QDialog):
             self._request_ai_proofread_current()
             return
         if self._step_replacer is not None:
-            self.finish_choice()
-            if self._accepted_external_changes:
-                self.applied.emit()
-            else:
-                self.unchanged.emit()
+            # Section 14: "Applied: show a brief success message and Undo."
+            # Closing the instant the last section is accepted gives the
+            # writer neither. Hold the card just long enough to offer the
+            # Undo, and let the collapse timer close it exactly as a clean
+            # document is closed.
+            if self._undo_state is not None:
+                self._applied_notice = True
+                self._render_suggestions()
+                self._set_status("Change applied. Undo is available briefly.")
+                return
+            self._finish_after_apply()
             return
         if updated != self.source_edit.toPlainText():
             self._set_status("Applying accepted sentences...")
@@ -2547,6 +2626,59 @@ class RewritePalette(QDialog):
         else:
             self.finish_choice()
             self.unchanged.emit()
+
+    def _finish_after_apply(self) -> None:
+        """Close the review and tell the host whether the document changed."""
+        self._applied_notice = False
+        self.finish_choice()
+        if self._accepted_external_changes:
+            self.applied.emit()
+        else:
+            self.unchanged.emit()
+
+    def _undo_last_applied(self) -> None:
+        """Put back the correction that was just written to the document.
+
+        The document is reversed first and the card follows, never the other
+        way round: if the write fails the review must still describe what is
+        actually in the document, which is the accepted state.
+        """
+        state = self._undo_state
+        if self._busy or state is None or self._undo_replacer is None:
+            return
+        suggestion = state["suggestion"]
+        previous = str(state["preview_base"])
+        try:
+            undone = bool(self._undo_replacer(previous, suggestion))
+        except (RuntimeError, TypeError, ValueError) as exc:
+            logger.warning("Writing HUD Undo failed: %s", exc)
+            self._set_status(f"That change could not be undone. {exc}", assertive=True)
+            return
+        if not undone:
+            logger.warning("Writing HUD Undo was refused")
+            self._set_status(
+                "That change could not be undone. The document may have "
+                "changed since it was applied.",
+                assertive=True,
+            )
+            return
+        self._undo_state = None
+        self._applied_notice = False
+        self._preview_base = previous
+        self._set_result_text(str(state["result_text"]))
+        self._suggestions = state["suggestions"]
+        self._review_index = int(state["index"])
+        self._review_progress_completed = int(state["completed"])
+        self._review_resolved.clear()
+        self._review_resolved.update(state["resolved"])
+        self._render_suggestions()
+        logger.info(
+            "Writing HUD Undo restored section id=%s reviews=%d",
+            str(getattr(suggestion, "suggestion_id", "")) or "none",
+            len(self._review_suggestions),
+        )
+        self._update_series_progress()
+        self._set_status("Change undone. The section is back for review.")
 
     def _dismiss_current_suggestion(self) -> None:
         if self._busy or not self._review_suggestions:
@@ -2566,11 +2698,7 @@ class RewritePalette(QDialog):
             self._request_ai_proofread_current()
             return
         if self._step_replacer is not None:
-            self.finish_choice()
-            if self._accepted_external_changes:
-                self.applied.emit()
-            else:
-                self.unchanged.emit()
+            self._finish_after_apply()
             return
         if self._preview_base != self.source_edit.toPlainText():
             self._set_status("Applying accepted sentences...")
