@@ -267,6 +267,41 @@ def test_finished_review_says_so_and_then_collapses(app):
     palette.finish_choice()
 
 
+def test_a_rules_only_section_says_so_on_the_card(app):
+    # A deterministic correction used to be presented exactly like an AI one,
+    # which is how a rules-only essay reads as a working corrector right up
+    # until it is graded. Nine rules-only paragraphs were once reported as
+    # nine successes because nothing outside the engine could tell a refused
+    # section from a corrected one.
+    palette = RewritePalette(ai_proofread=False)
+    palette.show_capture("teh draft has erors in it.")
+    app.processEvents()
+
+    assert palette.after_heading.text() == "Suggested text, built-in rules only"
+    explanation = palette.suggestion_explanation.text()
+    assert "The AI has not corrected this section" in explanation
+    # And it says why, rather than leaving the writer to guess.
+    assert "AI proofreading is off for this review" in explanation
+    palette.finish_choice()
+
+
+def test_an_ai_corrected_section_is_not_labelled_rules_only(app):
+    # The label has to be absent when it does not apply, or it is noise and
+    # stops being read.
+    palette = RewritePalette(ai_proofread=True)
+    palette.show_capture("teh draft has erors in it.")
+    app.processEvents()
+    suggestion = palette._current_review_suggestion()
+    palette._ai_completed_ids.add(str(getattr(suggestion, "suggestion_id", "")))
+
+    palette._render_suggestions()
+    app.processEvents()
+
+    assert palette.after_heading.text() == "Suggested text"
+    assert "built-in rules only" not in palette.suggestion_explanation.text()
+    palette.finish_choice()
+
+
 def _undoable_palette(text="teh draft has erors in it."):
     """A palette wired to a document the test can read back."""
     document = {"text": None}

@@ -2313,9 +2313,53 @@ class RewritePalette(QDialog):
             if self._view != "card":
                 self._set_view("loading", activate=True, reposition=False)
             return
+        # Everything above either locked the section until its AI result
+        # arrives or gave the failure its own card. Reaching here means the
+        # section is being offered to the writer as usable, so if the AI never
+        # produced this text, say so on the card rather than letting a
+        # deterministic rule correction pass for an AI one.
+        #
+        # Curtis's standing requirement is that no section is skipped. This
+        # does not enforce that - it makes a breach visible instead of silent,
+        # which is the part that was missing: nine rules-only paragraphs were
+        # once reported as nine successes because nothing outside the engine
+        # could tell a refused section from a corrected one.
+        self._mark_ai_provenance(suggestion_id)
         if self._view == "card" and self.isVisible():
             self._apply_view_size()
             QTimer.singleShot(50, self._reassert_current_view_size)
+
+    def _mark_ai_provenance(self, suggestion_id: str) -> None:
+        """Say on the card whether the AI produced the text being offered.
+
+        Two things can bring a section here without an AI result. The local AI
+        can be unavailable or switched off, in which case the whole review is
+        deterministic; or a manual palette flow can expose the rule correction
+        while no request for this section is in flight. Both used to look
+        exactly like an AI correction, which is how a rules-only essay reads
+        as a working corrector right up until it is graded.
+        """
+        if suggestion_id and suggestion_id in self._ai_completed_ids:
+            self.after_heading.setText("Suggested text")
+            return
+        self.after_heading.setText("Suggested text, built-in rules only")
+        note = (
+            "The AI has not corrected this section. This is Manuscript's "
+            "built-in rule correction, which fixes spelling, punctuation and "
+            "common grammar but not phrasing."
+        )
+        if not self._ai_proofread:
+            note += " AI proofreading is off for this review."
+        existing = self.suggestion_explanation.text().strip()
+        combined = f"{existing} {note}".strip() if existing else note
+        self.suggestion_explanation.setText(combined)
+        self.suggestion_explanation.setToolTip(combined)
+        self.after_text.setToolTip(note)
+        logger.info(
+            "Writing HUD offering a rules-only section id=%s ai_proofread=%s",
+            suggestion_id or "none",
+            self._ai_proofread,
+        )
 
     def _set_current_review_status(self, fallback: str) -> None:
         suggestion = self._current_review_suggestion()
