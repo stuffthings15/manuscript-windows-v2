@@ -267,6 +267,40 @@ def test_finished_review_says_so_and_then_collapses(app):
     palette.finish_choice()
 
 
+def test_a_card_asking_for_a_fresh_capture_does_not_collapse(app):
+    # require_recapture renders an empty review before it writes its own
+    # message, so the no-issues collapse armed itself over a card that is the
+    # opposite of no issues: it is asking the writer to capture again. Left
+    # alone it took that request off the screen after three seconds.
+    palette = RewritePalette()
+    palette.set_step_replacer(lambda text, suggestion: True)
+    palette.show_capture("teh draft has erors in it.")
+    app.processEvents()
+
+    palette.require_recapture("The document changed. Capture it again.")
+    app.processEvents()
+
+    assert palette.suggestion_title.text() == "Fresh selection required"
+    assert not palette._no_issues_timer.isActive()
+    assert palette.isVisible()
+    palette.finish_choice()
+
+
+def test_a_failure_message_does_not_collapse(app):
+    # Same hole, reached through show_error: a card carrying a failure and a
+    # recovery action has to stay put.
+    palette = RewritePalette()
+    palette.show_capture("teh draft")
+    app.processEvents()
+    palette._no_issues_timer.start()
+
+    palette.show_error("This correction was not applied.")
+    app.processEvents()
+
+    assert not palette._no_issues_timer.isActive()
+    palette.finish_choice()
+
+
 def test_a_section_still_under_review_keeps_the_card_open(app):
     # The collapse must never fire over work the writer still has to do.
     palette = RewritePalette()

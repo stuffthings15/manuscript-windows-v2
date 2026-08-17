@@ -1303,6 +1303,10 @@ class RewritePalette(QDialog):
 
     def show_error(self, message: str) -> None:
         message = user_ai_status(message)
+        # A card carrying a failure and a recovery action must not collapse
+        # under the no-issues timer. See require_recapture for the case that
+        # proved this necessary.
+        self._no_issues_timer.stop()
         self.set_busy(False)
         if not self.after_text.toPlainText().strip():
             self._restore_visible_suggestion()
@@ -1335,6 +1339,11 @@ class RewritePalette(QDialog):
         self._dismissed_ids.clear()
         self._set_result_text("")
         self._render_suggestions()
+        # _render_suggestions sees an empty review here and starts the
+        # no-issues collapse. This card is the opposite of no issues: it is
+        # asking the writer to capture again, and collapsing it three seconds
+        # later takes the request off the screen before it can be read.
+        self._no_issues_timer.stop()
         self.suggestion_title.setText("Fresh selection required")
         self.suggestion_explanation.setText(message)
         for button in self.command_buttons.values():
