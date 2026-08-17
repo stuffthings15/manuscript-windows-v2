@@ -267,6 +267,47 @@ def test_finished_review_says_so_and_then_collapses(app):
     palette.finish_choice()
 
 
+def test_a_failed_analysis_is_not_reported_as_a_clean_document(app):
+    # When preparing the review raises, the review is emptied and rendered
+    # through the same empty-card branch a clean document uses, so a document
+    # whose analysis blew up was congratulated for having nothing wrong with
+    # it. A 9630 character document lost 25 sections that way on 2026-08-15
+    # and the card said "Nothing to correct here".
+    class _Exploding:
+        def __init__(self):
+            self.calls = 0
+
+        def analyze(self, text):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("boom")
+            return ()
+
+    engine = _Exploding()
+    palette = RewritePalette(suggestion_engine=engine)
+    palette.show_capture("teh draft has erors in it.")
+    app.processEvents()
+
+    assert palette.suggestion_title.text() == "Could not check this text"
+    assert "not been reviewed" in palette.suggestion_explanation.text()
+    assert "Nothing to correct here" not in palette.suggestion_title.text()
+    # The manual requires a recovery action, and a failure must not collapse.
+    assert palette.rewrite_sentence_button.text() == "Try Again"
+    assert palette.rewrite_sentence_button.isEnabled()
+    assert not palette._no_issues_timer.isActive()
+
+    # Try Again retries the preparation, not a sentence rewrite: there is no
+    # suggestion to rewrite, because building them is what failed.
+    palette.rewrite_sentence_button.click()
+    app.processEvents()
+
+    assert engine.calls == 2
+    assert palette._analysis_failure == ""
+    assert palette.suggestion_title.text() != "Could not check this text"
+    assert palette.rewrite_sentence_button.text() == "Regenerate"
+    palette.finish_choice()
+
+
 def test_a_card_asking_for_a_fresh_capture_does_not_collapse(app):
     # require_recapture renders an empty review before it writes its own
     # message, so the no-issues collapse armed itself over a card that is the

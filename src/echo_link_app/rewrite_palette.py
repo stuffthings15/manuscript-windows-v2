@@ -204,6 +204,13 @@ class RewritePalette(QDialog):
         self._badge_dragged = False
         self._user_positioned = False
         self._analysis_pending = False
+        # Set when preparing the review raised. Without it the empty-review
+        # card says "Nothing to correct here" over a document whose analysis
+        # just failed, which is how a 25-section review of a 9630 character
+        # document was shown to the writer as a clean document on 2026-08-15.
+        # The text is kept so Try Again has something to retry.
+        self._analysis_failure = ""
+        self._analysis_failure_text = ""
         self._pulse_step = 0
         self._analysis_timer = QTimer(self)
         self._analysis_timer.setSingleShot(True)
@@ -1419,6 +1426,14 @@ class RewritePalette(QDialog):
         self.command_requested.emit(command, language)
 
     def _request_sentence_rewrite(self) -> None:
+        # On the analysis-failure card this button is Try Again, and there is
+        # no current suggestion to rewrite because preparing them is what
+        # failed. Retry the preparation itself.
+        if self._analysis_failure and not self._busy:
+            text = self._analysis_failure_text or self.source_edit.toPlainText()
+            self._set_status("Checking this text again.")
+            self._analyze_suggestions(text)
+            return
         suggestion = self._current_review_suggestion()
         if self._busy or suggestion is None:
             return
@@ -1784,6 +1799,8 @@ class RewritePalette(QDialog):
 
     def _analyze_suggestions(self, text: str) -> None:
         self._review_progress_completed = 0
+        self._analysis_failure = ""
+        self._analysis_failure_text = ""
         candidate = text
         if not candidate.strip():
             self._suggestions = ()
@@ -1821,6 +1838,8 @@ class RewritePalette(QDialog):
             )
             self._suggestions = ()
             self._review_progress_total = 0
+            self._analysis_failure = str(exc) or type(exc).__name__
+            self._analysis_failure_text = text
             self._render_suggestions()
             self._set_status(f"Local suggestions unavailable: {exc}", assertive=True)
             return
@@ -1988,13 +2007,34 @@ class RewritePalette(QDialog):
         if not total:
             self.target_changed.emit(-1, -1)
             source = self._preview_base or self.source_edit.toPlainText()
-            # Two different things end up here and they need different words.
+            # Three different things end up here and they need different words.
             # Saying "No sentence available - capture editable text again" over
             # two blank panes and "0 of 0" told a writer nothing: they could not
             # tell a failed capture from a document with nothing to fix, and the
             # empty Original pane read as the app having lost their text.
+            #
+            # The third is worse than either, and it is the reason for the
+            # failed branch below. When preparing the review raises, the review
+            # is emptied and rendered here, so a document whose analysis just
+            # blew up was congratulated for having nothing wrong with it. That
+            # is what a 9630 character document got on 2026-08-15: 25 sections
+            # became "Nothing to correct here", and the writer had no way to
+            # know the difference or to ask for another attempt.
             captured = bool(source.strip())
-            if captured:
+            failed = bool(self._analysis_failure) and captured
+            if failed:
+                self.suggestion_title.setText("Could not check this text")
+                explanation = (
+                    "Manuscript could not finish checking this text, so it has "
+                    "not been reviewed. Your document was not changed. Choose "
+                    "Try Again to check it again."
+                )
+                self.suggestion_explanation.setText(explanation)
+                self.suggestion_explanation.setToolTip(self._analysis_failure)
+                self.before_text.setPlainText(source)
+                self._set_suggested_text("", "")
+                self.card_position.setText("")
+            elif captured:
                 self.suggestion_title.setText("Nothing to correct here")
                 self.suggestion_explanation.setText(
                     "Manuscript found no spelling, grammar or punctuation "
@@ -2019,21 +2059,28 @@ class RewritePalette(QDialog):
                 self.card_position.setText("")
             self.before_heading.setVisible(captured)
             self.before_text.setVisible(captured)
-            self.after_heading.setVisible(captured)
+            self.after_heading.setVisible(captured and not failed)
             self.queue_heading.hide()
             self.queue_preview.hide()
             self.previous_button.setEnabled(False)
             self.next_button.setEnabled(False)
             self.apply_suggestion_button.setEnabled(False)
-            self.rewrite_sentence_button.setEnabled(False)
+            # The manual requires every error state to carry a recovery action,
+            # and for an analysis failure that action is Try Again. This button
+            # is already the retry control for a section whose AI did not
+            # finish, so it keeps that job here rather than growing a second
+            # button that means the same thing.
+            self.rewrite_sentence_button.setText("Try Again" if failed else "Regenerate")
+            self.rewrite_sentence_button.setEnabled(failed and not self._busy)
             self.dismiss_suggestion_button.setEnabled(False)
             self.apply_changes_button.setEnabled(bool(self.result_text) and not self._busy)
             # A clean document, and a document whose last section has just been
             # accepted, both land here. Both should say so and then get out of
             # the way. A non-empty result_text does not hold the collapse back:
             # accepting a section already emitted the replacement, and
-            # `_replace` only re-sends the same text.
-            if captured and not self._busy:
+            # `_replace` only re-sends the same text. A failure never collapses:
+            # it is asking for a decision, not reporting a clean document.
+            if captured and not failed and not self._busy:
                 self._no_issues_timer.start()
             else:
                 self._no_issues_timer.stop()
