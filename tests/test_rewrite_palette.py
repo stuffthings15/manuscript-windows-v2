@@ -302,13 +302,42 @@ def test_an_ai_corrected_section_is_not_labelled_rules_only(app):
     palette.finish_choice()
 
 
-def test_the_hud_is_not_always_on_top(app):
-    # A writer who clicks another window has chosen that window. An
-    # always-on-top HUD then sits over their mail with no way to put it behind
-    # anything. It is still raised above the document when it appears.
+def test_the_hud_floats_over_the_document_it_is_reviewing(app):
+    # Removing the always-on-top hint outright was a regression, not a fix.
+    # The HUD sank behind the very document it was correcting: the owner
+    # reported "no small icon, no suggestions, no corrections" while the log
+    # showed ten sections corrected and written to disk. An invisible HUD is
+    # indistinguishable from a dead one.
     palette = RewritePalette()
 
+    assert palette.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    palette.close()
+
+
+def test_the_hud_gives_up_the_top_when_the_writer_moves_elsewhere(app):
+    # "If the user decides that they want to click another window, it should
+    # not stay on top." Toggling the hint on a visible frameless window can
+    # drop it on Windows, so this also pins that it stays visible and keeps
+    # the position it was placed at.
+    palette = RewritePalette()
+    palette.show_capture("teh draft has erors in it.", anchor=(400, 300, 900, 340))
+    app.processEvents()
+    placed = palette.pos()
+
+    palette.set_stays_on_top(False)
+    app.processEvents()
+
     assert not (palette.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+    assert palette.isVisible()
+    assert palette.pos() == placed
+
+    palette.set_stays_on_top(True)
+    app.processEvents()
+
+    assert palette.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    assert palette.isVisible()
+    assert palette.pos() == placed
+    palette.finish_choice()
     palette.close()
 
 

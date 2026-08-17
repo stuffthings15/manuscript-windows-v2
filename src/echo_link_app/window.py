@@ -1587,6 +1587,8 @@ class EchoLinkWindow(QMainWindow):
             detected.record.window.title,
             len(detected.record.text),
         )
+        # The writer is in a document, so the HUD belongs in front of it.
+        self.rewrite_palette.set_stays_on_top(True)
         palette_visible = self.rewrite_palette.isVisible()
         if (
             not self.engine.settings.automatic_writing_hud
@@ -1830,6 +1832,11 @@ class EchoLinkWindow(QMainWindow):
         ):
             # A different top-level window is an exact focus loss, not Word's
             # transient UI Automation flap. Remove the icon immediately.
+            #
+            # And stop floating over whatever they moved to. The writer has
+            # chosen that window; the HUD covering their mail with no way to
+            # put it behind anything is what "it should not stay on top" means.
+            self.rewrite_palette.set_stays_on_top(False)
             self._badge_clear_pending_record = record
             self._finish_badge_clear()
             return

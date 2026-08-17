@@ -111,14 +111,19 @@ class RewritePalette(QDialog):
         suggestion_engine=None,
         ai_proofread: bool = False,
     ):
-        # Deliberately NOT WindowStaysOnTopHint. The HUD is raised above the
-        # document it was captured from when it appears, which is what a writer
-        # needs, but a writer who clicks another window has chosen that window:
-        # an always-on-top HUD then sits over their mail or their browser with
-        # no way to put it behind anything. Normal Z-order gives both.
+        # On top by default, and switched off when the writer moves to a window
+        # that is not the document under review. See set_stays_on_top.
+        #
+        # Removing the hint outright was tried on 2026-08-16 and was a
+        # regression: the harness activates Word to apply each correction, so
+        # the HUD sank behind the very document it was correcting. The owner
+        # reported "no small icon, no suggestions, no corrections" while the
+        # log showed ten sections being corrected and written to disk. An
+        # invisible HUD is indistinguishable from a dead one.
         flags = (
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
         )
         super().__init__(parent, flags)
         self.setWindowTitle("Manuscript writing HUD")
@@ -310,6 +315,29 @@ class RewritePalette(QDialog):
     ) -> None:
         """Install the reverse of set_step_replacer, if the host has one."""
         self._undo_replacer = replacer
+
+    def set_stays_on_top(self, enabled: bool) -> None:
+        """Keep the HUD above the document under review, but not above others.
+
+        A writer working in Word needs the HUD in front of Word, or it is
+        invisible and the product looks dead. A writer who has clicked their
+        mail has chosen their mail, and the HUD must be able to go behind it.
+
+        Toggling this hint on a visible frameless window can drop it on
+        Windows, so the geometry is captured and restored and the window is
+        re-shown without stealing focus.
+        """
+        wanted = bool(enabled)
+        if wanted == bool(self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint):
+            return
+        was_visible = self.isVisible()
+        where = self.geometry()
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, wanted)
+        if was_visible:
+            self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+            self.show()
+            self.setGeometry(where)
+            self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
 
     def set_ai_width_provider(self, provider: Callable[[], int] | None) -> None:
         """Let the host window scale concurrent AI prefetch to the hardware."""
