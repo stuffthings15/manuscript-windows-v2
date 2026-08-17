@@ -302,6 +302,64 @@ def test_an_ai_corrected_section_is_not_labelled_rules_only(app):
     palette.finish_choice()
 
 
+def test_the_hud_is_not_always_on_top(app):
+    # A writer who clicks another window has chosen that window. An
+    # always-on-top HUD then sits over their mail with no way to put it behind
+    # anything. It is still raised above the document when it appears.
+    palette = RewritePalette()
+
+    assert not (palette.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+    palette.close()
+
+
+def test_the_box_does_not_move_itself_once_it_has_been_placed(app):
+    # The card changes size and anchor as a review runs, and every one of those
+    # re-decided where the box belonged, so it walked around the screen while
+    # the writer was reading it. Placement happens once per capture.
+    #
+    # An earlier version of this test resized the widget and re-asserted, and
+    # passed with the fix removed: _reassert_current_view_size calls
+    # _apply_view_size first, which puts the size back, so nothing moved either
+    # way. A different anchor is what actually relocates the box.
+    palette = RewritePalette()
+    palette.show_capture(
+        "teh draft has erors. the dog dont fit. i has a problim here.",
+        anchor=(400, 300, 900, 340),
+    )
+    app.processEvents()
+    placed = palette.pos()
+
+    assert not palette._may_auto_place()
+    palette._show_near_pointer(activate=False, anchor=(1200, 800, 1500, 860))
+    app.processEvents()
+    palette._reassert_current_view_size()
+    app.processEvents()
+
+    assert palette.pos() == placed
+    palette.finish_choice()
+    palette.close()
+
+
+def test_a_position_the_writer_chose_survives_the_next_capture(app):
+    # "If the user wants to move it, they should be able to move it, but it
+    # should not move on its own." Putting it back on the next capture is the
+    # box moving on its own again.
+    palette = RewritePalette()
+    palette.show_capture("teh draft has erors.", anchor=(400, 300, 900, 340))
+    app.processEvents()
+
+    palette.move(QPoint(50, 60))
+    palette._user_positioned = True
+    palette.show_capture("another teh document with erors.", anchor=(1000, 700, 1400, 740))
+    app.processEvents()
+    palette._reassert_current_view_size()
+    app.processEvents()
+
+    assert palette.pos() == QPoint(50, 60)
+    palette.finish_choice()
+    palette.close()
+
+
 class _NullMonitor:
     def pause(self):
         return None

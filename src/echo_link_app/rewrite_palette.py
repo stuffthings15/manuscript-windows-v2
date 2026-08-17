@@ -111,10 +111,14 @@ class RewritePalette(QDialog):
         suggestion_engine=None,
         ai_proofread: bool = False,
     ):
+        # Deliberately NOT WindowStaysOnTopHint. The HUD is raised above the
+        # document it was captured from when it appears, which is what a writer
+        # needs, but a writer who clicks another window has chosen that window:
+        # an always-on-top HUD then sits over their mail or their browser with
+        # no way to put it behind anything. Normal Z-order gives both.
         flags = (
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
         )
         super().__init__(parent, flags)
         self.setWindowTitle("Manuscript writing HUD")
@@ -209,6 +213,11 @@ class RewritePalette(QDialog):
         self._badge_drag_offset: QPoint | None = None
         self._badge_dragged = False
         self._user_positioned = False
+        # Placed once per capture, then left alone. The box used to be
+        # re-positioned by every resize and every section change, and the card
+        # changes size per section, so it walked around the screen while the
+        # writer was reading it.
+        self._placed_for_capture = False
         self._analysis_pending = False
         # Set when preparing the review raised. Without it the empty-review
         # card says "Nothing to correct here" over a document whose analysis
@@ -893,7 +902,10 @@ class RewritePalette(QDialog):
         self._user_opened = False
         self._document_scope = bool(document_scope)
         self._anchor = anchor
-        self._user_positioned = False
+        # _user_positioned is deliberately NOT reset here. A writer who moved
+        # the box has said where they want it, and putting it back on the next
+        # capture is the box moving on its own again.
+        self._placed_for_capture = False
         self._dismissed_ids.clear()
         self._ai_requested_ids.clear()
         self._ai_completed_ids.clear()
@@ -1036,7 +1048,7 @@ class RewritePalette(QDialog):
             # Windows can expand a visible frameless Qt window to the newly
             # revealed page's size hint. Reassert the intended disclosure size.
             self._apply_view_size()
-            if reposition and not self._user_positioned:
+            if reposition and self._may_auto_place():
                 self._position_on_screen(anchor=self._anchor)
             else:
                 self.move(old_position)
@@ -2900,7 +2912,13 @@ class RewritePalette(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, not activate)
         self.show()
         self._apply_view_size()
-        self._position_on_screen(anchor=anchor)
+        # The last place the box could still overrule the writer. Showing it
+        # again - a new capture, a re-open - must not drag a box the writer
+        # parked somewhere back to the text.
+        if self._may_auto_place():
+            self._position_on_screen(anchor=anchor)
+        else:
+            self._clamp_current_position()
         if activate:
             self.raise_()
             self.activateWindow()
@@ -2913,10 +2931,19 @@ class RewritePalette(QDialog):
         if not self.isVisible():
             return
         self._apply_view_size()
-        if self._user_positioned:
-            self._clamp_current_position()
-        else:
+        if self._may_auto_place():
             self._position_on_screen(anchor=self._anchor)
+        else:
+            self._clamp_current_position()
+
+    def _may_auto_place(self) -> bool:
+        """Whether the HUD is still allowed to choose its own position.
+
+        False once the writer has moved it, and false once it has been placed
+        for the current capture. Everything after that clamps to the screen
+        rather than re-deciding where the box belongs.
+        """
+        return not self._user_positioned and not self._placed_for_capture
 
     def _position_on_screen(
         self,
@@ -2962,6 +2989,7 @@ class RewritePalette(QDialog):
         x = min(max(target_x, area.left()), area.right() - width + 1)
         y = min(max(target_y, area.top()), area.bottom() - height + 1)
         self.move(x, y)
+        self._placed_for_capture = True
 
     def _clamp_current_position(self) -> None:
         screen = QApplication.screenAt(self.pos()) or QApplication.primaryScreen()
