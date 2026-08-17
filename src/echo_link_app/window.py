@@ -195,6 +195,16 @@ def _unique_document_text(document: str, expected: str) -> str | None:
     return matches[0] if len(matches) == 1 else None
 
 
+def _normalized_document_text(value: str) -> str:
+    """One spelling of a document's text, for comparing two captures of it.
+
+    Word reports the same document with different line endings and trailing
+    whitespace depending on how it was read, so a raw comparison of two
+    captures of one unchanged document can differ.
+    """
+    return str(value).replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
 def _same_document_text(document: str, expected: str) -> bool:
     normalize = lambda value: value.replace("\r\n", "\n").replace("\r", "\n").strip()
     return normalize(document) == normalize(expected)
@@ -319,6 +329,12 @@ class EchoLinkWindow(QMainWindow):
         sample = self.store.get_meta("writing_runtime_eta", {})
         self._palette_eta_sample = sample if isinstance(sample, dict) else {}
         self._automatic_hud_suppress_until = 0.0
+        # Text that has already been through a complete review, so the badge
+        # does not offer a finished document back to the writer. Keyed on the
+        # text itself rather than on a timer: if the writer never edits, it
+        # should never be re-offered, and the moment they do edit the text no
+        # longer matches and the offer returns on its own.
+        self._reviewed_texts: collections.deque = collections.deque(maxlen=8)
         self.selected_text_record = None
         if hasattr(self.engine.inserter, "set_selection_provider"):
             self.engine.inserter.set_selection_provider(self._read_current_writing_record)
@@ -1642,6 +1658,33 @@ class EchoLinkWindow(QMainWindow):
             )
             return
         record = detected.record
+        # A document that has already been through a complete review must not
+        # be offered back. Essay 1 on 2026-08-15 finished all 22 sections at
+        # 23:58:51 and the badge re-fired on the same text nine seconds later,
+        # rebuilding the whole review: "sections=22 atomic=0 characters=9555".
+        # The writer was then walked through 22 sections with nothing in them,
+        # which is what they reported as "no corrections made to it".
+        #
+        # The obvious-looking fix does not work and was checked before this
+        # one was written: the manual's "No Issues, collapse" cannot catch it,
+        # because a review builds one section per span whether or not there is
+        # anything to correct, so a finished document produces 22 sections and
+        # never reaches the empty card at all. Measured on a clean 7 paragraph
+        # document: atomic=0, sections=7, counter "1 of 7".
+        #
+        # This is keyed on the text and not on a timer, so a document the
+        # writer leaves alone is never re-offered however long they look at it,
+        # and one they edit is offered again immediately because the text no
+        # longer matches. The shortcut is unaffected: this is the machine
+        # noticing, not the writer asking.
+        if _normalized_document_text(record.text) in self._reviewed_texts:
+            logger.info(
+                "Writing HUD did not re-offer a document already reviewed "
+                "scope=%s chars=%d",
+                record.scope,
+                len(record.text),
+            )
+            return
         logger.info(
             "Writing HUD capture prepared scope=%s chars=%d",
             record.scope,
@@ -3012,7 +3055,30 @@ class EchoLinkWindow(QMainWindow):
         update_status_label(self.writing_state, "Correction applied. Next section ready.")
         return True
 
+    def _remember_reviewed_text(self) -> None:
+        """Record the document as it stands now that its review has finished.
+
+        Recorded after the corrections went in, not before, because the next
+        automatic capture reads the corrected text. Essay 1 on 2026-08-15
+        finished at 9568 characters and re-offered itself at 9555: the same
+        document, and the only text worth remembering is the second one.
+        """
+        record = self.selected_text_record
+        if record is None:
+            return
+        text = _normalized_document_text(record.text)
+        if not text or text in self._reviewed_texts:
+            return
+        self._reviewed_texts.append(text)
+        logger.info(
+            "Writing HUD review finished; will not auto-offer this text again "
+            "chars=%d remembered=%d",
+            len(text),
+            len(self._reviewed_texts),
+        )
+
     def _finish_palette_applied(self) -> None:
+        self._remember_reviewed_text()
         self._clear_palette_review_state()
         self._automatic_hud_suppress_until = time.monotonic() + 1.5
         self._resume_selection_monitor()
@@ -3039,6 +3105,7 @@ class EchoLinkWindow(QMainWindow):
         )
 
     def _finish_palette_unchanged(self) -> None:
+        self._remember_reviewed_text()
         self._clear_palette_review_state()
         self._resume_selection_monitor()
         update_status_label(

@@ -302,6 +302,86 @@ def test_an_ai_corrected_section_is_not_labelled_rules_only(app):
     palette.finish_choice()
 
 
+class _NullMonitor:
+    def pause(self):
+        return None
+
+    def resume(self):
+        return None
+
+    def stop(self, timeout=0):
+        return None
+
+
+def test_a_finished_document_is_not_offered_back(app, tmp_path):
+    # Essay 1 on 2026-08-15 finished all 22 sections at 23:58:51 and the badge
+    # re-fired on the same text nine seconds later, rebuilding the whole
+    # review as "sections=22 atomic=0". The writer was then walked through 22
+    # sections with nothing in them.
+    window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
+    window.selection_monitor = _NullMonitor()
+    record = _selection("This document has already been reviewed in full.")
+
+    window._handle_automatic_selection(DetectedSelection(record, (100, 120, 280, 150)))
+    app.processEvents()
+    assert window.rewrite_palette.isVisible()
+
+    # Finish the review the way the palette does when the last section goes.
+    window.rewrite_palette.finish_choice()
+    window._finish_palette_unchanged()
+    app.processEvents()
+
+    window._handle_automatic_selection(DetectedSelection(record, (100, 120, 280, 150)))
+    app.processEvents()
+
+    assert not window.rewrite_palette.isVisible()
+    assert window.selected_text_record is None
+    window.close()
+
+
+def test_editing_after_a_review_brings_the_offer_back(app, tmp_path):
+    # Keyed on the text, not a timer: the moment the writer changes something
+    # the document is a different document and is worth offering again.
+    window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
+    window.selection_monitor = _NullMonitor()
+    first = _selection("This document has already been reviewed in full.")
+
+    window._handle_automatic_selection(DetectedSelection(first, (100, 120, 280, 150)))
+    app.processEvents()
+    window.rewrite_palette.finish_choice()
+    window._finish_palette_unchanged()
+    app.processEvents()
+
+    edited = _selection("This document has already been reviewed in full. And teh writer added this.")
+    window._handle_automatic_selection(DetectedSelection(edited, (100, 120, 280, 150)))
+    app.processEvents()
+
+    assert window.rewrite_palette.isVisible()
+    assert window.selected_text_record == edited
+    window.close()
+
+
+def test_line_endings_alone_do_not_count_as_an_edit(app, tmp_path):
+    # Word reports the same document with different line endings depending on
+    # how it was read, so a raw comparison would re-offer an unchanged file.
+    window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
+    window.selection_monitor = _NullMonitor()
+    first = _selection("One line.\r\nTwo lines.")
+
+    window._handle_automatic_selection(DetectedSelection(first, (100, 120, 280, 150)))
+    app.processEvents()
+    window.rewrite_palette.finish_choice()
+    window._finish_palette_unchanged()
+    app.processEvents()
+
+    same = _selection("One line.\nTwo lines.")
+    window._handle_automatic_selection(DetectedSelection(same, (100, 120, 280, 150)))
+    app.processEvents()
+
+    assert not window.rewrite_palette.isVisible()
+    window.close()
+
+
 def _undoable_palette(text="teh draft has erors in it."):
     """A palette wired to a document the test can read back."""
     document = {"text": None}
