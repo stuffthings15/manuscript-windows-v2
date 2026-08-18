@@ -36,6 +36,7 @@ from .polish_model_packs import (
 from .polish_quality import CorrectionQualityGate, tone_contract_instruction
 from .polish_runtime import AdaptiveInferenceRuntime
 from .polish_runtime_packs import RuntimePackManager
+from .polish_residual import accept_residual_repair, residual_unknown_words
 from .polish_spelling import PolishRuleEngine, normalize_polish_text
 from .polish_types import (
     ClassifierDecision,
@@ -1119,6 +1120,82 @@ class PolishEngine:
             return False
         return quality.error_score <= deterministic_quality.error_score
 
+    def _repair_residual_spelling(
+        self,
+        request: CorrectionRequest,
+        final_text: str,
+        *,
+        plan,
+        used_llm: bool,
+    ) -> str:
+        """Ask the model once more about words that are still misspelled.
+
+        Only for a proofread, and only when the model already ran: a rules-only
+        answer has not had its chance yet, and a tone rewrite is not the place
+        to be changing words.
+
+        Everything that comes back goes through `accept_residual_repair`, which
+        allows a changed word only where the word was unknown before and is
+        known after, with every other word identical and in the same order. A
+        model that also rewords is refused whole. This runs after the text has
+        been validated once, so anything wider would be a second rewrite of
+        prose that was already agreed.
+
+        Any failure leaves the text exactly as it was. A residual repair is a
+        bonus pass; it must never be able to make a correction worse.
+        """
+        if not used_llm or request.command.strip().casefold() != "proofread":
+            return final_text
+        dictionary = getattr(self.rules, "dictionary", None)
+        if dictionary is None:
+            return final_text
+        unknown = residual_unknown_words(final_text, dictionary)
+        if not unknown:
+            return final_text
+        listed = ", ".join(unknown[:8])
+        try:
+            generation = self.runtime.generate(
+                GenerationRequest(
+                    text=final_text,
+                    command=request.command,
+                    profile=request.profile,
+                    instruction=(
+                        "Correct only the misspelled words in this text: "
+                        f"{listed}. Change nothing else. Keep every other "
+                        "word, and the order of the words, exactly as they "
+                        "are."
+                    ),
+                    language=request.language,
+                    protected_terms=request.protected_terms,
+                    plan=plan,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - the runtime raises many types
+            # A residual pass that fails must not disturb a correction that
+            # succeeded, so this is swallowed deliberately and recorded.
+            logger.info("Residual spelling pass did not run: %s", exc)
+            return final_text
+        if generation is None:
+            return final_text
+        repaired = accept_residual_repair(
+            final_text,
+            str(generation.text or "").strip(),
+            dictionary,
+        )
+        if repaired is None:
+            logger.info(
+                "Residual spelling pass refused for %d word(s): %s",
+                len(unknown),
+                listed,
+            )
+            return final_text
+        logger.info(
+            "Residual spelling pass repaired %d word(s): %s",
+            len(unknown),
+            listed,
+        )
+        return repaired
+
     def analyze(self, request: CorrectionRequest) -> CorrectionResult:
         started = time.perf_counter()
         normalized = normalize_polish_text(request.text)
@@ -1874,6 +1951,17 @@ class PolishEngine:
                 "AI correction was not accepted. Every spelling, agreement "
                 "and punctuation repair is applied."
             )
+        # The words the speller refused to guess get one more look, now that
+        # the model has corrected everything around them. See polish_residual
+        # for why the refusal is right and why this cannot be fixed by
+        # loosening the speller: frequency prefers "easy" for "esay" and the
+        # writer meant "essay".
+        final_text = self._repair_residual_spelling(
+            request,
+            final_text,
+            plan=accepted_plan,
+            used_llm=used_llm,
+        )
         terminal_runtime_kind = RuntimeFailureKind.NONE
         if not used_llm and cascade_state.failure_kind is not RuntimeFailureKind.NONE:
             terminal_runtime_kind = cascade_state.failure_kind

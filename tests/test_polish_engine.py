@@ -5764,3 +5764,89 @@ def test_two_truncations_far_apart_are_not_a_streak():
 
     clock[0] += _VALIDATION_FAILURE_TTL_SECONDS + 0.01
     assert engine._failed_pack_ids() == set()
+
+
+class _SmallDictionary:
+    """The handful of words these residual tests need to know."""
+
+    KNOWN = frozenset(
+        "it just needs to fit the person and place report is ready suit "
+        "location perfectly the".split()
+    )
+
+    def contains(self, word: str) -> bool:
+        return word.casefold() in self.KNOWN
+
+
+class SpellingRules(FakeRules):
+    """FakeRules with the dictionary the residual pass looks for.
+
+    The pass returns the text untouched when the rule engine exposes no
+    dictionary, which is right for a stub and is why these tests need one.
+    """
+
+    dictionary = _SmallDictionary()
+
+
+def test_a_word_the_speller_refused_is_repaired_by_a_second_pass():
+    """The gap that let "prson" reach a finished document.
+
+    The speller returns nothing for "prson" because person and prison are both
+    one edit away, and that refusal is correct - frequency is the wrong
+    tie-break, and it prefers "easy" over "essay" for "esay". Its docstring
+    says it leaves the word for the model, which reads the sentence. Nothing
+    re-checked after the model ran, so on 2026-08-17 five essays finished with
+    words like prson, nees, hoever and saing still in them.
+    """
+    corrected = "It just needs to fit the prson and the place."
+    repaired = "It just needs to fit the person and the place."
+    runtime = FakeRuntime((corrected, repaired))
+    value, _ = engine(
+        classifier=FakeClassifier(needs_llm=True),
+        runtime=runtime,
+        rules=SpellingRules(),
+    )
+
+    result = value.analyze(request("it just nees to fit the prson and the place"))
+
+    assert result.text == repaired
+    # Two calls: the correction, then the residual spelling pass.
+    assert len(runtime.generate_calls) == 2
+    assert "prson" in runtime.generate_calls[1].instruction
+
+
+def test_a_second_pass_that_rewords_is_refused_whole():
+    """A residual repair may fix spelling and nothing else.
+
+    This runs after the text has been validated once, so a model that returns
+    a nicer sentence is refused rather than merged: a second pass that can
+    reword is a second pass that can undo the first.
+    """
+    corrected = "It just needs to fit the prson and the place."
+    reworded = "It needs to suit the person and the location perfectly."
+    runtime = FakeRuntime((corrected, reworded))
+    value, _ = engine(
+        classifier=FakeClassifier(needs_llm=True),
+        runtime=runtime,
+        rules=SpellingRules(),
+    )
+
+    result = value.analyze(request("it just nees to fit the prson and the place"))
+
+    assert result.text == corrected
+
+
+def test_no_second_pass_when_every_word_is_known():
+    """The extra call costs a model round trip, so it only runs when needed."""
+    corrected = "The report is ready."
+    runtime = FakeRuntime((corrected,))
+    value, _ = engine(
+        classifier=FakeClassifier(needs_llm=True),
+        runtime=runtime,
+        rules=SpellingRules(),
+    )
+
+    result = value.analyze(request("teh report is ready"))
+
+    assert result.text == corrected
+    assert len(runtime.generate_calls) == 1
