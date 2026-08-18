@@ -1426,3 +1426,69 @@ def test_a_non_breaking_space_reads_the_same_through_com_and_accessibility():
 
     assert visible == insertion._canonical_word_text(sentence)
     assert len(spans) == len(visible), "one span per visible character"
+
+
+class _FakeDocument:
+    def __init__(self, name):
+        self.Name = name
+
+
+class _FakeWord:
+    """Word with several documents open and ActiveDocument on the wrong one."""
+
+    def __init__(self, active, names):
+        self.ActiveDocument = _FakeDocument(active) if active else None
+        self.Documents = [_FakeDocument(name) for name in names]
+
+
+def _record_for(title):
+    from echo_link_core.insertion import SelectionRecord, WindowSnapshot
+
+    return SelectionRecord("some captured text", WindowSnapshot(11, 22, title))
+
+
+def test_the_document_is_found_by_name_when_word_focus_points_elsewhere():
+    """Every essay after the first failed for this, in every batch run.
+
+    The batch leaves each essay open, and Word does not move ActiveDocument to
+    follow the focused window, so the guard compared essay 2's title against
+    essay 1's document and refused: "refused a different active document
+    (document='01_Dogs...' title='02_Cats... - Word')". A correction could
+    never be applied again for the rest of the run.
+    """
+    word = _FakeWord(
+        active="01_Dogs_in_Bakersfield_USA.docx",
+        names=["01_Dogs_in_Bakersfield_USA.docx", "02_Cats_in_Bath_England.docx"],
+    )
+    record = _record_for("02_Cats_in_Bath_England  -  Compatibility Mode - Word")
+
+    found = insertion._word_document_for_record(word, record)
+
+    assert found is not None
+    assert found.Name == "02_Cats_in_Bath_England.docx"
+
+
+def test_the_active_document_is_preferred_when_it_is_the_right_one():
+    word = _FakeWord(
+        active="02_Cats_in_Bath_England.docx",
+        names=["01_Dogs_in_Bakersfield_USA.docx", "02_Cats_in_Bath_England.docx"],
+    )
+    record = _record_for("02_Cats_in_Bath_England - Word")
+
+    assert insertion._word_document_for_record(word, record) is word.ActiveDocument
+
+
+def test_no_matching_document_is_still_refused():
+    """The guard's protection is kept, and it is the important half.
+
+    Writing a correction into the wrong essay is far worse than declining to
+    write at all, so an unmatched title returns nothing rather than falling
+    back to whatever happens to be active.
+    """
+    word = _FakeWord(
+        active="01_Dogs_in_Bakersfield_USA.docx",
+        names=["01_Dogs_in_Bakersfield_USA.docx"],
+    )
+    record = _record_for("02_Cats_in_Bath_England - Word")
+
+    assert insertion._word_document_for_record(word, record) is None

@@ -391,6 +391,44 @@ def _word_title_names_document(window_title: str, document_name: str) -> bool:
     return bool(separator) and bool(stem) and stem in title
 
 
+def _safe_document_name(document: object) -> str:
+    try:
+        return str(getattr(document, "Name", "") or "").strip()
+    except Exception:  # noqa: BLE001 - Word raises assorted COM errors
+        return ""
+
+
+def _word_document_for_record(word: object, record: SelectionRecord) -> object | None:
+    """The open document this capture came from, by name rather than by focus.
+
+    This used to trust `word.ActiveDocument`, and that is wrong whenever more
+    than one document is open: Word does not move ActiveDocument to follow the
+    focused window. On 2026-08-17 every essay after the first failed for this
+    reason, because the batch leaves each essay open - "refused a different
+    active document (document='01_Dogs...' title='02_Cats... - Word')" - and a
+    correction could never be applied again for the rest of the run.
+
+    The guard itself was right and is kept: a correction must only ever be
+    written to the document its capture came from. Refusing when nothing
+    matches is deliberate, because writing into the wrong essay is far worse
+    than declining to write at all.
+    """
+    title = record.window.title
+    active = getattr(word, "ActiveDocument", None)
+    active_name = _safe_document_name(active)
+    if active_name and _word_title_names_document(title, active_name):
+        return active
+    try:
+        documents = list(word.Documents)
+    except Exception:  # noqa: BLE001 - Word raises assorted COM errors
+        return None
+    for candidate in documents:
+        name = _safe_document_name(candidate)
+        if name and _word_title_names_document(title, name):
+            return candidate
+    return None
+
+
 def _replace_word_document_range(
     record: SelectionRecord,
     *,
@@ -409,16 +447,13 @@ def _replace_word_document_range(
         logger.info("Word COM range adapter unavailable")
         return _WORD_COM_NOT_APPLICABLE
     try:
-        document = word.ActiveDocument
-        document_name = str(document.Name or "").strip()
-        if not document_name or not _word_title_names_document(
-            record.window.title, document_name
-        ):
+        document = _word_document_for_record(word, record)
+        if document is None:
             logger.warning(
-                "Word COM range replacement refused a different active document "
-                "(document=%r title=%r)",
-                document_name,
+                "Word COM range replacement found no open document named by the "
+                "capture (title=%r active=%r)",
                 record.window.title,
+                _safe_document_name(getattr(word, "ActiveDocument", None)),
             )
             return False
         content = document.Content
