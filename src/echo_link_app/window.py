@@ -2604,13 +2604,20 @@ class EchoLinkWindow(QMainWindow):
                 failures = tuple(
                     getattr(polish_result.validation, "failures", ()) or ()
                 )
+                # residual_errors as well as validation.failures, because the
+                # failures list came back empty on the path that matters and
+                # left "guards=unrecorded" as the only clue. Between the two,
+                # one of them names what refused the section.
+                residual = tuple(getattr(polish_result, "residual_errors", ()) or ())
                 logger.warning(
                     "Writing HUD section fell back to rules command=%s "
-                    "characters=%d reason=%s guards=%s",
+                    "characters=%d reason=%s guards=%s residual=%s rejected_llm=%s",
                     command,
                     len(source),
                     str(polish_result.metrics.get("refusal_reason") or "unrecorded"),
                     "; ".join(str(value) for value in failures) or "unrecorded",
+                    "; ".join(str(value) for value in residual) or "none",
+                    getattr(polish_result, "rejected_llm", "unknown"),
                 )
             duration = max(0.1, time.monotonic() - started_at)
             if polish_result is None or polish_result.used_llm:

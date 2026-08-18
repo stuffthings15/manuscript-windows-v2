@@ -22,7 +22,7 @@ from .correction import (
     _protected_value_pattern,
 )
 from .local_transport import LocalTransportError, LoopbackJSONTransport
-from .meaning_diff import unexplained_losses
+from .meaning_diff import edit_distance, unexplained_losses
 from .polish_quality import tone_contract_instruction
 from .models import OLLAMA_KEEP_ALIVE
 
@@ -1898,6 +1898,35 @@ def _repair_stranded_terminator(text: str) -> str:
 
 # "wether" is a real English word - a castrated ram - so no speller will ever
 # call it a typo, and essay 1 keeps "Wether in Bakersfield" through every run.
+def _nearest_protected_spelling(candidate: str, value: str) -> str | None:
+    """A word in the answer that is the protected value, spelled differently.
+
+    Deliberately narrow. Single words only, because a multi-word value that
+    drifted is a rewrite rather than a typo repair. Same first letter, because
+    a typo almost never changes it and that rule already earns its keep in the
+    speller. Distance of at most two, and never closer to some other word in
+    the answer than to the value.
+    """
+    if not value or " " in value.strip():
+        return None
+    folded = value.casefold()
+    limit = 2 if len(folded) > 5 else 1
+    best: tuple[int, str] | None = None
+    for match in re.finditer(r"(?<!\w)[A-Za-z][A-Za-z'-]*(?!\w)", candidate):
+        word = match.group(0)
+        lowered = word.casefold()
+        if lowered == folded or lowered[:1] != folded[:1]:
+            continue
+        if abs(len(lowered) - len(folded)) > limit:
+            continue
+        distance = edit_distance(lowered, folded, limit=limit + 1)
+        if distance > limit:
+            continue
+        if best is None or distance < best[0]:
+            best = (distance, word)
+    return best[1] if best is not None else None
+
+
 def _canonicalize_immutable_tokens(
     candidate: str,
     source: str,
@@ -1947,6 +1976,32 @@ def _canonicalize_immutable_tokens(
                 candidate,
                 count=1,
                 flags=re.IGNORECASE,
+            )
+            continue
+        # Last resort: the model corrected the SPELLING of a protected name.
+        #
+        # A capitalised word is protected whether or not the writer spelled it
+        # right, so "Arequuipa" becomes an immutable token. The model then
+        # helpfully writes "Arequipa", the literal value no longer appears,
+        # the token cannot be restored, and the guard throws away the whole
+        # section - every other correction in it included. Measured on
+        # 2026-08-18: essay 16 carries both "Arequipa" and "Arequuipa", the
+        # log shows name(8) and name(9) lost at initial, retry and
+        # final-retry, and two of its ten sections finished with no AI
+        # correction at all.
+        #
+        # Re-wrapping the near spelling puts the token back, so the section is
+        # judged on the corrections it actually made. The writer keeps the name
+        # exactly as they typed it, which is the product's stated position on
+        # names: it does not rewrite them. Losing the paragraph to keep that
+        # promise was never the intent.
+        near = _nearest_protected_spelling(candidate, value)
+        if near is not None:
+            candidate = re.sub(
+                rf"(?<!\w){re.escape(near)}(?!\w)",
+                token,
+                candidate,
+                count=1,
             )
     expected = [match.group(0) for match in _IMMUTABLE_TOKEN.finditer(source)]
     actual = list(_INTERNAL_TOKEN_LIKE.finditer(candidate))

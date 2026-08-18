@@ -3599,3 +3599,65 @@ def test_a_correctly_spelled_word_is_still_protected(
     from echo_link_core.meaning_diff import unexplained_losses
 
     assert unexplained_losses(source, candidate) != ()
+
+
+# A protected name whose spelling the model corrected.
+#
+# Measured 2026-08-18: essay 16 of the 800-percent corpus carries both
+# "Arequipa" and the misspelled "Arequuipa". The misspelling is capitalised, so
+# it is protected as an immutable token; the model corrects it; the literal
+# value no longer appears; the token cannot be restored; and the guard discards
+# the whole section. Two of that essay's ten sections finished with no AI
+# correction at all, which is where nees, prson, hoever and cleaing survived
+# from.
+
+
+def test_a_protected_name_the_model_respelled_is_put_back():
+    from echo_link_core.selected_text import _canonicalize_immutable_tokens
+
+    source = "In ECHOLINKTOKEN0X, Peru, the alpaca nees care."
+    candidate = "In Arequipa, Peru, the alpaca needs care."
+
+    restored = _canonicalize_immutable_tokens(
+        candidate,
+        source,
+        {"ECHOLINKTOKEN0X": "Arequuipa"},
+    )
+
+    assert "ECHOLINKTOKEN0X" in restored
+    # The rest of the correction survives, which is the whole point: the
+    # section used to be thrown away over the name.
+    assert "needs care" in restored
+
+
+def test_the_writer_keeps_the_name_they_typed():
+    """Restoring the token restores the writer's spelling, deliberately.
+
+    The product does not rewrite names - unknown place names are an accepted
+    tradeoff recorded across both platforms. Losing the entire paragraph to
+    keep that promise was never the intent.
+    """
+    from echo_link_core.selected_text import _nearest_protected_spelling
+
+    assert _nearest_protected_spelling(
+        "this is true in Arequipa, Peru today", "Arequuipa"
+    ) == "Arequipa"
+
+
+def test_an_unrelated_word_is_never_treated_as_the_name():
+    from echo_link_core.selected_text import _nearest_protected_spelling
+
+    # Nothing close enough.
+    assert _nearest_protected_spelling("the alpaca lives here", "Arequuipa") is None
+    # A typo almost never changes the first letter, and that rule already
+    # earns its keep in the speller.
+    assert _nearest_protected_spelling("the Brequipa place", "Arequuipa") is None
+    # A different name entirely.
+    assert _nearest_protected_spelling("we went to Paris last May", "Perth") is None
+
+
+def test_a_multi_word_value_is_left_alone():
+    """A multi-word value that drifted is a rewrite, not a typo repair."""
+    from echo_link_core.selected_text import _nearest_protected_spelling
+
+    assert _nearest_protected_spelling("somewhere in Cusco Peru", "Cusco Peru") is None
