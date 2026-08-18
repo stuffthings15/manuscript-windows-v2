@@ -2595,12 +2595,22 @@ class EchoLinkWindow(QMainWindow):
                 # it: a run where nine of twenty paragraphs were rules-only was
                 # reported as twenty successes, and nothing in the log said
                 # otherwise.
+                # refusal_reason carries the reader-facing sentence, which
+                # says a rejection happened but not what refused it. On
+                # 2026-08-18 essay 16 lost two of ten sections this way and
+                # the log said only "AI output was rejected", so the guard had
+                # to be found by reading the engine. The validation failures
+                # are the actual answer and they are free to print.
+                failures = tuple(
+                    getattr(polish_result.validation, "failures", ()) or ()
+                )
                 logger.warning(
                     "Writing HUD section fell back to rules command=%s "
-                    "characters=%d reason=%s",
+                    "characters=%d reason=%s guards=%s",
                     command,
                     len(source),
                     str(polish_result.metrics.get("refusal_reason") or "unrecorded"),
+                    "; ".join(str(value) for value in failures) or "unrecorded",
                 )
             duration = max(0.1, time.monotonic() - started_at)
             if polish_result is None or polish_result.used_llm:

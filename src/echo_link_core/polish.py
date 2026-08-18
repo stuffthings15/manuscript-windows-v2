@@ -1144,13 +1144,37 @@ class PolishEngine:
         Any failure leaves the text exactly as it was. A residual repair is a
         bonus pass; it must never be able to make a correction worse.
         """
-        if not used_llm or request.command.strip().casefold() != "proofread":
+        # Every exit says why. The pass ran exactly once across essay 16 on
+        # 2026-08-17 and the four words it was built for never reached it,
+        # which was indistinguishable from the pass not being wired at all.
+        # A skip that leaves no trace cannot be diagnosed from a log.
+        if not used_llm:
+            logger.info(
+                "Residual spelling pass skipped: the model did not run for "
+                "this section (rules-only), characters=%d",
+                len(final_text),
+            )
+            return final_text
+        if request.command.strip().casefold() != "proofread":
+            logger.info(
+                "Residual spelling pass skipped: command is %r, not a proofread",
+                request.command,
+            )
             return final_text
         dictionary = getattr(self.rules, "dictionary", None)
         if dictionary is None:
+            logger.info(
+                "Residual spelling pass skipped: the rule engine exposes no "
+                "dictionary"
+            )
             return final_text
         unknown = residual_unknown_words(final_text, dictionary)
         if not unknown:
+            logger.info(
+                "Residual spelling pass not needed: every word is known, "
+                "characters=%d",
+                len(final_text),
+            )
             return final_text
         listed = ", ".join(unknown[:8])
         try:
