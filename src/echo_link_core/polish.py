@@ -5544,15 +5544,26 @@ def _reconcile_guard_vocabulary(source: str, candidate: str) -> str:
     # the guard was about to count, and refused a correct repair for reversing
     # the writer's meaning. A word carrying an apostrophe is never touched
     # below: a contraction is not a misspelling of the bare modal inside it.
-    source_tokens = {value.casefold() for value in _GUARD_TOKEN.findall(source)}
     candidate_tokens = {
         value.casefold() for value in _GUARD_TOKEN.findall(candidate)
     }
-    targets = tuple(
-        word
-        for word in _GUARD_VOCABULARY
-        if word in candidate_tokens and word not in source_tokens
-    )
+    # A guard word is repairable even when the source also spells it correctly
+    # somewhere else. Requiring `word not in source_tokens` looked like caution
+    # and was the whole of essay 16's refusal: the section wrote "nees" once and
+    # "needs" twice, the one correct spelling removed "needs" from the targets,
+    # "nees" stayed unrepaired, and the source counted one hard requirement
+    # against the candidate's two. The guard called a repaired typo an invented
+    # obligation and discarded a 621-character correction, so the paragraph
+    # shipped rules-only and "nees" survived into the writer's document.
+    #
+    # Nothing about that condition was protective. What keeps this honest is
+    # unchanged: the candidate must actually use the word, first letters must
+    # match, the distance is at most 2, and a word the candidate kept is never
+    # touched. The residual risk is a source word the candidate dropped that is
+    # within reach of a target ("news" -> "needs"), which would hide a real
+    # meaning change; that risk is identical today whenever the source has no
+    # correct spelling of the word, so this widens no new class.
+    targets = tuple(word for word in _GUARD_VOCABULARY if word in candidate_tokens)
     if not targets:
         return source
 

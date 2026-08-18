@@ -5272,6 +5272,30 @@ def test_repaired_modal_typo_is_not_an_invented_modal():
     assert "after" in reconciled
 
 
+def test_guard_word_is_repaired_even_when_spelled_correctly_elsewhere():
+    """One correct spelling in the section must not block repairing the typo.
+
+    Essay 16 of the 800-percent corpus wrote "nees" once and "needs" twice. The
+    reconciler only took a target the source never spelled correctly, so that
+    single correct "needs" removed it from consideration, "nees" stayed as it
+    was, and the obligation counter read one hard requirement in the source
+    against two in the candidate. Correcting the typo was scored as inventing
+    an obligation, the 621-character section was refused, and the paragraph
+    shipped rules-only with "nees" still in the writer's document.
+    """
+    from echo_link_core.polish import (
+        _obligation_counter,
+        _reconcile_guard_vocabulary,
+    )
+
+    source = "a dog nees a home and a person needs time and needs patience"
+    candidate = "A dog needs a home, and a person needs time and needs patience."
+    reconciled = _reconcile_guard_vocabulary(source, candidate)
+    assert "nees" not in reconciled
+    # The guard now compares like with like, so the repair is not a refusal.
+    assert _obligation_counter(reconciled) == _obligation_counter(candidate)
+
+
 def test_guard_vocabulary_is_not_invented_when_the_candidate_never_uses_it():
     """The candidate has to name the target, or nothing is rewritten.
 
