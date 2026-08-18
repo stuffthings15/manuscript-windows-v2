@@ -82,4 +82,59 @@ def long_sentence_advice(text: str) -> tuple[WritingAdvice, ...]:
     return tuple(advice)
 
 
-__all__ = ["LONG_SENTENCE_WORDS", "WritingAdvice", "long_sentence_advice"]
+
+
+
+# Sentences that talk about the essay instead of its subject: "this part does
+# not connect much but it still counts". They are real writing defects and a
+# reader should hear about them, but Manuscript cannot repair one. The only
+# available repair is deleting the writer's sentence, and a corrector that
+# quietly removes text is far more dangerous than one that leaves a weak
+# sentence in place - "never silently discard user text" is the rule this
+# obeys.
+#
+# Moved out of scoring on 2026-08-17 at the owner's decision, for the same
+# reason as sentence length: the corrected document and its source contain the
+# same meta sentences, so the term returned an identical value whether the
+# corrector worked perfectly or never ran.
+def meta_commentary_advice(
+    text: str,
+    matcher: object,
+) -> tuple[WritingAdvice, ...]:
+    """Sentences the writer should consider cutting, matched by `matcher`.
+
+    The pattern is supplied rather than defined here so that the measurement
+    and the product cannot drift into two different definitions of what counts
+    as commentary about the writing.
+    """
+    if not isinstance(text, str):
+        raise TypeError("Advice text must be a string.")
+    advice: list[WritingAdvice] = []
+    for match in _SENTENCE.finditer(text):
+        sentence = match.group(0)
+        found = matcher.search(sentence)
+        if found is None:
+            continue
+        advice.append(
+            WritingAdvice(
+                kind="meta-commentary",
+                detail=(
+                    "This sentence comments on the essay rather than its "
+                    f"subject ({found.group(0)!r}). Consider cutting it. "
+                    "Manuscript has not removed it, because deleting your "
+                    "writing is never a correction."
+                ),
+                start=match.start(),
+                end=match.end(),
+                excerpt=sentence.strip()[:120],
+            )
+        )
+    return tuple(advice)
+
+
+__all__ = [
+    "LONG_SENTENCE_WORDS",
+    "WritingAdvice",
+    "long_sentence_advice",
+    "meta_commentary_advice",
+]

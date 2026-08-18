@@ -340,3 +340,48 @@ def test_a_long_correct_sentence_costs_no_punctuation_points(tmp_path) -> None:
     assert row["punctuation"] == 20
     assert row["advice"] == 1
     assert row["run_ons"] == 0
+
+
+META_SENTENCE = "This part dont connect much but it still counts."
+
+
+def test_meta_commentary_is_advice_and_names_what_it_matched() -> None:
+    from echo_link_core.polish_advice import meta_commentary_advice
+    from grade_corpus import META_COMMENTARY
+
+    advice = meta_commentary_advice(META_SENTENCE, META_COMMENTARY)
+
+    assert len(advice) == 1
+    assert advice[0].kind == "meta-commentary"
+    # It says why Manuscript left it, so the writer does not read the advice as
+    # a failure to correct.
+    assert "never a correction" in advice[0].detail
+
+
+def test_meta_commentary_costs_no_coherence_points(tmp_path) -> None:
+    """Essay 2 lost ten of fifteen coherence points to four seeded sentences.
+
+    The only repair available is deleting the writer's sentence, so the source
+    and the corrected document carry the same ones and the term said nothing
+    about the corrector.
+    """
+    from grade_corpus import grade
+    from echo_link_core.polish_spelling import EnglishDictionary
+    from echo_link_core.writing_suggestions import WritingSuggestionEngine
+
+    path = _docx(tmp_path, f"<w:p><w:r><w:t>{META_SENTENCE}</w:t></w:r></w:p>")
+
+    row = grade(path, EnglishDictionary(), WritingSuggestionEngine())
+
+    assert row["coherence"] == 15
+    assert row["meta"] == 1
+    assert row["advice"] >= 1
+
+
+def test_ordinary_prose_earns_no_meta_advice() -> None:
+    from echo_link_core.polish_advice import meta_commentary_advice
+    from grade_corpus import META_COMMENTARY
+
+    assert meta_commentary_advice(
+        "The dog waited by the door and learned the routine.", META_COMMENTARY
+    ) == ()

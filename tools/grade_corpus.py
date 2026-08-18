@@ -51,7 +51,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from echo_link_core.polish_advice import long_sentence_advice  # noqa: E402
+from echo_link_core.polish_advice import (  # noqa: E402
+    long_sentence_advice,
+    meta_commentary_advice,
+)
 from echo_link_core.polish_error_score import error_score  # noqa: E402
 from echo_link_core.polish_pos import ADJECTIVE, NOUN, VERB, tags  # noqa: E402
 from echo_link_core.polish_spelling import EnglishDictionary  # noqa: E402
@@ -401,8 +404,22 @@ def grade(path: Path, dictionary: EnglishDictionary, engine: WritingSuggestionEn
             organization = max(0.0, WEIGHTS["organization"] - 2.0 * max(0, index - 3))
             break
 
+    # Meta commentary is ADVICE, not a coherence charge, from 2026-08-17 at the
+    # owner's decision and for the same reason as sentence length: the only
+    # repair available is deleting the writer's sentence, so the source and the
+    # corrected document contain the same ones and the term returned an
+    # identical value whether the corrector worked perfectly or never ran.
+    # Essay 2 lost ten of its fifteen coherence points to four seeded sentences
+    # while scoring full marks on spelling, homophones, punctuation and
+    # grammar.
+    #
+    # NOTE that this leaves coherence with no scored term at all: it is now
+    # always full marks. Said plainly rather than left for a reader to notice,
+    # because a category that cannot vary is not measuring anything, and the
+    # honest options are to give it a real term or to drop it and reweight.
     meta = sum(1 for sentence in sentences if META_COMMENTARY.search(sentence))
-    coherence = max(0.0, WEIGHTS["coherence"] - 2.5 * meta)
+    advice = advice + meta_commentary_advice(text, META_COMMENTARY)
+    coherence = float(WEIGHTS["coherence"])
 
     return {
         "name": path.stem,
