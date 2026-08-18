@@ -1809,6 +1809,15 @@ class EchoLinkWindow(QMainWindow):
     def _handle_automatic_selection_cleared(self) -> None:
         self.rewrite_palette.set_target_marking_enabled(False)
         self.target_underline.clear()
+        # Decided BEFORE the early returns below, which is the whole fix. Those
+        # returns require the badge view, so with a review card open a focus
+        # change never reached this and the card stayed in front of everything
+        # the writer clicked. Reported 2026-08-17: "remains on top even when
+        # another area is clicked".
+        #
+        # A pinned HUD is exempt: set_stays_on_top refuses to drop it, because
+        # pinning is the writer asking for exactly that.
+        self._release_hud_top_if_focus_left()
         # Mouse-down on the badge pauses the monitor before the source editor
         # loses focus. A cleared signal may already be queued on the Qt thread;
         # do not let that stale signal close the badge before mouse-up lands.
@@ -1833,10 +1842,6 @@ class EchoLinkWindow(QMainWindow):
             # A different top-level window is an exact focus loss, not Word's
             # transient UI Automation flap. Remove the icon immediately.
             #
-            # And stop floating over whatever they moved to. The writer has
-            # chosen that window; the HUD covering their mail with no way to
-            # put it behind anything is what "it should not stay on top" means.
-            self.rewrite_palette.set_stays_on_top(False)
             self._badge_clear_pending_record = record
             self._finish_badge_clear()
             return
@@ -1850,6 +1855,29 @@ class EchoLinkWindow(QMainWindow):
             self._badge_clear_timer.timeout.connect(self._finish_badge_clear)
         self._badge_clear_pending_record = self.selected_text_record
         self._badge_clear_timer.start()
+
+    def _release_hud_top_if_focus_left(self) -> None:
+        """Let other windows come in front once the writer leaves the document.
+
+        The HUD's own window is not a focus loss - clicking a button on the card
+        activates it - and neither is the document under review. Anything else
+        is the writer choosing another window.
+        """
+        palette = self.rewrite_palette
+        if not palette.isVisible() or palette.pinned:
+            return
+        focused = active_window()
+        if focused.handle <= 0:
+            return
+        if int(focused.handle) == int(palette.winId()):
+            return
+        record = self.selected_text_record
+        if record is not None and (
+            focused.handle == record.window.handle
+            and focused.process_id == record.window.process_id
+        ):
+            return
+        palette.set_stays_on_top(False)
 
     def _finish_badge_clear(self) -> None:
         if self._badge_clear_pending_record is None:

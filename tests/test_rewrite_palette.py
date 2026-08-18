@@ -302,6 +302,87 @@ def test_an_ai_corrected_section_is_not_labelled_rules_only(app):
     palette.finish_choice()
 
 
+def test_pinning_keeps_the_hud_in_front_when_focus_leaves(app):
+    # "It should not be sticky to the top unless it is pinned, and there
+    # should be a button to pin it." Unpinned, the HUD gives up the top when
+    # the writer clicks elsewhere; pinned, that request outranks the
+    # focus-following behaviour entirely.
+    palette = RewritePalette()
+    palette.show_capture("teh draft has erors in it.", anchor=(400, 300, 900, 340))
+    app.processEvents()
+
+    assert not palette.pinned
+    assert palette.pin_button.text() == "Pin"
+
+    palette.set_stays_on_top(False)
+    app.processEvents()
+    assert not (palette.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+
+    palette.pin_button.click()
+    app.processEvents()
+    assert palette.pinned
+    assert palette.pin_button.text() == "Pinned"
+    assert palette.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+
+    # The focus watcher asks it to drop, and a pinned window refuses.
+    palette.set_stays_on_top(False)
+    app.processEvents()
+    assert palette.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    assert palette.isVisible()
+
+    palette.pin_button.click()
+    app.processEvents()
+    palette.set_stays_on_top(False)
+    app.processEvents()
+    assert not (palette.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+    palette.finish_choice()
+    palette.close()
+
+
+def test_a_document_the_ai_left_alone_shows_nothing_to_correct(app):
+    # A finished essay produced ten sections, every one reported ready, and
+    # none of them had anything in it. The owner: "it says that it is ready,
+    # all sections are ready, but it has not directed anything." The harness
+    # accepted all ten with no change and the review was rebuilt, which is the
+    # loop that spent forty minutes on one essay.
+    palette = RewritePalette(ai_proofread=True)
+    palette.show_capture(
+        "Paragraph one is already correct. Paragraph two needs no changes."
+    )
+    app.processEvents()
+    assert palette._review_suggestions
+
+    # The AI runs and returns each section exactly as it was.
+    for suggestion in palette._suggestions:
+        palette._ai_completed_ids.add(str(getattr(suggestion, "suggestion_id", "")))
+    palette._render_suggestions()
+    app.processEvents()
+
+    assert palette._review_suggestions == ()
+    assert palette.suggestion_title.text() == "Nothing to correct here"
+    assert palette._no_issues_timer.isActive()
+    palette.finish_choice()
+    palette.close()
+
+
+def test_a_section_still_waiting_for_its_ai_is_never_hidden(app):
+    # The requirement is that every section is processed, not that every
+    # section is displayed. Hiding one before its AI result exists would skip
+    # it, which is the thing that must never happen.
+    palette = RewritePalette(ai_proofread=True)
+    palette.show_capture("Paragraph one is already correct and needs no changes.")
+    app.processEvents()
+
+    before = len(palette._review_suggestions)
+    palette._render_suggestions()
+    app.processEvents()
+
+    assert before
+    assert len(palette._review_suggestions) == before
+    palette.finish_choice()
+    palette.close()
+
+
 def test_the_hud_floats_over_the_document_it_is_reviewing(app):
     # Removing the always-on-top hint outright was a regression, not a fix.
     # The HUD sank behind the very document it was correcting: the owner

@@ -154,6 +154,12 @@ def rules_fallbacks_since(start_line: int) -> list[str]:
     ]
 
 
+# Enough accepts to be sure a pass is doing nothing, rather than hitting one
+# section the model declined to change. A ten-section essay being re-reviewed
+# from the start trips this well before it completes another full pass.
+_NO_PROGRESS_ACCEPTS = 6
+
+
 def whole_document_button(hud):
     """The HUD's own "Check entire document" control.
 
@@ -527,6 +533,18 @@ def run_session(
                     f"{expected} paragraphs"
                 )
         seen: dict[str, int] = {}
+        # The counter guard below cannot catch a re-review, because the HUD
+        # numbers each pass from where the last one finished - "1 of 10" then
+        # "11 of 20" then "21 of 30" - so no counter string ever repeats. On
+        # 2026-08-17 a finished essay was reviewed seventeen times and accepted
+        # 163 sections in forty minutes without tripping it, and the batch never
+        # reached essay 2.
+        #
+        # So watch the document instead of the label. Accepting corrections that
+        # change nothing, over and over, is the definition of no progress
+        # whatever the counter says.
+        unchanged_accepts = 0
+        last_text = before
         while True:
             limit = first_wait if not report["sections"] else section_wait
             wait_started = time.monotonic()
@@ -572,6 +590,21 @@ def run_session(
                 report["sections"].append(
                     {"counter": counter, "seconds": waited, "accepted": True}
                 )
+                try:
+                    current = visible_text(document)
+                except Exception:  # noqa: BLE001 - Word raises assorted COM errors
+                    current = last_text
+                if current == last_text:
+                    unchanged_accepts += 1
+                else:
+                    unchanged_accepts = 0
+                    last_text = current
+                if unchanged_accepts >= _NO_PROGRESS_ACCEPTS:
+                    report["no_progress"] = (
+                        f"{unchanged_accepts} accepted sections in a row left "
+                        "the document unchanged"
+                    )
+                    break
             if counter:
                 seen[counter] = seen.get(counter, 0) + 1
                 if seen[counter] > 3:

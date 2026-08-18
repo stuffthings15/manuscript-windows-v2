@@ -223,6 +223,10 @@ class RewritePalette(QDialog):
         # changes size per section, so it walked around the screen while the
         # writer was reading it.
         self._placed_for_capture = False
+        # Pinned means the writer has asked the HUD to stay in front of
+        # everything. Unpinned - the default - it floats over the document it is
+        # reviewing and drops behind anything else they click.
+        self._pinned = False
         self._analysis_pending = False
         # Set when preparing the review raised. Without it the empty-review
         # card says "Nothing to correct here" over a document whose analysis
@@ -316,6 +320,21 @@ class RewritePalette(QDialog):
         """Install the reverse of set_step_replacer, if the host has one."""
         self._undo_replacer = replacer
 
+    @property
+    def pinned(self) -> bool:
+        return self._pinned
+
+    def _set_pinned(self, pinned: bool) -> None:
+        self._pinned = bool(pinned)
+        self.pin_button.setText("Pinned" if self._pinned else "Pin")
+        self.pin_button.setToolTip(
+            "Unpin so other windows can come in front"
+            if self._pinned
+            else "Keep this window in front of other windows"
+        )
+        logger.info("Writing HUD pinned=%s", self._pinned)
+        self.set_stays_on_top(self._pinned)
+
     def set_stays_on_top(self, enabled: bool) -> None:
         """Keep the HUD above the document under review, but not above others.
 
@@ -327,7 +346,9 @@ class RewritePalette(QDialog):
         Windows, so the geometry is captured and restored and the window is
         re-shown without stealing focus.
         """
-        wanted = bool(enabled)
+        # A pinned window is the writer's explicit instruction and outranks the
+        # focus-following behaviour entirely.
+        wanted = bool(enabled) or self._pinned
         if wanted == bool(self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint):
             return
         was_visible = self.isVisible()
@@ -491,6 +512,20 @@ class RewritePalette(QDialog):
         self.card_position = QLabel("0 of 0")
         self.card_position.setObjectName("hudCount")
         header.addWidget(self.card_position)
+        # Pinning is the writer's answer to "stay in front of everything". The
+        # default is unpinned, because a HUD that covers whatever you click
+        # next cannot be got out of the way.
+        # Words rather than a pin glyph: the arrows and pin characters render
+        # differently across the fonts this ships against, and "Pin" cannot be
+        # misread.
+        self.pin_button = QPushButton("Pin")
+        self.pin_button.setObjectName("hudQuietButton")
+        self.pin_button.setFixedHeight(30)
+        self.pin_button.setCheckable(True)
+        self.pin_button.setToolTip("Keep this window in front of other windows")
+        self.pin_button.setAccessibleName("Pin the writing HUD in front")
+        self.pin_button.toggled.connect(self._set_pinned)
+        header.addWidget(self.pin_button)
         self.close_button = QPushButton("×")
         self.close_button.setObjectName("hudQuietButton")
         self.close_button.setFixedSize(30, 30)
@@ -1998,11 +2033,46 @@ class RewritePalette(QDialog):
         return "all sections ready"
 
     def _available_suggestions(self) -> tuple[object, ...]:
-        return tuple(
+        offered = tuple(
             suggestion
             for suggestion in self._suggestions
             if str(getattr(suggestion, "suggestion_id", "")) not in self._dismissed_ids
         )
+        # All or nothing, deliberately. Hiding sections INDIVIDUALLY was tried
+        # first and broke a real feature: a sentence the proofreader correctly
+        # left alone is still a legitimate target for a tone rewrite, and
+        # removing it took that away. Two tests caught it.
+        #
+        # A document where EVERY remaining section came back from the AI
+        # untouched is the case worth acting on: there is nothing to show and
+        # nothing to accept, and presenting ten such sections is what let a
+        # finished essay be reviewed seventeen times.
+        if offered and all(self._is_finished_and_unchanged(item) for item in offered):
+            return ()
+        return offered
+
+    def _is_finished_and_unchanged(self, suggestion: object) -> bool:
+        """A section the AI has been over and left exactly as it was.
+
+        There is nothing to show a writer here and nothing to accept: the card
+        offered the original text as its own correction. On 2026-08-17 a
+        finished essay produced ten such sections, the HUD reported every one
+        of them ready, and the owner said "it says that it is ready, all
+        sections are ready, but it has not directed anything". The harness
+        accepted all ten with changed=False and the review was rebuilt, which
+        is the loop that spent forty minutes on one essay.
+
+        The AI HAS run on these, so hiding them does not skip a section - the
+        requirement is that every section is processed, not that every section
+        is displayed. A section still waiting for its AI result is never hidden
+        by this, or it really would be skipped.
+        """
+        suggestion_id = str(getattr(suggestion, "suggestion_id", ""))
+        if not suggestion_id or suggestion_id not in self._ai_completed_ids:
+            return False
+        original = str(getattr(suggestion, "original", ""))
+        replacement = str(getattr(suggestion, "replacement", ""))
+        return bool(original) and original == replacement
 
     def _set_filter(self, category: str) -> None:
         button = self.filter_buttons.get(category)
