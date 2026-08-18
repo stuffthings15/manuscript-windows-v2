@@ -229,13 +229,106 @@ def diagnose(reason: str, hud) -> list[str]:
     return block
 
 
+def log_lines() -> int:
+    try:
+        return len(LOG.read_text(encoding="utf-8", errors="replace").splitlines())
+    except OSError:
+        return 0
+
+
+def captured_document_title(since: int = 0) -> str | None:
+    """The document the app reported capturing since `since` log lines.
+
+    Read from the app's own log rather than guessed from window focus, because
+    the app's view is what decides which document gets corrected.
+
+    The offset is the whole point. Without it the newest line is the PREVIOUS
+    essay's capture, so the check either compares against a stale title or
+    fires on one - which is exactly what it did on its first run, failing essay
+    2 in 7.3 seconds against a line written during essay 1.
+    """
+    focus_line = re.compile(
+        r"Writing HUD editable focus detected title='(?P<title>.*?)' scope="
+    )
+    try:
+        lines = LOG.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines[since:]):
+        found = focus_line.search(line)
+        if found:
+            return found.group("title")
+    return None
+
+
 def open_in_word(path: Path):
+    """Open one essay and leave exactly that essay open.
+
+    Every other document is closed first. Leaving the previous essay open is
+    what made three batch runs measure the wrong file: --as-a-writer keeps Word
+    running, essay 1's window kept the foreground, and essay 2's hotkey press
+    captured essay 1 - "review prepared sections=10 atomic=0 characters=5065"
+    on 2026-08-17, ten more corrections applied to an essay that was already
+    finished, while essay 2 came back byte-identical to its source.
+
+    The app is not at fault for that and must not be "fixed" for it: it
+    correctly reviews the document in front of the writer. The harness was
+    leaving the wrong one there.
+    """
     import comtypes.client
 
-    word = comtypes.client.CreateObject("Word.Application", dynamic=True)
+    # Attach to the Word that is already running rather than starting another.
+    #
+    # CreateObject starts a NEW Word instance every time, and that is the root
+    # of the wrong-document defect: essay 1 lived in one instance and essay 2
+    # opened in the next, so closing "the other documents" closed nothing that
+    # mattered and essay 1's window kept the foreground. The app then reviewed
+    # essay 1 again while the harness scored essay 2, three runs in a row. It
+    # is also why eight WINWORD processes were found alive earlier.
+    try:
+        word = comtypes.client.GetActiveObject("Word.Application", dynamic=True)
+    except Exception:  # noqa: BLE001 - Word is simply not running yet
+        word = comtypes.client.CreateObject("Word.Application", dynamic=True)
+        time.sleep(2.0)
     word.Visible = True
-    word.Documents.Open(str(path.resolve()))
+    target = str(path.resolve())
+    for open_document in list(word.Documents):
+        try:
+            if str(open_document.FullName) == target:
+                continue
+        except Exception:  # noqa: BLE001 - Word raises assorted COM errors
+            continue
+        try:
+            # Positional, not SaveChanges=0. The keyword form silently did
+            # nothing through the dynamic COM wrapper, which is why three
+            # documents were still open after a loop written to close them,
+            # and why the failure has to be printed rather than swallowed: a
+            # close that quietly does not happen is what leaves the wrong
+            # window in front for the next essay.
+            open_document.Close(0)
+        except Exception as exc:  # noqa: BLE001 - Word raises assorted COM errors
+            print(f"   warning: could not close a document: {exc}", flush=True)
+    document = word.Documents.Open(target)
+    try:
+        # Activate explicitly rather than trusting the open to raise the
+        # window: with several windows in play Word does not always move the
+        # foreground, and the HUD reviews whatever is in front.
+        document.Activate()
+        window = document.ActiveWindow
+        window.Activate()
+    except Exception:  # noqa: BLE001 - Word raises assorted COM errors
+        pass
     time.sleep(3.0)
+    remaining = []
+    try:
+        remaining = [str(item.Name) for item in word.Documents]
+    except Exception:  # noqa: BLE001 - Word raises assorted COM errors
+        pass
+    if len(remaining) > 1:
+        print(
+            f"   warning: {len(remaining)} documents open, expected 1: {remaining}",
+            flush=True,
+        )
     return word
 
 
@@ -249,12 +342,26 @@ def paragraphs(value: str) -> list[str]:
 
 def review_one(path: Path, *, max_presses: int = 30) -> dict:
     """Accept every section, then return the saved document text."""
+    log_start = log_lines()
     word = open_in_word(path)
     _handle, bounds = foreground_word()
     click_in_document(bounds)
     press_hotkey()
 
     report: dict = {"presses": 0, "stalled_at": None, "counters": []}
+    # Which document the app actually captured, from the app's own log, before
+    # a single key is pressed. Three runs in a row scored an essay the app had
+    # never looked at, and reported err=None while doing it, because nothing
+    # here compared the two. A wrong-document run is now an error rather than
+    # a quiet zero-change result.
+    captured = captured_document_title(log_start)
+    if captured is not None and path.stem.lower() not in captured.lower():
+        report["error"] = (
+            f"the review on screen was captured from {captured!r}, "
+            f"not from {path.stem}"
+        )
+        report["after"] = ""
+        return report
     hud = hud_window(40.0)
     if hud is None:
         report["error"] = "the Writing HUD never appeared"

@@ -336,15 +336,30 @@ def run_session(
         # of that is the product under test.
         document = word.ActiveDocument
         working = Path(str(document.FullName))
-    # The previous run's copy is usually still open, and Word holds it, so
-    # replacing it fails outright. Close that document first, and if it is
-    # locked for any other reason use the next free name rather than losing
-    # the run at its first step.
+    # Close EVERY document this harness has open, not only one with the same
+    # name as the incoming essay.
+    #
+    # Closing only the matching name was the defect that made every batch run
+    # measure the wrong file. --as-a-writer leaves Word running, so essay 1
+    # stayed open, its window kept the foreground, and essay 2's hotkey press
+    # captured essay 1: "review prepared sections=10 atomic=0 characters=5065"
+    # at 19:09:28 on 2026-08-17, followed by ten more corrections applied to an
+    # essay that was already finished, while essay 2 came back byte-identical
+    # to its source. The whole point of one document at a time is that the
+    # front window is not a guess.
+    #
+    # Only files under this harness's own output directory are closed, so a
+    # writer's own open documents are never touched.
     for open_document in [] if use_open_document else list(word.Documents):
         try:
-            if Path(str(open_document.FullName)).name == working.name:
-                open_document.Close(SaveChanges=0)
-                time.sleep(1.0)
+            full = Path(str(open_document.FullName))
+        except Exception:  # noqa: BLE001 - Word raises assorted COM errors
+            continue
+        if full.name != working.name and full.parent != OUTPUT_ROOT:
+            continue
+        try:
+            open_document.Close(SaveChanges=0)
+            time.sleep(1.0)
         except Exception:  # noqa: BLE001 - Word raises assorted COM errors
             continue
     try:
@@ -481,7 +496,11 @@ def run_session(
         # the app says it captured.
         captured = captured_document_title()
         for _attempt in range(3):
-            if captured is None or working.stem.lower() in captured.lower():
+            # A missing title used to break out of the loop and let the run
+            # continue, so a guard built to catch the wrong document passed
+            # whenever it could not read one. Only a title that names this
+            # essay is a pass now.
+            if captured is not None and working.stem.lower() in captured.lower():
                 break
             report.setdefault("focus_recoveries", 0)
             report["focus_recoveries"] += 1
