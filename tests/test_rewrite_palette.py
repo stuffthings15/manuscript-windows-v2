@@ -471,14 +471,116 @@ def test_a_position_the_writer_chose_survives_the_next_capture(app):
 
 
 class _NullMonitor:
+    def __init__(self):
+        self.paused = False
+
     def pause(self):
-        return None
+        self.paused = True
 
     def resume(self):
-        return None
+        self.paused = False
 
     def stop(self, timeout=0):
         return None
+
+
+def _document(text: str, handle: int = 77, pid: int = 88) -> SelectionRecord:
+    """A whole-document capture, the way Word reports one."""
+    return SelectionRecord(text, WindowSnapshot(handle, pid, "Essay - Word"), scope="document")
+
+
+def test_leaving_the_review_resumes_the_selection_monitor(app, tmp_path, monkeypatch):
+    """A half-finished review must not leave the app deaf.
+
+    The monitor is paused on badge mouse-down so the capture churn stops while
+    a review is worked on, and it was only resumed when that review finished.
+    A writer who leaves a section unfinished and moves on left it paused for
+    good: on 2026-08-18 the last focus detection in the entire log was
+    16:35:18, the review sat at 9 of 10, and nothing after that produced a
+    signal at all. Not a refusal. Nothing.
+    """
+    window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
+    monitor = _NullMonitor()
+    window.selection_monitor = monitor
+    window._handle_automatic_selection(DetectedSelection(_selection("teh draft."), (1, 2, 3, 4)))
+    app.processEvents()
+    window._pause_selection_monitor()
+    assert monitor.paused
+
+    # The writer clicks some other window entirely.
+    monkeypatch.setattr(window_module, "active_window", lambda: WindowSnapshot(999, 999, "Elsewhere"))
+    window._release_hud_top_if_focus_left()
+
+    assert not monitor.paused
+    window.close()
+
+
+def test_a_second_document_still_gets_a_badge(app, tmp_path, monkeypatch):
+    """Opening a different document while a review is open must offer it.
+
+    A focus signal may not tear a live review off the screen, and that rule is
+    kept: what changes here is that a whole document in a different window is
+    not "some other window on the machine". Every spurious capture on
+    2026-08-15 was a selection inside a chat box, a browser field or a search
+    box; every real document was a document-scope capture from its own window.
+    """
+    window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
+    window.selection_monitor = _NullMonitor()
+    # A live review the writer is working in, whose window is genuinely alive.
+    monkeypatch.setattr(window, "_hud_source_window_alive", lambda: True)
+    first = _document("The first document, part way through.", handle=77, pid=88)
+    window._handle_automatic_selection(DetectedSelection(first, (1, 2, 3, 4)))
+    app.processEvents()
+    window.rewrite_palette.open_current_capture()
+    app.processEvents()
+    assert window.rewrite_palette.view != "badge"
+
+    # A selection somewhere else must still be refused: that is the spam case.
+    chat = _selection("a line typed into a chat box")
+    window._handle_automatic_selection(DetectedSelection(chat, (9, 9, 19, 19)))
+    app.processEvents()
+    assert window.selected_text_record == first
+
+    # A different document is the writer moving on, and it gets offered.
+    second = _document("The second document, freshly opened.", handle=1234, pid=5678)
+    window._handle_automatic_selection(DetectedSelection(second, (5, 6, 7, 8)))
+    app.processEvents()
+
+    assert window.selected_text_record == second
+    assert window.rewrite_palette.isVisible()
+    window.close()
+
+
+def test_an_ignored_focus_signal_says_why(app, tmp_path, caplog):
+    """A refused capture must name its reason in the log.
+
+    On 2026-08-18 Word was detected at 5013 characters, "focus signal
+    received" was logged, and then nothing at all: no capture, no badge, no
+    reason. Five separate conditions refuse at that one return and they were
+    indistinguishable in the log from the focus watcher never firing, so the
+    search started in the wrong place twice.
+
+    The suppression window is the condition used here because a test can set
+    it honestly. It is the same return and the same log line whichever
+    condition fires.
+    """
+    import logging
+    import time as _time
+
+    window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
+    window.selection_monitor = _NullMonitor()
+    window._automatic_hud_suppress_until = _time.monotonic() + 60
+
+    record = _selection("A document the writer has just clicked into.")
+    with caplog.at_level(logging.INFO, logger="echo_link_app.window"):
+        window._handle_automatic_selection(DetectedSelection(record, (100, 120, 280, 150)))
+        app.processEvents()
+
+    assert not window.rewrite_palette.isVisible()
+    ignored = [r for r in caplog.records if "ignored a focus signal" in r.getMessage()]
+    assert ignored, "a refused focus signal logged nothing"
+    assert "reason=suppressed" in ignored[-1].getMessage()
+    window.close()
 
 
 def test_a_finished_document_is_not_offered_back(app, tmp_path):
@@ -486,6 +588,12 @@ def test_a_finished_document_is_not_offered_back(app, tmp_path):
     # re-fired on the same text nine seconds later, rebuilding the whole
     # review as "sections=22 atomic=0". The writer was then walked through 22
     # sections with nothing in them.
+    #
+    # What must not come back is the unasked review. The badge itself now
+    # stays: hiding it too was the first version of this fix and it left a
+    # reviewed document with no way back in, which is what Curtis reported on
+    # 2026-08-18 as the icon not appearing on Word. So the assertion below
+    # changed from "nothing is on screen" to "nothing was built unasked".
     window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
     window.selection_monitor = _NullMonitor()
     record = _selection("This document has already been reviewed in full.")
@@ -502,8 +610,43 @@ def test_a_finished_document_is_not_offered_back(app, tmp_path):
     window._handle_automatic_selection(DetectedSelection(record, (100, 120, 280, 150)))
     app.processEvents()
 
+    assert window.rewrite_palette.isVisible()
+    assert window.rewrite_palette.view == "badge"
+    # Deferred, not run: no review exists until the writer clicks the badge.
+    assert window.rewrite_palette._analysis_pending
+    assert window.rewrite_palette._review_suggestions == ()
+    window.close()
+
+
+def test_a_reviewed_document_still_opens_when_the_writer_asks(app, tmp_path):
+    """The badge on an already reviewed document must still work.
+
+    The machine stops offering; the writer keeps asking. Clicking the badge
+    finishes the deferred analysis and opens the card as it always did.
+    """
+    window = EchoLinkWindow(EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False)
+    window.selection_monitor = _NullMonitor()
+    record = _selection("This document has alreddy been reviewed in full.")
+
+    window._handle_automatic_selection(DetectedSelection(record, (100, 120, 280, 150)))
+    app.processEvents()
+    window.rewrite_palette.finish_choice()
+    window._finish_palette_unchanged()
+    app.processEvents()
+
+    # finish_choice hides the box, so this is the writer coming back to a
+    # document they already reviewed. The badge has to return, or there is no
+    # way to ask for anything.
     assert not window.rewrite_palette.isVisible()
-    assert window.selected_text_record is None
+    window._handle_automatic_selection(DetectedSelection(record, (100, 120, 280, 150)))
+    app.processEvents()
+    assert window.rewrite_palette.isVisible()
+
+    window.rewrite_palette.open_current_capture()
+    app.processEvents()
+
+    assert not window.rewrite_palette._analysis_pending
+    assert window.rewrite_palette.view in {"card", "loading"}
     window.close()
 
 
@@ -546,7 +689,9 @@ def test_line_endings_alone_do_not_count_as_an_edit(app, tmp_path):
     window._handle_automatic_selection(DetectedSelection(same, (100, 120, 280, 150)))
     app.processEvents()
 
-    assert not window.rewrite_palette.isVisible()
+    # Same document, so no review is built unasked. The badge stays either way.
+    assert window.rewrite_palette._analysis_pending
+    assert window.rewrite_palette._review_suggestions == ()
     window.close()
 
 

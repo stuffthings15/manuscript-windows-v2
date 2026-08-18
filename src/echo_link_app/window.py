@@ -1624,8 +1624,33 @@ class EchoLinkWindow(QMainWindow):
                 # shortcut, which reads a fresh capture and replaces the
                 # review, and by dismissing the card they are looking at.
                 and self._hud_source_window_alive()
+                # ...unless the writer has opened a different document. The
+                # version that let ANY other window through was reverted for
+                # good reason: in ten minutes it captured the chat application
+                # eleven times and the essay twice. This is narrower, and this
+                # log is the evidence for why it holds. Every spurious capture
+                # that day was scope="selection" - a chat box, a browser field,
+                # a search box - and every real document was scope="document"
+                # from a different top-level window. So that is the test, and
+                # a review is still never torn down by a click inside a text
+                # field somewhere else on the machine.
+                and not self._is_a_different_document(detected.record)
             )
         ):
+            # Say which condition refused, always. This return was silent, and
+            # on 2026-08-18 that cost a whole investigation: Word was detected
+            # at 5013 characters, "focus signal received" was logged, and then
+            # nothing at all appeared - no capture, no badge, no reason. From
+            # the outside it is indistinguishable from the focus watcher never
+            # firing, and there are five separate conditions here that all look
+            # the same in the log. A refusal the writer can see on screen has
+            # to be a refusal the log can name.
+            logger.info(
+                "Writing HUD ignored a focus signal title=%r chars=%d reason=%s",
+                detected.record.window.title,
+                len(detected.record.text),
+                self._automatic_hud_refusal_reason(palette_visible),
+            )
             return
         current_record = self.selected_text_record
         incoming_record = detected.record
@@ -1679,14 +1704,20 @@ class EchoLinkWindow(QMainWindow):
         # and one they edit is offered again immediately because the text no
         # longer matches. The shortcut is unaffected: this is the machine
         # noticing, not the writer asking.
-        if _normalized_document_text(record.text) in self._reviewed_texts:
+        #
+        # What is withheld is the review, not the badge. Withholding the badge
+        # too was the first version of this and it left a reviewed document
+        # with no way back in: on 2026-08-18 Word was detected at 5013
+        # characters, this line logged, and nothing appeared on screen at all.
+        # show_capture defers the analysis instead, and the click finishes it.
+        already_reviewed = _normalized_document_text(record.text) in self._reviewed_texts
+        if already_reviewed:
             logger.info(
-                "Writing HUD did not re-offer a document already reviewed "
-                "scope=%s chars=%d",
+                "Writing HUD will not re-offer a document already reviewed; "
+                "badge stays for the writer scope=%s chars=%d",
                 record.scope,
                 len(record.text),
             )
-            return
         logger.info(
             "Writing HUD capture prepared scope=%s chars=%d",
             record.scope,
@@ -1723,6 +1754,7 @@ class EchoLinkWindow(QMainWindow):
             automatic=True,
             anchor=detected.anchor,
             document_scope=record.scope == "document",
+            reviewed_already=already_reviewed,
         )
         logger.info(
             "Writing HUD badge shown visible=%s position=(%d,%d)",
@@ -1730,6 +1762,40 @@ class EchoLinkWindow(QMainWindow):
             self.rewrite_palette.x(),
             self.rewrite_palette.y(),
         )
+
+    def _is_a_different_document(self, incoming) -> bool:
+        """Is this capture a whole document in a window we are not reviewing?"""
+        if incoming.scope != "document":
+            return False
+        record = self.selected_text_record
+        if record is None:
+            return True
+        return (
+            incoming.window.handle != record.window.handle
+            or incoming.window.process_id != record.window.process_id
+        )
+
+    def _automatic_hud_refusal_reason(self, palette_visible: bool) -> str:
+        """Name every condition currently refusing an automatic capture.
+
+        All of them, not the first: two were true at once on 2026-08-18 and
+        reporting only one would have sent the next reader after the wrong one.
+        """
+        reasons: list[str] = []
+        if not self.engine.settings.automatic_writing_hud:
+            reasons.append("automatic-hud-off")
+        if self._quitting:
+            reasons.append("quitting")
+        if self.engine.is_busy:
+            reasons.append("engine-busy")
+        if time.monotonic() < self._automatic_hud_suppress_until:
+            reasons.append("suppressed")
+        if palette_visible:
+            if self.rewrite_palette.view != "badge":
+                reasons.append(f"live-review-open:{self.rewrite_palette.view}")
+            if not self.rewrite_palette.automatic:
+                reasons.append("writer-opened-review")
+        return ",".join(reasons) or "unknown"
 
     def _hud_source_window_alive(self) -> bool:
         """Does the review currently on screen still have a source document?
@@ -1878,6 +1944,16 @@ class EchoLinkWindow(QMainWindow):
         ):
             return
         palette.set_stays_on_top(False)
+        # The writer has moved to some other window, so the reason the monitor
+        # was paused is gone. It is paused on badge mouse-down to stop the
+        # capture churn while a review is being worked on, and it was only ever
+        # resumed when that review FINISHED. A writer who leaves a section
+        # unfinished and opens the next document left it paused forever: on
+        # 2026-08-18 the last focus detection in the whole log was 16:35:18,
+        # the review sat at 9 of 10, and every window after that produced no
+        # signal at all. Not a refusal - nothing. The app was deaf, which is
+        # what "the icon will not appear" was on the second document.
+        self._resume_selection_monitor()
 
     def _finish_badge_clear(self) -> None:
         if self._badge_clear_pending_record is None:

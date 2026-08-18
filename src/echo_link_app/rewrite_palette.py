@@ -948,6 +948,7 @@ class RewritePalette(QDialog):
         automatic: bool = False,
         anchor: tuple[int, int, int, int] | None = None,
         document_scope: bool = False,
+        reviewed_already: bool = False,
     ) -> None:
         self._target_marking_enabled = False
         self.target_changed.emit(-1, -1)
@@ -997,12 +998,27 @@ class RewritePalette(QDialog):
             self._suggestions = ()
             self._analysis_pending = True
             self._pulse_step = 0
-            self._set_badge_state("...")
-            self._set_status("Selected text detected. Analyzing locally.")
+            if reviewed_already:
+                # This document has already been all the way through a review.
+                # Building another one unasked is what walked a writer through
+                # 22 empty sections on 2026-08-15, so the analysis is deferred
+                # rather than run: no timer is started and _analysis_pending
+                # stays set, which _open_from_badge already knows how to
+                # finish. Suppressing the badge as well was the first attempt
+                # and it is worse - it removes the only way back into a
+                # document, which is what "the small icon is not appearing on
+                # Microsoft Word" was on 2026-08-18. The machine stops
+                # offering; the writer keeps asking.
+                self._set_badge_state_reviewed()
+                self._set_status("Already reviewed. Click to check it again.")
+            else:
+                self._set_badge_state("...")
+                self._set_status("Selected text detected. Analyzing locally.")
             self._set_view("badge", activate=False, reposition=False)
             self._show_near_pointer(activate=False, anchor=anchor)
-            self._pulse_timer.start()
-            self._analysis_timer.start()
+            if not reviewed_already:
+                self._pulse_timer.start()
+                self._analysis_timer.start()
             return
 
         self._analysis_pending = False
@@ -1038,6 +1054,13 @@ class RewritePalette(QDialog):
         self.badge_button.setText("")
         self.badge_button.setToolTip("Analyzing selected text locally.")
         self.badge_button.setAccessibleName("Manuscript is analyzing selected text locally")
+
+    def _set_badge_state_reviewed(self) -> None:
+        """The badge for a document that has already been reviewed once."""
+        self.badge_button.setText("")
+        tooltip = "Already reviewed. Click to check this document again."
+        self.badge_button.setToolTip(tooltip)
+        self.badge_button.setAccessibleName(f"Manuscript, {tooltip}")
 
     def _update_badge(self) -> None:
         total = len(self._review_suggestions)

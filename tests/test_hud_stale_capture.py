@@ -99,12 +99,19 @@ def test_a_failing_probe_never_discards_a_review(monkeypatch):
 # shortcut, which reads a fresh capture and replaces the review.
 
 
-def _detected(handle: int, text: str = "some text a writer selected"):
+def _detected(
+    handle: int,
+    text: str = "some text a writer selected",
+    *,
+    scope: str = "selection",
+):
     from echo_link_core.windows_selection import DetectedSelection
     from echo_link_core.insertion import SelectionRecord, WindowSnapshot
 
     return DetectedSelection(
-        record=SelectionRecord(text, WindowSnapshot(handle, 4242, "Another window")),
+        record=SelectionRecord(
+            text, WindowSnapshot(handle, 4242, "Another window"), scope=scope
+        ),
         anchor=(0, 0, 10, 10),
     )
 
@@ -133,6 +140,13 @@ def _window_showing(view: str, *, automatic: bool, source_handle: int):
     stub._automatic_hud_suppress_until = 0.0
     stub._hud_source_window_alive.return_value = True
     stub._badge_clear_timer = None
+    # The real method, not a mock's truthy stand-in. This one decides whether a
+    # capture is a different DOCUMENT, and a MagicMock answers every question
+    # yes, which silently turned "a selection in another window" into "the
+    # writer opened another document" and made the gate look broken.
+    stub._is_a_different_document = (
+        lambda record: window_module.EchoLinkWindow._is_a_different_document(stub, record)
+    )
     return stub
 
 
@@ -158,6 +172,27 @@ def test_a_click_into_another_window_does_not_rebuild_an_open_review(is_window):
     window_module.EchoLinkWindow._handle_automatic_selection(stub, _detected(9927001))
 
     assert _showed_a_capture(stub) is False
+
+
+def test_opening_another_document_does_replace_an_open_review(is_window, quiet_status):
+    """A different document is the writer moving on, not a stray click.
+
+    The test above stays and is the case that matters: a selection typed into
+    some other window may not take a review off the screen. This is the other
+    half. On 2026-08-18 a writer left document 1 at 9 of 10, opened document 2,
+    and got nothing at all. The distinguishing fact, taken from that day's log,
+    is scope: every spurious capture was a selection inside a chat box, a
+    browser field or a search box, and every real document was a whole-document
+    capture from its own window.
+    """
+    is_window(1)
+    stub = _window_showing("card", automatic=True, source_handle=4851442)
+
+    window_module.EchoLinkWindow._handle_automatic_selection(
+        stub, _detected(9927001, scope="document")
+    )
+
+    assert _showed_a_capture(stub) is True
 
 
 def test_a_badge_is_still_replaced_by_a_new_capture(is_window, quiet_status):
