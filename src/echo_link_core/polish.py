@@ -1504,6 +1504,14 @@ class PolishEngine:
         cold_load_seconds = 0.0
         candidate = deterministic.text
         validation = ValidationResult(False, 0.0, ("generation did not run",))
+        # Why the model's answers were refused, kept for the result.
+        #
+        # The candidate that ships can be a SAFE one whose own validation was
+        # accepted, so it carries no failures at all, while the reason the
+        # model lost is computed in the loop and then dropped. That is how a
+        # rejected section reached the log as "guards=unrecorded residual=none
+        # rejected_llm=True": the engine knew exactly why and kept none of it.
+        model_rejection_failures: tuple[str, ...] = ()
         # The bar every model answer is measured against. Captured before the
         # attempt loop reassigns `quality`, because the comparison needs the
         # rules-only repair, not whatever the last attempt produced.
@@ -1810,9 +1818,13 @@ class PolishEngine:
                     )
                     + (() if quality.tone_verified else ("tone contract failed",)),
                 )
+                if validation.failures:
+                    model_rejection_failures = tuple(validation.failures)
                 generation_input = candidate
             else:
                 validation = safety_validation
+                if validation.failures:
+                    model_rejection_failures = tuple(validation.failures)
                 generation_input = deterministic.text
                 if request.command.strip().casefold() == "rephrase":
                     missing_actions = _missing_rephrase_actions(
@@ -2023,6 +2035,7 @@ class PolishEngine:
                 else (
                     cascade_state.failure_message
                     or "; ".join(validation.failures)
+                    or "; ".join(model_rejection_failures)
                     # A candidate can also lose on quality rather than on
                     # meaning, and that left the reason blank - "no recorded
                     # reason" was the fifth most common entry in the corpus

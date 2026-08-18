@@ -5850,3 +5850,37 @@ def test_no_second_pass_when_every_word_is_known():
 
     assert result.text == corrected
     assert len(runtime.generate_calls) == 1
+
+
+def test_a_refused_section_records_which_guard_refused_it():
+    """The engine used to refuse a section and keep no record of why.
+
+    Measured 2026-08-18 on essay 16 of the 800-percent corpus: two of ten
+    sections shipped the deterministic repair and the log could only say
+    "guards=unrecorded residual=none rejected_llm=True". The candidate that
+    ships can be a safe one whose own validation was accepted, so it carries no
+    failures, while the reason the model lost is computed in the retry loop and
+    then dropped.
+    """
+    from echo_link_core.polish import PolishValidator
+    from echo_link_core.polish_types import ValidationResult
+
+    class RefusingValidator(PolishValidator):
+        def validate(self, source, candidate, **kwargs):
+            if candidate.strip() != source.strip():
+                return ValidationResult(
+                    accepted=False,
+                    semantic_similarity=1.0,
+                    failures=("negation changed (test)",),
+                )
+            return super().validate(source, candidate, **kwargs)
+
+    runtime = FakeRuntime(("The dog does not fit.",) * 8)
+    value, _ = engine(classifier=FakeClassifier(needs_llm=True), runtime=runtime)
+    value.validator = RefusingValidator(value.classifier)
+
+    result = value.analyze(request("teh dog dont fit"))
+
+    assert not result.used_llm
+    reason = str(result.metrics.get("refusal_reason") or "")
+    assert "negation changed (test)" in reason
