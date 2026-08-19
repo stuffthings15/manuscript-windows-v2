@@ -471,6 +471,29 @@ class LocalWritingAssistant:
             if has_immutable_tokens
             else ""
         )
+        # A rule in TASK RULES was not enough. Measured across all 20
+        # documents of the 800-percent corpus, tone acceptance reached 131 of
+        # 240 and 70 of the 109 remaining refusals were still the modal family:
+        # 45 "modal meaning changed" and 25 "prohibition changed", which is the
+        # same guard reached through a negated sentence. The instruction was
+        # already there. It sat at the end of a long task string, after the tone
+        # contract, and the model did not act on it. A rule the model follows
+        # has to be its own line in the core rules.
+        #
+        # Tone commands only. Proofreading has documented, legitimate reasons to
+        # add a modal - completing "would rather", making a bare temporal clause
+        # explicit - and _modal_meaning_preserved allows exactly those in
+        # grammar mode. Forbidding them here would undo that.
+        modal_rule = (
+            "- Keep every modal verb exactly as the source has it: can, cannot, "
+            "could, may, might, will, would, must, shall, and their negated "
+            "forms. Never swap one for another, never add one, never drop one. "
+            "A modal carries certainty, permission, capability, or obligation, "
+            "so changing it changes what the text claims even when the new "
+            "wording reads better.\n"
+            if command in TONE_COMMANDS
+            else ""
+        )
         task = COMMANDS[command]
         target_language = " ".join(language.split())
         if len(target_language) > 80:
@@ -497,6 +520,7 @@ class LocalWritingAssistant:
                 "RULES:\n"
                 "- Preserve every fact, request, constraint, owner, deadline, "
                 "quantity, name, version, negation, and polarity.\n"
+                f"{modal_rule}"
                 "- Keep each actor attached to its same action and receiver; "
                 "never swap a named system, team, or user for we, you, or they.\n"
                 "- Keep privacy limits attached to the same data and destination.\n"
@@ -527,6 +551,7 @@ class LocalWritingAssistant:
                 "- Preserve every fact, request, constraint, owner, deadline, relationship, quantity, "
                 "name, version, and polarity. Preserve negation and words such as must, before, after, "
                 "until, on, and by.\n"
+                f"{modal_rule}"
                 "- Keep each actor attached to the same action and receiver. Do not replace a system, "
                 "component, team, developer, or user action with we, you, or they.\n"
                 "- Keep privacy boundaries attached to the same data and destination. For example, do not "
