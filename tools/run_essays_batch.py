@@ -92,24 +92,25 @@ def badge_button(hud):
 
 
 def tone_combo(hud):
-    """The HUD's tone picker, or None.
+    """The HUD's tone chooser, or None.
 
-    Matched on the name rather than the position: the tone row also holds
-    Regenerate, and matching by order would silently pick that instead the next
-    time the layout changes.
+    It is a menu button, not a combo box. It was a QComboBox until 2026-08-18,
+    and a combo in this window cannot be set through UI Automation at all - the
+    HUD is shown without activating so it never receives keys, and every
+    pattern route reports success while the value stays put. The control was
+    changed for accessibility; this follows it.
 
-    The substring is deliberately loose. The card on screen reports
-    "Sentence rewrite tone" while the source sets "Rewrite tone" on a different
-    combo of the same kind, and an exact match on the wrong one of those found
-    nothing at all - the first tone run pressed nothing, and the app logged
-    eleven Proofread requests while the harness believed it had asked for
-    Friendly.
+    Matched on the accessible name, case-folded and loose, because the card
+    reports "Sentence rewrite tone" while the source sets "Rewrite tone" on a
+    different widget of the same kind. Matching the source string exactly found
+    nothing, and the first tone run pressed nothing at all while reporting a
+    healthy result.
     """
     from repro_accept_advance import _descend
 
     for control in _descend(hud):
         try:
-            if control.ControlTypeName != "ComboBoxControl":
+            if control.ControlTypeName not in {"ButtonControl", "ComboBoxControl"}:
                 continue
             if "rewrite tone" in str(control.Name or "").casefold():
                 return control
@@ -119,63 +120,78 @@ def tone_combo(hud):
 
 
 def current_tone(hud) -> str:
-    """What the picker is showing now, or "" if it cannot be read."""
+    """The tone the control is showing now, or "" if it cannot be read."""
     combo = tone_combo(hud)
     if combo is None:
         return ""
     for reader in ("GetValuePattern", "GetLegacyIAccessiblePattern"):
         try:
-            return str(getattr(combo, reader)().Value or "").strip()
+            value = str(getattr(combo, reader)().Value or "").strip()
+            if value:
+                return value
         except Exception:  # noqa: BLE001 - not every provider offers both
             continue
-    return ""
+    try:
+        # A menu button carries its choice as its label.
+        return str(combo.Name or "").strip()
+    except Exception:  # noqa: BLE001 - the HUD may have closed
+        return ""
 
 
 def select_tone(hud, tone: str) -> bool:
     """Choose a tone the way a writer does, and confirm it took.
 
-    Three ways in, because a Qt combo does not always expose the same patterns:
-    set the value directly, expand and click the item, or fall back to the
-    keyboard. The return value is a READ BACK of what the control shows, not
-    the fact that a click was dispatched - a harness that reports success
-    because it pressed something is how a run measures nothing and says it
-    passed.
+    The return value is a READ BACK of what the control shows, never the fact
+    that something was clicked. A harness that reports success because it
+    pressed something is how a run measures nothing and says it passed - which
+    is exactly what happened the first time this flag ran.
     """
-    combo = tone_combo(hud)
-    if combo is None:
-        return False
-    if current_tone(hud) == tone:
-        return True
-    try:
-        combo.GetValuePattern().SetValue(tone)
-        time.sleep(1.0)
-        if current_tone(hud) == tone:
-            return True
-    except Exception:  # noqa: BLE001 - provider may not support ValuePattern
-        pass
-    try:
-        import uiautomation as automation
+    import uiautomation as automation
 
-        combo.GetExpandCollapsePattern().Expand()
-        time.sleep(0.8)
-        item = automation.ListItemControl(searchDepth=8, Name=tone)
-        if item.Exists(3, 0.4):
-            try:
-                item.GetSelectionItemPattern().Select()
-            except Exception:  # noqa: BLE001 - fall back to a real click
-                item.Click(simulateMove=False)
-            time.sleep(1.0)
-            if current_tone(hud) == tone:
-                return True
-    except Exception:  # noqa: BLE001 - the popup may have closed
-        pass
-    try:
-        combo.SetFocus()
-        combo.SendKeys(tone[:1], waitTime=0.3)
-        time.sleep(1.0)
-    except Exception:  # noqa: BLE001 - the HUD may have closed
+    button = tone_combo(hud)
+    if button is None:
         return False
-    return current_tone(hud) == tone
+    if tone.casefold() in current_tone(hud).casefold():
+        return True
+    for opener in ("GetInvokePattern", "GetExpandCollapsePattern"):
+        try:
+            pattern = getattr(button, opener)()
+            if opener == "GetInvokePattern":
+                pattern.Invoke()
+            else:
+                pattern.Expand()
+        except Exception:  # noqa: BLE001 - try the next way in
+            continue
+        time.sleep(1.0)
+        item = automation.MenuItemControl(searchDepth=12, Name=tone)
+        if not item.Exists(4, 0.4):
+            continue
+        try:
+            item.GetInvokePattern().Invoke()
+        except Exception:  # noqa: BLE001 - fall back to a real click
+            try:
+                item.Click(simulateMove=False)
+            except Exception:  # noqa: BLE001 - the menu may have closed
+                continue
+        time.sleep(1.5)
+        if tone.casefold() in current_tone(hud_window(8.0) or hud).casefold():
+            return True
+    return False
+
+
+def regenerate_button(hud):
+    """The control that re-runs the current section with the chosen tone."""
+    from repro_accept_advance import _descend
+
+    for control in _descend(hud):
+        try:
+            if control.ControlTypeName != "ButtonControl":
+                continue
+            if "rewrite the current sentence" in str(control.Name or "").casefold():
+                return control
+        except Exception:  # noqa: BLE001 - the HUD may be repainting
+            continue
+    return None
 
 
 def review_readiness(hud) -> str:
@@ -550,8 +566,17 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
             # Replace straight after selecting would apply whatever the card
             # was already showing - the proofread - and the run would look
             # like a tone run while measuring nothing of the kind.
+            #
+            # Choosing the SAME tone again is correctly a no-op, so on every
+            # section after the first the choice alone changes nothing: the
+            # first run of this ran Friendly exactly once across eleven
+            # sections. Regenerate is what re-runs the section under the tone
+            # already chosen, and it is what a writer would press too.
             if select_tone(hud, tone):
                 report["tone_selected"] = report.get("tone_selected", 0) + 1
+                again = regenerate_button(hud)
+                if again is not None and again.IsEnabled and invoke(again):
+                    report["tone_regenerated"] = report.get("tone_regenerated", 0) + 1
                 waited = time.monotonic() + 90.0
                 while time.monotonic() < waited:
                     time.sleep(3.0)
@@ -798,6 +823,7 @@ def main() -> int:
                 "tone": args.tone,
                 "tone_selected": result.get("tone_selected", 0),
                 "tone_unavailable": result.get("tone_unavailable", 0),
+                "tone_regenerated": result.get("tone_regenerated", 0),
                 # What the APP says it ran, not what the harness pressed.
                 "commands": commands_since(result.get("_log_start", 0)),
                 "rules_fallbacks": rules_fallbacks_since(result.get("_log_start", 0)),
