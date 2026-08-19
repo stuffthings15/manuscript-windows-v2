@@ -91,6 +91,93 @@ def badge_button(hud):
     return None
 
 
+def tone_combo(hud):
+    """The HUD's tone picker, or None.
+
+    Matched on the name rather than the position: the tone row also holds
+    Regenerate, and matching by order would silently pick that instead the next
+    time the layout changes.
+
+    The substring is deliberately loose. The card on screen reports
+    "Sentence rewrite tone" while the source sets "Rewrite tone" on a different
+    combo of the same kind, and an exact match on the wrong one of those found
+    nothing at all - the first tone run pressed nothing, and the app logged
+    eleven Proofread requests while the harness believed it had asked for
+    Friendly.
+    """
+    from repro_accept_advance import _descend
+
+    for control in _descend(hud):
+        try:
+            if control.ControlTypeName != "ComboBoxControl":
+                continue
+            if "rewrite tone" in str(control.Name or "").casefold():
+                return control
+        except Exception:  # noqa: BLE001 - the HUD may be repainting
+            continue
+    return None
+
+
+def current_tone(hud) -> str:
+    """What the picker is showing now, or "" if it cannot be read."""
+    combo = tone_combo(hud)
+    if combo is None:
+        return ""
+    for reader in ("GetValuePattern", "GetLegacyIAccessiblePattern"):
+        try:
+            return str(getattr(combo, reader)().Value or "").strip()
+        except Exception:  # noqa: BLE001 - not every provider offers both
+            continue
+    return ""
+
+
+def select_tone(hud, tone: str) -> bool:
+    """Choose a tone the way a writer does, and confirm it took.
+
+    Three ways in, because a Qt combo does not always expose the same patterns:
+    set the value directly, expand and click the item, or fall back to the
+    keyboard. The return value is a READ BACK of what the control shows, not
+    the fact that a click was dispatched - a harness that reports success
+    because it pressed something is how a run measures nothing and says it
+    passed.
+    """
+    combo = tone_combo(hud)
+    if combo is None:
+        return False
+    if current_tone(hud) == tone:
+        return True
+    try:
+        combo.GetValuePattern().SetValue(tone)
+        time.sleep(1.0)
+        if current_tone(hud) == tone:
+            return True
+    except Exception:  # noqa: BLE001 - provider may not support ValuePattern
+        pass
+    try:
+        import uiautomation as automation
+
+        combo.GetExpandCollapsePattern().Expand()
+        time.sleep(0.8)
+        item = automation.ListItemControl(searchDepth=8, Name=tone)
+        if item.Exists(3, 0.4):
+            try:
+                item.GetSelectionItemPattern().Select()
+            except Exception:  # noqa: BLE001 - fall back to a real click
+                item.Click(simulateMove=False)
+            time.sleep(1.0)
+            if current_tone(hud) == tone:
+                return True
+    except Exception:  # noqa: BLE001 - the popup may have closed
+        pass
+    try:
+        combo.SetFocus()
+        combo.SendKeys(tone[:1], waitTime=0.3)
+        time.sleep(1.0)
+    except Exception:  # noqa: BLE001 - the HUD may have closed
+        return False
+    return current_tone(hud) == tone
+
+
 def review_readiness(hud) -> str:
     """What the HUD says about its own readiness, or "" if it is not saying.
 
@@ -236,6 +323,35 @@ def log_lines() -> int:
         return 0
 
 
+def commands_since(since: int = 0) -> dict[str, int]:
+    """Which Polish commands the app actually ran, from its own log.
+
+    The harness pressing a tone is not evidence that a tone ran. This reads
+    back what the app says it did, so a tone run that silently proofread
+    everything is visible as such instead of being reported as a tone result.
+    """
+    try:
+        lines = LOG.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return {}
+    counts: dict[str, int] = {}
+    for line in lines[since:]:
+        found = re.search(r"Polish request command=(\w+)", line)
+        if found is not None:
+            name = found.group(1)
+            counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def rules_fallbacks_since(since: int = 0) -> int:
+    """Sections that got no AI at all, from the app's own log."""
+    try:
+        lines = LOG.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return 0
+    return sum(1 for line in lines[since:] if "fell back to rules" in line)
+
+
 def captured_document_title(since: int = 0) -> str | None:
     """The document the app reported capturing since `since` log lines.
 
@@ -340,8 +456,16 @@ def paragraphs(value: str) -> list[str]:
     ]
 
 
-def review_one(path: Path, *, max_presses: int = 30) -> dict:
-    """Accept every section, then return the saved document text."""
+def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
+    """Accept every section, then return the saved document text.
+
+    With `tone` set, each section is put through the tone picker before it is
+    accepted, which is the only way this harness can measure tone at all.
+    Until 2026-08-18 it only ever pressed Replace: a full 20-essay run issued
+    213 Polish requests and every one was command=Proofread, so "run the essays
+    through Word" could not see the tone feature and never had. The tone
+    numbers quoted up to then all came from a headless probe.
+    """
     log_start = log_lines()
     word = open_in_word(path)
     _handle, bounds = foreground_word()
@@ -414,12 +538,29 @@ def review_one(path: Path, *, max_presses: int = 30) -> dict:
                     break
             time.sleep(2.0)
         report["settled"] = review_readiness(hud_window(8.0) or hud)
+    report["_log_start"] = log_start
 
     for press in range(1, max_presses + 1):
         hud = hud_window(10.0)
         if hud is None:
             break
         before = counter_text(hud)
+        if tone:
+            # Ask for the tone, then wait for the answer it triggers. Pressing
+            # Replace straight after selecting would apply whatever the card
+            # was already showing - the proofread - and the run would look
+            # like a tone run while measuring nothing of the kind.
+            if select_tone(hud, tone):
+                report["tone_selected"] = report.get("tone_selected", 0) + 1
+                waited = time.monotonic() + 90.0
+                while time.monotonic() < waited:
+                    time.sleep(3.0)
+                    hud = hud_window(8.0) or hud
+                    ready = replace_button(hud)
+                    if ready is not None and ready.IsEnabled:
+                        break
+            else:
+                report["tone_unavailable"] = report.get("tone_unavailable", 0) + 1
         button = replace_button(hud)
         if button is None:
             break
@@ -580,6 +721,16 @@ def main() -> int:
         help="the folder of .docx essays to run; defaults to the animal-pet corpus",
     )
     parser.add_argument(
+        "--tone",
+        default="",
+        choices=["", "Clear", "Improve", "Rephrase", "Shorten", "Formal", "Friendly"],
+        help=(
+            "apply this tone to every section before accepting it. Without it "
+            "the run only proofreads, which is all this harness could ever do "
+            "before 2026-08-18 and is why no tone number ever came from Word."
+        ),
+    )
+    parser.add_argument(
         "--as-a-writer",
         action="store_true",
         help=(
@@ -628,7 +779,7 @@ def main() -> int:
                 restart_app()
             started = time.monotonic()
             try:
-                result = review_one(target)
+                result = review_one(target, tone=args.tone)
             except Exception as exc:  # noqa: BLE001 - keep going through the corpus
                 result = {"error": f"{type(exc).__name__}: {exc}", "after": ""}
             elapsed = round(time.monotonic() - started, 1)
@@ -644,8 +795,26 @@ def main() -> int:
                 "stalled_at": result.get("stalled_at"),
                 "error": result.get("error"),
                 "timed_out": bool(result.get("timed_out")),
+                "tone": args.tone,
+                "tone_selected": result.get("tone_selected", 0),
+                "tone_unavailable": result.get("tone_unavailable", 0),
+                # What the APP says it ran, not what the harness pressed.
+                "commands": commands_since(result.get("_log_start", 0)),
+                "rules_fallbacks": rules_fallbacks_since(result.get("_log_start", 0)),
                 **judged,
             }
+            if args.tone and not row["tone_selected"]:
+                # A tone run that proofread everything is not a tone result,
+                # and must never be reported as one. The first run of this
+                # flag pressed nothing and the app logged eleven Proofread
+                # requests while the harness believed it had asked for
+                # Friendly; only the log read-back caught it. Now it is an
+                # error on the row rather than a number somebody might quote.
+                row["error"] = (
+                    f"--tone {args.tone} was never applied to any section; "
+                    f"the app ran {row['commands']}. The HUD tone control is "
+                    "not reachable through UI Automation."
+                )
             row["outcome"] = outcome(row)
             outcomes.append(row["outcome"])
             summary.append(row)
@@ -656,7 +825,13 @@ def main() -> int:
                 f"unchanged={len(row['unchanged']):>2} "
                 f"unknown={len(row['unknown_words']):>3} "
                 f"artefacts={len(row['artefacts']):>2} "
-                f"stalled={row['stalled_at']} err={row['error']}",
+                f"stalled={row['stalled_at']} err={row['error']}"
+                + (
+                    f" tone={args.tone} applied={row['tone_selected']}"
+                    f" ran={row['commands']} rules={row['rules_fallbacks']}"
+                    if args.tone
+                    else ""
+                ),
                 flush=True,
             )
 
