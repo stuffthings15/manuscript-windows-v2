@@ -936,9 +936,25 @@ class PolishValidator:
         # against a model that rewrites rather than repairs, so it has to leave
         # room for a genuine repair of badly broken text while still catching
         # invention.
-        if dense_source and grammar_mode:
+        # A tone rewrite is ASKED to change the wording, and until 2026-08-18 it
+        # got the strictest floor in the system while proofreading got the
+        # loosest - 0.88 against 0.74. On this corpus a correct proofread scores
+        # 0.72 to 0.82, so no tone rewrite could ever pass, and every one fell
+        # back to the deterministic repair. That is what a writer sees as
+        # "Shorten did nothing": measured live, Shorten 645 characters in, 646
+        # out. The refused candidates measured 0.777 to 0.880, squarely inside
+        # the band a correct dense proofread already occupies.
+        #
+        # This is not a hole for invention. Every other meaning gate is
+        # unchanged and still applies to tone: protected tokens, named
+        # entities, numbers, negation, prohibition, modal meaning, obligation,
+        # ordering and actor. Those are what stop a rewrite from changing what
+        # the text says. This number only ever measured how differently it says
+        # it, which for a tone command is the point of the request.
+        tone_mode = not grammar_mode and task is PolishTask.REWRITE
+        if dense_source and (grammar_mode or tone_mode):
             similarity_floor = 0.74
-        elif grammar_mode:
+        elif grammar_mode or tone_mode:
             similarity_floor = 0.78
         else:
             similarity_floor = 0.88
@@ -986,8 +1002,11 @@ class PolishValidator:
                 )
                 if window_against_prepared < similarity_floor:
                     failures.append(
+                        # Four places, deliberately. Three printed a genuine
+                        # 0.8799 as "0.880 is below 0.880", which reads as a
+                        # broken comparison and sent a reader looking for one.
                         f"semantic similarity window {index} "
-                        f"{window_similarity:.3f} is below {similarity_floor:.3f}"
+                        f"{window_similarity:.4f} is below {similarity_floor:.3f}"
                     )
         if grammar_mode:
             source_words = max(1, len(_WORD.findall(wording_reference)))

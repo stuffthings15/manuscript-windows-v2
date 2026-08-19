@@ -409,3 +409,91 @@ def test_minimal_edits_produce_replace_insert_and_delete_ranges():
 
 def test_minimal_edits_empty_when_text_is_unchanged():
     assert minimal_edits("Same.", "Same.") == ()
+
+
+class _FixedSimilarity:
+    """A classifier that reports one similarity, so a floor can be pinned.
+
+    The real embedding scores a short safe paraphrase above 0.95, which clears
+    every floor and would make the test below pass whether the fix were present
+    or not. The refusals this fix is about came from windows cut out of long
+    error-dense paragraphs, which a two-line fixture cannot reproduce. Holding
+    the number still tests the thing that actually changed: which floor a tone
+    command is judged against.
+    """
+
+    def __init__(self, value: float) -> None:
+        self.value = float(value)
+
+    def semantic_similarity(self, source: str, candidate: str) -> float:
+        return self.value
+
+    def warm(self) -> bool:
+        return True
+
+
+def test_a_tone_rewrite_is_not_held_to_the_proofread_wording_floor():
+    """A rewrite asked to change the wording must not fail for changing it.
+
+    Until 2026-08-18 the floor was 0.74 for a proofread of dense text, 0.78 for
+    any other proofread, and 0.88 for everything else - and "everything else"
+    is every tone command, because grammar_mode is true only for Proofread. So
+    the one operation explicitly asked to reword was held to the strictest
+    standard in the system while proofreading got the loosest. Measured on the
+    800-percent corpus, 4 of 36 tone rewrites survived, and the refused ones
+    scored 0.777 to 0.880 - inside the band a correct dense proofread already
+    occupies. The writer clicked Shorten and got the deterministic repair back:
+    645 characters in, 646 out.
+
+    0.80 is accepted and 0.70 is still refused, so the band is pinned from both
+    sides rather than simply opened.
+    """
+    source = "The gardener can keep a pigeon, and the bird will learn the routine."
+    candidate = "The gardener can house a pigeon, and the bird will pick up the routine."
+
+    lenient = PolishValidator(_FixedSimilarity(0.80))
+    strict = PolishValidator(_FixedSimilarity(0.70))
+
+    assert lenient.validate(source, candidate, task=PolishTask.REWRITE).accepted
+    assert not strict.validate(source, candidate, task=PolishTask.REWRITE).accepted
+
+
+def test_a_tone_rewrite_still_fails_every_meaning_guard(validator):
+    """Only the wording floor moved. Meaning is protected exactly as before.
+
+    This is the half that matters: the floor was lowered for tone, so the guard
+    that catches a rewrite changing what the text CLAIMS has to be shown still
+    firing on the same task.
+    """
+    source = "The gardener can keep a pigeon, and the bird will learn the routine."
+    flipped = validator.validate(
+        source,
+        "The gardener cannot keep a pigeon, and the bird will learn the routine.",
+        task=PolishTask.REWRITE,
+    )
+    swapped_modal = validator.validate(
+        source,
+        "The gardener can keep a pigeon, and the bird might learn the routine.",
+        task=PolishTask.REWRITE,
+    )
+    assert not flipped.accepted
+    assert not swapped_modal.accepted
+
+
+def test_tone_commands_tell_the_model_to_keep_every_modal():
+    """The prompt listed facts, negation and polarity, and stopped there.
+
+    The model then wrote "will" -> "might" and dropped "can", and the modal
+    guards refused it - correctly, because that changes what the text claims.
+    The fix constrains the model rather than the guard, so what is asserted
+    here is that a tone command carries the rule and a proofread does not need
+    it (proofreading is not asked to reword, and its own rules already forbid
+    dropping a level of force).
+    """
+    from echo_link_core.selected_text import _task_rules
+
+    friendly = _task_rules("Friendly", "", None, hard_word_limit=False)
+    shorten = _task_rules("Shorten", "", None, hard_word_limit=False)
+    assert "modal verb" in friendly
+    assert "Do not swap one modal for another" in friendly
+    assert "modal verb" in shorten

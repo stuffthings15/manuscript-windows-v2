@@ -1646,6 +1646,24 @@ def _task_rules(
     contract = tone_contract_instruction(command)
     if contract:
         rules += " " + contract
+    if command in TONE_COMMANDS:
+        # Measured 2026-08-18 on the 800-percent corpus: 4 of 36 tone rewrites
+        # survived validation, and the largest single cause was the modal
+        # guards - "missing can", "added might", "missing could; added can",
+        # "missing will; added might". Those refusals are correct. A rewrite
+        # that turns "will" into "might" has changed what the text claims, and
+        # lowering the guard to let tone through would let that through with
+        # it. The model was never told to leave modals alone: the prompt lists
+        # facts, negation and polarity, and stops there. So this is the fix -
+        # constrain the model rather than the check.
+        rules += (
+            " Keep every modal verb exactly as the source has it: can, cannot,"
+            " could, may, might, will, would, must, shall, and their negated"
+            " forms. Do not swap one modal for another, do not add one, and do"
+            " not drop one. A modal carries certainty, permission, capability"
+            " or obligation, so changing it changes what the text claims even"
+            " when the new wording sounds better."
+        )
     return rules
 
 
