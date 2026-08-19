@@ -2463,6 +2463,10 @@ class EchoLinkWindow(QMainWindow):
             profile,
             protected_terms,
             self.selected_text_record.text or "",
+            # Read here, on the GUI thread, because the worker below must not
+            # touch a widget. This is the correction already on the card, kept
+            # so a failed tone does not cost the writer their proofread.
+            self.rewrite_palette.current_replacement_text(),
         )
         with self._palette_ai_lock:
             if self._palette_ai_shutdown:
@@ -2508,7 +2512,12 @@ class EchoLinkWindow(QMainWindow):
             profile,
             protected_terms,
             document_text,
+            # Optional so a caller that predates it - including the tests that
+            # build this tuple by hand - still works. Absent means "no
+            # correction was on the card", which is the safe reading.
+            *carried,
         ) = job
+        existing_correction = str(carried[0]).strip() if carried else ""
         started_at = time.monotonic()
         runtime_done = threading.Event()
         runtime_state = {
@@ -2622,7 +2631,39 @@ class EchoLinkWindow(QMainWindow):
                 repaired = str(
                     getattr(polish_result, "deterministic_text", "") or ""
                 ).strip()
-                if repaired and repaired != source.strip():
+                tone_request = command.strip().casefold() != "proofread"
+                if (
+                    tone_request
+                    and existing_correction
+                    and existing_correction != source.strip()
+                ):
+                    # A tone is a second pass over a section that already has an
+                    # AI proofread on the card. Handing back the rules repair
+                    # instead loses the tone AND the correction: measured on
+                    # essay 7, a refused Friendly returned "Another benefit are
+                    # the WAY a hamster..." with the writer's errors intact.
+                    #
+                    # Reporting the section as failed was tried first and was
+                    # worse still - it disables Replace, so seven sections were
+                    # dismissed uncorrected and the essay went from 0 unknown
+                    # words to 18. The correction has to come back, applied,
+                    # with the truth in the message.
+                    logger.info(
+                        "Writing HUD kept the existing correction; the %s "
+                        "rewrite could not be applied characters=%d",
+                        command,
+                        len(existing_correction),
+                    )
+                    payload = (
+                        request_id,
+                        attempt_id,
+                        suggestion_id,
+                        True,
+                        existing_correction,
+                        f"{command} could not be applied; the correction "
+                        "already found is unchanged.",
+                    )
+                elif repaired and repaired != source.strip():
                     logger.info(
                         "Writing HUD offering the deterministic repair for a "
                         "section the AI could not finish characters=%d",

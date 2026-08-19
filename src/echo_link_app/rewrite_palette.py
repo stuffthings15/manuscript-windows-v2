@@ -2994,6 +2994,16 @@ class RewritePalette(QDialog):
         self._analyze_suggestions(text)
         self._set_status(message)
 
+    def current_replacement_text(self) -> str:
+        """The correction the card is showing right now.
+
+        Read on the GUI thread before a tone job starts, so a failed tone can
+        hand this back instead of the rules repair. A refused Friendly used to
+        replace a clean AI proofread with "Another benefit are the WAY a
+        hamster..." - the writer lost the tone and the correction together.
+        """
+        return self.after_text.toPlainText().strip()
+
     def _set_result_text(self, text: str) -> None:
         self._updating_result = True
         try:
