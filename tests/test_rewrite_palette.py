@@ -4112,3 +4112,66 @@ def test_the_badge_still_analyses_once_the_writer_stops(app):
     assert palette._analysis_pending is False
     assert palette._suggestions != ()
     palette.finish_choice()
+
+
+def test_the_tone_control_announces_which_tone_is_selected(app):
+    """A tone control that will not say what it is set to cannot be operated.
+
+    This was a QComboBox. Measured on 2026-08-18 against a window carrying the
+    HUD's own flags - Tool, frameless, always on top, shown without activating
+    - a combo cannot be set through UI Automation at all: ValuePattern.SetValue
+    is accepted and does nothing, keyboard never arrives because the window
+    deliberately refuses focus so it will not take it from Word, a click does
+    not reach the popup, and SelectionItemPattern.Select returns success while
+    the value stays put. A side-by-side experiment in that same window had a
+    menu button work first time and the combo report nothing at all.
+
+    That is an accessibility defect before it is a testing one, and the half
+    that bites hardest is this: a bare button announces its label and never its
+    value, so a reader is told "Sentence rewrite tone" whichever tone is set.
+    A combo gave that away for free.
+    """
+    from echo_link_app.rewrite_palette import TonePicker
+
+    picker = TonePicker()
+    picker.addItems(("Clear", "Improve", "Friendly"))
+    picker.setAccessibleName("Sentence rewrite tone")
+
+    assert "Clear" in picker.accessibleName()
+    picker.setCurrentText("Friendly")
+    assert picker.currentText() == "Friendly"
+    assert "Sentence rewrite tone" in picker.accessibleName()
+    assert "Friendly" in picker.accessibleName()
+    picker.deleteLater()
+
+
+def test_the_tone_control_keeps_the_combo_box_contract(app):
+    """The call sites and the tests that describe them must keep working.
+
+    The API mirrors QComboBox on purpose, so replacing the widget stayed an
+    accessibility fix instead of turning into a rewrite of everything that
+    reads a tone.
+    """
+    from echo_link_app.rewrite_palette import TonePicker
+
+    picker = TonePicker()
+    seen: list[str] = []
+    picker.currentTextChanged.connect(seen.append)
+    picker.addItems(("Clear", "Improve", "Shorten"))
+
+    assert picker.count() == 3
+    assert picker.itemText(2) == "Shorten"
+    assert picker.itemText(99) == ""
+    assert picker.currentText() == "Clear"
+
+    picker.setCurrentText("Shorten")
+    assert seen == ["Shorten"]
+    # Choosing the same tone again is a no-op, which is why the harness has to
+    # press Regenerate for each section rather than re-picking the tone: the
+    # first tone run applied Friendly exactly once across eleven sections.
+    picker.setCurrentText("Shorten")
+    assert seen == ["Shorten"]
+    # A tone that is not on the menu is ignored rather than invented.
+    picker.setCurrentText("Nonexistent")
+    assert picker.currentText() == "Shorten"
+    picker.deleteLater()

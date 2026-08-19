@@ -24,7 +24,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
-    QComboBox,
+    QMenu,
     QDialog,
     QFrame,
     QGridLayout,
@@ -78,6 +78,95 @@ class _CurrentPageStack(QStackedWidget):
 
     def minimumSizeHint(self) -> QSize:
         return QSize(0, 0)
+
+
+class TonePicker(QPushButton):
+    """A tone chooser a screen reader and UI Automation can actually operate.
+
+    This was a QComboBox. Measured on 2026-08-18 against a window carrying the
+    HUD's own flags - Tool, frameless, always on top, shown without activating
+    - a combo cannot be set through UI Automation at all. Four routes were
+    tried: ValuePattern.SetValue is accepted and does nothing, keyboard input
+    never arrives because the window deliberately refuses focus so it will not
+    take it from Word, a mouse click does not reach the popup, and
+    SelectionItemPattern.Select on the item returns success while the value
+    stays where it was. A side-by-side experiment in that same window had a
+    menu button and plain buttons both work first time and the combo report
+    nothing at all.
+
+    That is an accessibility defect before it is a testing one. A control
+    automation cannot set is a control a screen-reader or switch user very
+    likely cannot set either, and the tone menu is half of what this product
+    does.
+
+    The API deliberately mirrors QComboBox - currentText, setCurrentText,
+    addItems, count, itemText, currentTextChanged - so the call sites and the
+    tests that already describe this behaviour keep working and this change
+    stays about accessibility rather than becoming a rewrite.
+    """
+
+    currentTextChanged = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._items: list[str] = []
+        self._current = ""
+        self._accessible_base = ""
+        self._menu = QMenu(self)
+        self.setMenu(self._menu)
+
+    def setAccessibleName(self, name: str) -> None:
+        """Remember the label, and always announce the current tone with it.
+
+        A combo box tells assistive technology which option is selected. A bare
+        button does not, so without this the control announced "Sentence
+        rewrite tone" whichever tone was chosen - a reader could not tell what
+        was set, and neither could anything reading the control back. Naming
+        the value here is what a combo did for free.
+        """
+        self._accessible_base = str(name)
+        self._refresh_accessible_name()
+
+    def _refresh_accessible_name(self) -> None:
+        base = self._accessible_base or "Rewrite tone"
+        label = f"{base}, {self._current}" if self._current else base
+        super().setAccessibleName(label)
+
+    def addItems(self, items) -> None:
+        for item in items:
+            text = str(item)
+            if text in self._items:
+                continue
+            self._items.append(text)
+            action = self._menu.addAction(text)
+            action.setObjectName(f"tone-{text}")
+            action.triggered.connect(
+                lambda _checked=False, value=text: self.setCurrentText(value)
+            )
+        if self._items and not self._current:
+            self._current = self._items[0]
+            self.setText(self._current)
+            self._refresh_accessible_name()
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemText(self, index: int) -> str:
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return ""
+
+    def currentText(self) -> str:
+        return self._current
+
+    def setCurrentText(self, text: str) -> None:
+        value = str(text)
+        if value not in self._items or value == self._current:
+            return
+        self._current = value
+        self.setText(value)
+        self._refresh_accessible_name()
+        self.currentTextChanged.emit(value)
 
 
 class RewritePalette(QDialog):
@@ -649,7 +738,7 @@ class RewritePalette(QDialog):
         tone_label = QLabel("Tone")
         tone_label.setObjectName("hudEyebrow")
         tone_row.addWidget(tone_label)
-        self.tone_combo = QComboBox()
+        self.tone_combo = TonePicker()
         # Six on the owner's instruction, 2026-08-16, down from seven on
         # 2026-08-13 and twenty-two before that. These are the same six Android
         # cut to under the same instruction the day before, in commit 1aed13d
