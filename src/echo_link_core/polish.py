@@ -1740,6 +1740,7 @@ class PolishEngine:
                 or request.command in _STAGED_STYLE_COMMANDS
             ):
                 candidate = _restore_tone_actor_pronouns(normalized, candidate)
+                candidate = _restore_tone_modals(normalized, candidate)
                 candidate = _restore_source_phrase_casing(normalized, candidate)
             safety_validation = self.validator.validate(
                 normalized,
@@ -5883,6 +5884,67 @@ def _restore_tone_actor_pronouns(source: str, candidate: str) -> str:
         flags=re.IGNORECASE,
     )
 
+
+
+_PLAIN_MODALS = frozenset({"can", "could", "may", "might", "will", "would"})
+
+
+def _restore_tone_modals(source: str, candidate: str) -> str:
+    """Put the writer's own modal back when a tone rewrite swapped it.
+
+    Measured across all 20 documents of the 800-percent corpus: 64 of 97
+    refused tone rewrites failed on the modal guards alone - "missing may;
+    added might", "missing could; added can". The rewrite was otherwise good,
+    and the writer got the deterministic proofread instead of the tone they
+    asked for.
+
+    Two rounds of prompt work did not fix it, and it is not really a prompt
+    problem: in English a register shift IS often a modal shift, so a model
+    asked to sound friendlier reaches for "might" over "may" by doing what was
+    asked. The guards are right to refuse that, because it changes what the
+    text claims. So the repair is to undo the swap rather than to stop
+    noticing it. This is the same move _restore_tone_actor_pronouns already
+    makes one line above, for the same reason.
+
+    Nothing here can widen what is accepted. The repaired candidate goes
+    through the full validator afterwards exactly as it would have, so a
+    candidate that still fails any guard still fails. The only outcomes are a
+    candidate that now agrees with the writer's modality, or no change.
+
+    Deliberately excluded: negated and negative forms. If the swap involves
+    "cannot", "won't" or "couldn't", this returns the candidate untouched. A
+    lost or gained negation is meaning, and meaning is refused, never patched.
+    """
+    source_modals = [m.group(0) for m in _MODAL_MEANING.finditer(source)]
+    candidate_modals = [m.group(0) for m in _MODAL_MEANING.finditer(candidate)]
+    if len(source_modals) != len(candidate_modals) or not source_modals:
+        return candidate
+    if all(a.casefold() == b.casefold() for a, b in zip(source_modals, candidate_modals)):
+        return candidate
+    for word in source_modals + candidate_modals:
+        if word.casefold() not in _PLAIN_MODALS:
+            return candidate
+    # Same count, same positions, plain modals only: rewrite each one that
+    # moved back to the word the writer used in that position.
+    replacements = iter(source_modals)
+
+    def swap(match: re.Match[str]) -> str:
+        wanted = next(replacements)
+        token = match.group(0)
+        if token.casefold() == wanted.casefold():
+            return token
+        if token.isupper():
+            return wanted.upper()
+        if token[:1].isupper():
+            return wanted.capitalize()
+        return wanted.casefold()
+
+    repaired = _MODAL_MEANING.sub(swap, candidate)
+    if _modal_meaning_counter(repaired) != _modal_meaning_counter(source):
+        # The walk did not land where it was expected to. Leave it alone and
+        # let the guard refuse it, which is the outcome without this function.
+        return candidate
+    return repaired
 
 
 def _restore_source_phrase_casing(source: str, candidate: str) -> str:

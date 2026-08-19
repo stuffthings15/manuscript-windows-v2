@@ -497,3 +497,48 @@ def test_tone_commands_tell_the_model_to_keep_every_modal():
     assert "modal verb" in friendly
     assert "Do not swap one modal for another" in friendly
     assert "modal verb" in shorten
+
+
+def test_a_tone_rewrite_gets_the_writers_own_modal_back():
+    """A swapped modal is repaired, not argued with.
+
+    Measured across all 20 documents of the 800-percent corpus, 64 of 97
+    refused tone rewrites failed on the modal guards alone: "missing may; added
+    might", "missing could; added can". The rewrite was otherwise good and the
+    writer got the deterministic proofread instead of the tone they asked for.
+    Two rounds of prompt work moved it by five points, because in English a
+    register shift often IS a modal shift - a model asked to sound friendlier
+    reaches for "might" over "may" by doing what it was told.
+    """
+    from echo_link_core.polish import _restore_tone_modals
+
+    source = "The bird may learn the routine and the owner will notice."
+    candidate = "The bird might pick up the routine and the owner will spot it."
+    assert _restore_tone_modals(source, candidate) == (
+        "The bird may pick up the routine and the owner will spot it."
+    )
+    # Capitalization follows the position, not the source token.
+    assert _restore_tone_modals(
+        "May the owner check it.", "Might the owner check it."
+    ) == "May the owner check it."
+
+
+def test_modal_restoration_refuses_anything_it_cannot_be_sure_of():
+    """The repair declines every case it cannot do exactly.
+
+    A lost or gained negation is meaning, and meaning is refused rather than
+    patched, so a swap involving "cannot" or "won't" is left for the guard. A
+    candidate with a different number of modals is not a positional swap at
+    all, so it is left alone too - and left alone means the guard refuses it,
+    which is the behaviour without this function.
+    """
+    from echo_link_core.polish import _restore_tone_modals
+
+    negated = ("The bird cannot learn it.", "The bird might not learn it.")
+    assert _restore_tone_modals(*negated) == negated[1]
+
+    uneven = ("The bird may learn.", "The bird might learn and may rest.")
+    assert _restore_tone_modals(*uneven) == uneven[1]
+
+    already_right = ("The bird may learn.", "The bird may pick it up.")
+    assert _restore_tone_modals(*already_right) == already_right[1]
