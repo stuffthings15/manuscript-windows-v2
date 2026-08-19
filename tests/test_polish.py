@@ -542,3 +542,70 @@ def test_modal_restoration_refuses_anything_it_cannot_be_sure_of():
 
     already_right = ("The bird may learn.", "The bird may pick it up.")
     assert _restore_tone_modals(*already_right) == already_right[1]
+
+
+def test_a_proofread_does_not_pass_as_a_friendly_rewrite():
+    """Correcting the grammar and stopping there is not warmth.
+
+    The check only fired when the candidate was byte-identical to the source:
+
+        if unchanged and not _FRIENDLY_STYLE_SIGNAL.search(candidate):
+
+    A proofread differs from the source, so it never reached the warmth test at
+    all and shipped as a verified Friendly rewrite. Shorten has no equivalent
+    escape hatch, and Shorten is the one tone that demonstrably works. Measured
+    through Word with a 27B judge, essay 7 scored 1 of 8 paragraphs on Friendly
+    and the judge's own words for six of them were that the writing "lacks
+    warmth" or is "clear but loses warmth in striving for correctness".
+
+    Fixing this did NOT raise that score - a refused tone candidate still ends
+    with the proofread being delivered, so refusing more only changes which
+    non-warm text arrives. It is committed because the check was wrong, not
+    because it moved a number.
+    """
+    from echo_link_core.polish import _tone_style_failure
+
+    source = "the dog dont like it and the owner cant tell why"
+    proofread = "The dog does not like it, and the owner cannot tell why."
+    # Asserted through the contract itself, not the helper: the defect was the
+    # condition guarding the call, so a test of the helper alone passes with
+    # the bug present and proves nothing.
+    assert _tone_style_failure(source, proofread, command="friendly") == (
+        "friendly rewrite is not visibly warm"
+    )
+    warm = "The dog doesn't like it, and the owner can't quite tell why."
+    assert _tone_style_failure(source, warm, command="friendly") == ""
+
+
+def test_warmth_counts_the_signals_this_product_says_it_counts():
+    """The detector has to agree with the instruction and the judge.
+
+    The old signal was a narrow word list - glad, happy, help, welcome, please,
+    appreciate - while the Friendly task rules and the judge's CRITERIA both
+    say contractions, gentle transitions and approachable wording are warmth.
+    Enforcing the narrow list alone would have refused genuinely warm writing
+    for failing to say "glad".
+
+    Warmth has to be ADDED. A source that already contains contractions is no
+    evidence that the rewrite did anything, which is what the byte-identical
+    test was clumsily reaching for.
+
+    This is a floor, not a measure of warmth. Against the 27B judge on the same
+    documents it reads about three times too high, so it decides whether a
+    candidate is refused and it is never a score.
+    """
+    from echo_link_core.polish import _friendly_rewrite_is_visible
+
+    plain = "the plan is fine"
+    assert _friendly_rewrite_is_visible(plain, "We are glad to help with the plan.")
+    assert _friendly_rewrite_is_visible(
+        plain, "The plan is fine. That way, everyone knows where they stand."
+    )
+    assert _friendly_rewrite_is_visible(
+        "the dog dont like it and the owner cant tell why",
+        "The dog doesn't like it, and the owner can't quite tell why.",
+    )
+    # Already there in the source, so the rewrite added nothing.
+    assert not _friendly_rewrite_is_visible(
+        "it doesn't matter much", "It doesn't matter much."
+    )

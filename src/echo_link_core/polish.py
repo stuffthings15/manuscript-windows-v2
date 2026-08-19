@@ -66,6 +66,27 @@ from .selected_text import (
 logger = logging.getLogger(__name__)
 
 
+# Tones whose whole purpose is softening the register, where the negation's
+# SURFACE form is exactly what has to change. Freezing "does not need" as an
+# immutable token forbids "doesn't need", and contractions are most of what a
+# reader hears as warmth: asked directly the model wrote "it isn't a movie, and
+# it doesn't need batteries", asked through the pipeline the same paragraph came
+# back "does not" and was then refused for not being warm.
+#
+# Every other staged style command keeps the freeze. Two tests pin it -
+# test_tone_generation_protects_negation_surface_during_rewrite on Caveman and
+# test_rephrase_generation_protects_negated_action_phrase on Rephrase - and the
+# property is real: freezing "does not authorize" keeps the negation bound to
+# its own verb so a rewrite cannot let it drift to another one. Neither of those
+# tones needs to contract anything, so neither pays for this.
+#
+# The residual risk for the three below, stated rather than hidden: the negation
+# COUNT guard catches a dropped negation and _normalize_contractions makes it
+# blind to contraction, but a negation that reattaches to a different verb while
+# the count stays equal would not be caught by it. That is narrower than the
+# whole tone feature being inoperable, which is what the freeze cost.
+_WARMTH_TONE_COMMANDS = frozenset({"Friendly", "Casual", "Conversational"})
+
 _STAGED_STYLE_COMMANDS = frozenset(
     {
         "Rewrite",
@@ -1503,6 +1524,7 @@ class PolishEngine:
                     *(
                         _runtime_negation_literals(deterministic.text)
                         if request.command in _STAGED_STYLE_COMMANDS
+                        and request.command not in _WARMTH_TONE_COMMANDS
                         else ()
                     ),
                     *(
@@ -4011,6 +4033,48 @@ _CAVEMAN_LIST_OR_HEADING = re.compile(
 )
 
 
+_CONTRACTION = re.compile(r"[A-Za-z]+['’](?:s|re|ll|ve|t|d|m)")
+_GENTLE_TRANSITION = re.compile(
+    r"of course|that way|which means|in other words|even so|"
+    r"at the same time|as well|to be fair|the good news|"
+    r"worth remembering|it helps|that said|either way",
+    re.IGNORECASE,
+)
+
+
+def _friendly_rewrite_is_visible(source: str, candidate: str) -> bool:
+    """Did the rewrite actually add warmth, by the product's own definition?
+
+    The old test only fired when the candidate was byte-identical to the
+    source, so a plain proofread - different text, no warmth whatsoever -
+    counted as a verified Friendly rewrite and shipped as one. Measured through
+    Word on 2026-08-18 with a 27B judge, essay 7 scored 1 of 8 paragraphs on
+    Friendly, and the judge's own words for the failure were "clear but loses
+    warmth in striving for correctness". Shorten has no such escape hatch, and
+    Shorten is the one tone that demonstrably works.
+
+    The signal is widened to match what this product already tells the model
+    and the judge that warmth is: not only the explicit words, but contractions
+    and gentle transitions, which the tone rules and CRITERIA both name.
+    Enforcing the old narrow word list alone would have refused genuinely warm
+    writing for failing to say "glad" or "help".
+
+    Warmth has to be ADDED. A source that already contains contractions is not
+    evidence that the rewrite did anything, which is the trap the unchanged
+    test was clumsily trying to avoid.
+    """
+    if _introduced_style(_FRIENDLY_STYLE_SIGNAL, source, candidate):
+        return True
+    if _introduced_style(_GENTLE_TRANSITION, source, candidate):
+        return True
+    added_contractions = len(_CONTRACTION.findall(candidate)) - len(
+        _CONTRACTION.findall(source)
+    )
+    # Two, not one. A single contraction is as likely to be a repair of the
+    # writer's own "dont" as a deliberate softening.
+    return added_contractions >= 2
+
+
 def _introduced_style(pattern: re.Pattern[str], source: str, candidate: str) -> bool:
     return bool(pattern.search(candidate) and not pattern.search(source))
 
@@ -4030,7 +4094,7 @@ def _tone_style_failure(source: str, candidate: str, *, command: str) -> str:
             return "friendly rewrite contains hostile wording"
         if _CASUAL_STYLE.search(candidate):
             return "friendly rewrite contains slang"
-        if unchanged and not _FRIENDLY_STYLE_SIGNAL.search(candidate):
+        if not _friendly_rewrite_is_visible(source, candidate):
             return "friendly rewrite is not visibly warm"
     if command == "conversational" and len(
         _CONVERSATIONAL_FILLER.findall(candidate)

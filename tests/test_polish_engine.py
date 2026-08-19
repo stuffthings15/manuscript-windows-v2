@@ -5908,3 +5908,41 @@ def test_a_refused_section_records_which_guard_refused_it():
     assert not result.used_llm
     reason = str(result.metrics.get("refusal_reason") or "")
     assert "negation changed (test)" in reason
+
+
+def test_a_warmth_tone_may_contract_the_writers_negation():
+    """Friendly cannot be warm while its negations are immutable tokens.
+
+    Every staged style command froze each source negation surface, so the model
+    was forbidden to write "doesn't", "can't" or "isn't". Those contractions are
+    most of what a reader hears as warmth: asked directly the model produced
+    "it isn't a movie, and it doesn't need batteries", and asked through the
+    pipeline the same paragraph came back "does not" and was then refused for
+    not being visibly warm. Essay 7 scored 1 of 8 with a 27B judge.
+
+    Freezing it also corrupted text. Paragraph 1 delivered "a certain animal
+    can't is a pet", which was the model splicing an immutable token into a
+    sentence that no longer fit around it.
+
+    The freeze stays for every other staged tone, and
+    test_tone_generation_protects_negation_surface_during_rewrite and
+    test_rephrase_generation_protects_negated_action_phrase pin that: keeping
+    "does not authorize" whole binds the negation to its own verb. Caveman and
+    Rephrase have no need to contract anything, so they keep paying nothing.
+    """
+    source = "Approval of the trial does not authorize permanent hours after June 26."
+    runtime = FakeRuntime((source,) * 10)
+    value, _ = engine(classifier=FakeClassifier(), runtime=runtime)
+
+    value.analyze(
+        CorrectionRequest(
+            source,
+            task=PolishTask.REWRITE,
+            mode=PolishMode.BALANCED,
+            command="Friendly",
+            manual=True,
+        )
+    )
+
+    protected = runtime.generate_calls[0].protected_terms
+    assert "does not authorize" not in protected
