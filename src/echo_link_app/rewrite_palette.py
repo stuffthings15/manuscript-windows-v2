@@ -241,6 +241,9 @@ class RewritePalette(QDialog):
         self._ai_proofread = bool(ai_proofread)
         self._ai_requested_ids: set[str] = set()
         self._ai_completed_ids: set[str] = set()
+        # Set when a tone was asked for before the section's AI proofread had
+        # landed, so the tone can be re-run against the proofread once it does.
+        self._pending_tone_rewrite = ""
         self._ai_failed_ids: set[str] = set()
         # Sections resolved by the reader in THIS review: dismissed, or stepped
         # past deliberately with Next. An automatic step over a section whose
@@ -1475,6 +1478,12 @@ class RewritePalette(QDialog):
             f"Replace text in source box. {current_message}"
         )
         self.apply_suggestion_button.setAccessibleDescription(current_message)
+        if self._pending_tone_rewrite and self._pending_tone_rewrite == suggestion_id:
+            # The writer asked for a tone before this section's proofread had
+            # landed. It has landed now, so run the tone they asked for against
+            # it rather than dropping the click.
+            self._pending_tone_rewrite = ""
+            QTimer.singleShot(0, self._request_sentence_rewrite)
         QTimer.singleShot(0, self._request_next_ai_prefetch)
 
     def show_sentence_error(
@@ -1666,6 +1675,39 @@ class RewritePalette(QDialog):
         if not source:
             return
         suggestion_id = str(getattr(suggestion, "suggestion_id", ""))
+        command = self._selected_tone_command()
+        if (
+            self._ai_proofread
+            and command != "Rewrite"
+            and suggestion_id
+            and suggestion_id not in self._ai_completed_ids
+            and suggestion_id not in self._ai_failed_ids
+        ):
+            # Tone the AI proofread, never the fast rules text that fills the
+            # card first. Measured on essay 17 of error-riddled-20-docx: a
+            # proofread fixes "SuSpEcTeD" and "RePahIr", a tone run ON that
+            # proofread keeps them fixed, and a tone run on the unproofread
+            # text leaves both in the finished document. A writer who picks a
+            # tone before the section's AI answer lands was silently trading
+            # their spelling corrections for the tone.
+            #
+            # Proofread is requested EXPLICITLY here rather than through
+            # _request_ai_proofread_current, because that path asks for
+            # _selected_tone_command(automatic=True), which is only "Proofread"
+            # while the tone is Clear. With Friendly selected it would request
+            # Friendly on the rules text - the very bug being fixed - and then
+            # this would resume and tone it twice.
+            self._pending_tone_rewrite = suggestion_id
+            self._ai_requested_ids.add(suggestion_id)
+            self._set_status("Finishing the correction first, then the tone.")
+            self._start_sentence_ai_request(
+                suggestion_id,
+                source,
+                "Proofread",
+                "AI proofread",
+            )
+            return
+        self._pending_tone_rewrite = ""
         self._cancel_active_ai_request()
         self._ai_requested_ids.discard(suggestion_id)
         self._ai_failed_ids.discard(suggestion_id)

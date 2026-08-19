@@ -4175,3 +4175,109 @@ def test_the_tone_control_keeps_the_combo_box_contract(app):
     picker.setCurrentText("Nonexistent")
     assert picker.currentText() == "Shorten"
     picker.deleteLater()
+
+
+def _toned_palette(app):
+    """A palette showing one review section, before any tone is chosen.
+
+    open_current_capture already issues the section's first AI request, so the
+    palette arrives busy with that in flight. That is the real state a writer
+    is in when they reach for the tone menu, and it is why these tests drive
+    the tone control rather than calling _request_sentence_rewrite directly.
+    """
+    palette = RewritePalette(ai_proofread=True)
+    palette.show_capture("teh draft has erors in it and it needs wrok.")
+    app.processEvents()
+    palette.open_current_capture()
+    app.processEvents()
+    return palette
+
+
+def test_a_tone_waits_for_the_proofread_instead_of_toning_the_rules_text(app):
+    """Choosing a tone must not cost the writer their spelling corrections.
+
+    The card is filled immediately by the fast deterministic rules pass, and
+    `suggestion.replacement` only becomes the AI answer when that section's
+    proofread lands. A tone requested before then was built on the rules text.
+
+    Measured on essay 17 of error-riddled-20-docx: a proofread fixes
+    "SuSpEcTeD" and "RePahIr", a tone run on that proofread keeps them fixed,
+    and a tone run on the unproofread text leaves both in the finished
+    document. used_llm was True throughout, so the model was running - it was
+    being handed the wrong text.
+    """
+    palette = _toned_palette(app)
+    asked = []
+    palette.sentence_rewrite_requested.connect(
+        lambda attempt, sid, source, command: asked.append(command)
+    )
+    suggestion_id = str(
+        getattr(palette._current_review_suggestion(), "suggestion_id", "")
+    )
+    palette._ai_completed_ids.discard(suggestion_id)
+
+    palette.tone_combo.setCurrentText("Friendly")
+    app.processEvents()
+
+    # Proofread first, and the tone is not issued against the rules text.
+    assert asked == ["Proofread"], asked
+    assert palette._pending_tone_rewrite == suggestion_id
+    palette.close()
+
+
+def test_the_deferred_tone_still_runs_once_the_proofread_lands(app):
+    """The writer's click is honoured, not dropped.
+
+    Deferring is only safe if the tone actually follows. A click that vanished
+    would be worse than the bug it was added to fix.
+    """
+    palette = _toned_palette(app)
+    suggestion_id = str(
+        getattr(palette._current_review_suggestion(), "suggestion_id", "")
+    )
+    palette._ai_completed_ids.discard(suggestion_id)
+    palette.tone_combo.setCurrentText("Friendly")
+    app.processEvents()
+    assert palette._pending_tone_rewrite == suggestion_id
+
+    asked = []
+    palette.sentence_rewrite_requested.connect(
+        lambda attempt, sid, source, command: asked.append(command)
+    )
+    palette.show_sentence_result(
+        palette._active_ai_attempt_id,
+        suggestion_id,
+        "The draft has errors in it and it needs work.",
+        "Local proofread ready.",
+    )
+    app.processEvents()
+
+    assert asked == ["Friendly"], asked
+    assert palette._pending_tone_rewrite == ""
+    palette.close()
+
+
+def test_a_failed_proofread_does_not_strand_the_tone(app):
+    """A proofread that never lands must not leave the writer with nothing.
+
+    If the section is already marked failed, the tone runs on what is there
+    rather than waiting for an answer that is not coming. That is the old
+    behaviour, and here it is the correct fallback.
+    """
+    palette = _toned_palette(app)
+    suggestion_id = str(
+        getattr(palette._current_review_suggestion(), "suggestion_id", "")
+    )
+    palette._ai_completed_ids.discard(suggestion_id)
+    palette._ai_failed_ids.add(suggestion_id)
+
+    asked = []
+    palette.sentence_rewrite_requested.connect(
+        lambda attempt, sid, source, command: asked.append(command)
+    )
+    palette.tone_combo.setCurrentText("Friendly")
+    app.processEvents()
+
+    assert asked == ["Friendly"], asked
+    assert palette._pending_tone_rewrite == ""
+    palette.close()
