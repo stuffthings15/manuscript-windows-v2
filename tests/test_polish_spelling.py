@@ -393,3 +393,62 @@ def test_a_repaired_word_does_not_inherit_the_damaged_capitals():
         engine.correct("Malik visited the site last spring").text
         == "Malik visited the site last spring."
     )
+
+
+def test_context_settles_a_spelling_tie_the_dictionary_has_to_refuse():
+    """"esay" is one edit from essay and one from easy, so the speller refuses.
+
+    Refusing is right - frequency favours "easy" and would write the wrong word
+    - but it leaves the misspelling on the page. The sentence knows the answer,
+    and the shipped MiniLM encoder can read it: substitute each candidate, and
+    compare each version against the paragraph around it.
+
+    Measured with that encoder on 2026-08-19:
+
+        care over chair    +0.040      chair over care    +0.055
+        easy over essay    +0.022      essay over easy    +0.006
+        neutral context    +0.008, +0.010
+        their over there   +0.004, and it picks the WRONG one
+
+    The margin gate is what makes this safe. A tie it cannot separate falls
+    back to the refusal that was there before, which is why the second half of
+    this test drives the same text with the ranker switched off and asserts
+    the old behaviour is still exactly what happens without it.
+    """
+    from echo_link_core.polish_spelling import PolishRuleEngine
+
+    text = (
+        "The exam was next week and the reading list was long. She had three "
+        "assignments due before Friday. She started the esay on Sunday night."
+    )
+
+    with_context = PolishRuleEngine()
+    with_context.warm()
+    assert "essay" in with_context.correct(text).text
+
+    # Without the ranker the speller refuses, exactly as it did before, and the
+    # word is left for the model to read in context. Asserted so this test
+    # fails if the ranker stops being what makes the difference.
+    without_context = PolishRuleEngine(context_ranker=False)
+    without_context.warm()
+    assert "esay" in without_context.correct(text).text
+
+
+def test_a_context_that_cannot_settle_the_tie_still_refuses():
+    """A thin or neutral context must leave the misspelling alone.
+
+    This is the half that keeps the change safe. The ranker scores topical fit,
+    so a sentence with no topic around it produces two nearly equal scores, and
+    anything below the margin has to come back as no opinion rather than as a
+    coin toss.
+    """
+    from echo_link_core.polish_classifier import ContextWordRanker
+
+    ranker = ContextWordRanker()
+    sentence = "It was a cair."
+
+    assert ranker.choose(sentence, 9, 13, ("care", "chair"), "") is None
+    assert (
+        ranker.choose(sentence, 9, 13, ("care", "chair"), "Thursday. Grey.")
+        is None
+    )

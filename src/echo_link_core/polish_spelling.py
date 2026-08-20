@@ -5,6 +5,7 @@ import re
 import threading
 import time
 import unicodedata
+from collections.abc import Callable
 from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
@@ -210,7 +211,20 @@ class EnglishDictionary:
         folded = _dictionary_form(word)
         return bool(folded and self._words is not None and folded in self._words)
 
-    def suggestion(self, word: str) -> tuple[str, int, int] | None:
+    def suggestion(
+        self,
+        word: str,
+        *,
+        tie_break: Callable[[tuple[str, ...]], str | None] | None = None,
+    ) -> tuple[str, int, int] | None:
+        """The repair for a misspelling, or None when nothing may be chosen.
+
+        `tie_break` is offered the equally-good candidates when, and only when,
+        this would otherwise refuse. It returns one of them or None, and None
+        keeps the refusal exactly as it was. Passed in as a callable rather
+        than held as an attribute so the dictionary keeps knowing nothing about
+        the classifier or the ONNX runtime; the caller owns that dependency.
+        """
         self._ensure_loaded()
         if self._symspell is None:
             return None
@@ -244,7 +258,27 @@ class EnglishDictionary:
         )
         best = ranked[0]
         if _is_ambiguous(folded, ranked):
-            return None
+            if tie_break is None:
+                return None
+            # Only the candidates that actually tie are offered. Handing over
+            # the whole ranked list would let a distant third word win on
+            # topic alone, which is a different and much weaker claim than
+            # separating two equally good repairs.
+            tied = tuple(
+                str(value.term)
+                for value in ranked
+                if int(value.distance) == int(best.distance)
+                and _typo_shape_rank(folded, str(value.term))
+                == _typo_shape_rank(folded, str(best.term))
+            )
+            chosen = tie_break(tied)
+            if chosen is None:
+                return None
+            best = next(
+                (value for value in ranked if str(value.term) == chosen), None
+            )
+            if best is None:
+                return None
         replacement = _match_case(word, str(best.term))
         return replacement, int(best.distance), max(0, int(best.count))
 
@@ -404,12 +438,51 @@ class PolishRuleEngine:
         *,
         suggestion_engine: WritingSuggestionEngine | None = None,
         dictionary: EnglishDictionary | None = None,
+        context_ranker=None,
     ) -> None:
         self.suggestion_engine = suggestion_engine or WritingSuggestionEngine()
         self.dictionary = dictionary or EnglishDictionary()
+        # Imported here, not at module scope, so polish_spelling keeps its
+        # existing import shape: the classifier pulls in numpy and the ONNX
+        # runtime, and this module is imported by tools that only want the
+        # word list. Pass a ranker in to override it, or False to switch the
+        # context tie-break off entirely.
+        if context_ranker is None:
+            from .polish_classifier import ContextWordRanker
+
+            context_ranker = ContextWordRanker()
+        self.context_ranker = context_ranker
 
     def warm(self) -> bool:
         return self.dictionary.warm()
+
+    def _context_tie_break(self, text: str, match):
+        """A tie-break bound to one misspelling, or None when there is no ranker.
+
+        The dictionary is given a word and nothing else, which is why it has to
+        refuse a tie: it cannot see what the sentence is about. This side can,
+        so it carves out the sentence holding the word and the paragraph
+        holding the sentence and hands both to the ranker.
+        """
+        if not self.context_ranker:
+            return None
+        sentence_start, sentence_end = _sentence_bounds(text, match.start())
+        sentence = text[sentence_start:sentence_end]
+        # The paragraph WITHOUT the sentence being repaired. Leaving it in
+        # makes every candidate look like a good fit, because the sentence is
+        # most of what the comparison is measuring against itself.
+        context = (text[:sentence_start] + " " + text[sentence_end:]).strip()
+
+        def tie_break(candidates: tuple[str, ...]) -> str | None:
+            return self.context_ranker.choose(
+                sentence,
+                match.start() - sentence_start,
+                match.end() - sentence_start,
+                candidates,
+                context,
+            )
+
+        return tie_break
 
     def analyze_spelling(
         self,
@@ -515,7 +588,9 @@ class PolishRuleEngine:
                 continue
             if self.dictionary.contains(word):
                 continue
-            value = self.dictionary.suggestion(word)
+            value = self.dictionary.suggestion(
+                word, tie_break=self._context_tie_break(text, match)
+            )
             if value is None:
                 continue
             replacement, distance, frequency = value
@@ -868,6 +943,27 @@ def _capitalized_repair_is_safe(word: str, replacement: str) -> bool:
 def _is_sentence_start(text: str, start: int) -> bool:
     prefix = text[:start].rstrip()
     return not prefix or prefix[-1:] in ".!?\n"
+
+
+def _sentence_bounds(text: str, position: int) -> tuple[int, int]:
+    """The sentence around a position, as (start, end) offsets into `text`.
+
+    Deliberately crude. It splits on terminal punctuation and newlines, so an
+    abbreviation ends a sentence early. That costs the context tie-break a
+    little topic and nothing else, because a short or thin context makes the
+    ranker decline rather than guess.
+    """
+    start = 0
+    for index in range(position - 1, -1, -1):
+        if text[index] in ".!?\n":
+            start = index + 1
+            break
+    end = len(text)
+    for index in range(position, len(text)):
+        if text[index] in ".!?\n":
+            end = index + 1
+            break
+    return start, end
 
 
 def _is_protected(

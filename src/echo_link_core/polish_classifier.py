@@ -351,6 +351,86 @@ class MiniLMPolishClassifier:
                 self._prototype_vectors = None
 
 
+class ContextWordRanker:
+    """Break a spelling tie by which candidate fits what the writing is about.
+
+    `_is_ambiguous` in polish_spelling refuses whenever two repairs are equally
+    close and equally well shaped, because the only signal left is raw
+    frequency and frequency is the wrong tie-break: it turns "cair" into chair,
+    "esay" into easy, and "chroes" into chromes. Refusing is safe but it leaves
+    the misspelling on the page.
+
+    There is a better signal already in the build. Substitute each candidate
+    into the sentence, embed both, and compare each against the paragraph
+    around it. In a paragraph about looking after a pet, "poor care" sits
+    closer to the topic than "poor chair".
+
+    Measured on 2026-08-19 with the shipped MiniLM INT8 encoder:
+
+        care over chair    +0.040      chair over care    +0.055
+        easy over essay    +0.022      essay over easy    +0.006
+        neutral context    +0.008, +0.010
+        their over there   +0.004, and it picks the WRONG one
+
+    So the margin is doing the real work, not the ranking. `_MARGIN` sits above
+    every refuse case and below the one wrong answer, which means a tie this
+    cannot separate falls through to the existing refusal and costs nothing.
+
+    The limit, stated because it is structural and not a tuning problem: this
+    is a bi-encoder, so it scores topical fit and not syntactic fit. It
+    separates care from chair. It does not separate their from there, and the
+    numbers above show it getting that pair backwards. Homophones are not this
+    class's job.
+    """
+
+    # Above the largest margin measured on a context that should refuse
+    # (0.010) and below the smallest margin on a correct pick that is worth
+    # taking (0.022). Set from the measurements in the docstring, not by taste.
+    _MARGIN = 0.02
+    # Long enough to carry a topic. Below this the context is a heading or a
+    # fragment, and the neutral-context rows above are what that looks like.
+    _MINIMUM_CONTEXT_WORDS = 12
+
+    def __init__(self, encoder: MiniLMEncoder | None = None) -> None:
+        self.encoder = encoder or MiniLMEncoder()
+
+    def choose(
+        self,
+        sentence: str,
+        start: int,
+        end: int,
+        candidates: tuple[str, ...],
+        context: str,
+    ) -> str | None:
+        """The candidate that fits the context, or None to leave the tie alone.
+
+        `start` and `end` are the misspelling's span inside `sentence`.
+        Returning None means "no opinion", which the caller must treat exactly
+        as it treats a refusal today.
+        """
+        if len(candidates) < 2 or not sentence:
+            return None
+        if len(_WORD.findall(context)) < self._MINIMUM_CONTEXT_WORDS:
+            return None
+        if not self.encoder.warm():
+            return None
+        variants = tuple(
+            sentence[:start] + candidate + sentence[end:] for candidate in candidates
+        )
+        try:
+            vectors = self.encoder.embed(variants + (context,))
+        except (RuntimeError, ValueError):
+            return None
+        if len(vectors) != len(variants) + 1:
+            return None
+        topic = vectors[-1]
+        scores = [float(np.dot(vector, topic)) for vector in vectors[:-1]]
+        ranked = sorted(zip(scores, candidates), reverse=True)
+        if ranked[0][0] - ranked[1][0] < self._MARGIN:
+            return None
+        return ranked[0][1]
+
+
 def english_confidence(text: str) -> float:
     letters = _LETTER.findall(text)
     if not letters:
