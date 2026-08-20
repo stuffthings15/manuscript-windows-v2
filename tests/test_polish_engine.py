@@ -5946,3 +5946,66 @@ def test_a_warmth_tone_may_contract_the_writers_negation():
 
     protected = runtime.generate_calls[0].protected_terms
     assert "does not authorize" not in protected
+
+
+def test_the_deterministic_repair_loses_filler_as_well_as_typos():
+    """A section that falls back to the rules must not keep its filler.
+
+    Two deterministic passes exist and they do different jobs. Measured on
+    2026-08-19 on the same sentence:
+
+        rules.correct        spelling fixed, "and stuff" kept
+        _apply_fast_...      filler removed, "prolem" still there
+
+    rules.correct owns the dictionary; the fast rules own the syntax layer -
+    discourse filler, subject-verb agreement, run-on splitting. Only the
+    model's answer was getting the second one, through
+    _final_cleanup_candidate, so a section that fell back to the deterministic
+    repair shipped with its filler intact. Across the 20-essay animal-pet run
+    that left 28 of 240 fillers in the finished documents, every one of them in
+    a section the rules had otherwise repaired.
+
+    This is the composition, checked on the deterministic text rather than the
+    final text so it cannot pass because the model happened to tidy up.
+    """
+    from echo_link_core.polish_spelling import PolishRuleEngine
+    from echo_link_core.polish_proofread import _apply_fast_proofread_rules
+
+    rule_engine = PolishRuleEngine()
+    rule_engine.warm()
+    source = (
+        "the dog WILL not solve the actual prolem like paying a bill , "
+        "and stuff finishing skool work"
+    )
+
+    rules_only = rule_engine.correct(source).text
+    composed = _apply_fast_proofread_rules(rules_only)
+
+    # What each pass does alone, which is why neither is enough.
+    assert "and stuff" in rules_only
+    assert "problem" in rules_only
+    # Composed keeps the dictionary repair and drops the filler.
+    assert "and stuff" not in composed
+    assert "problem" in composed
+    assert "school" in composed
+
+    # The engine must publish the composed form. Asserted on
+    # deterministic_text, not on the final text, so this cannot pass because
+    # the model happened to tidy the sentence up itself. A canned runtime keeps
+    # the model out of it entirely.
+    runtime = FakeRuntime((source,) * 10)
+    value, _ = engine(classifier=FakeClassifier(), runtime=runtime)
+    result = value.analyze(
+        CorrectionRequest(
+            source,
+            task=PolishTask.PROOFREAD,
+            mode=PolishMode.BALANCED,
+            command="Proofread",
+            manual=True,
+        )
+    )
+    # Only the filler is asserted here. This harness builds the engine with a
+    # stubbed dictionary, so "prolem" is not repaired in it and asserting the
+    # spelling fix would be testing the fixture rather than the composition.
+    # The dictionary half is covered above, on the real rule engine.
+    assert "and stuff" not in result.deterministic_text

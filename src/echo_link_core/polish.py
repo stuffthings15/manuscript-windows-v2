@@ -1267,6 +1267,29 @@ class PolishEngine:
             normalized,
             user_terms=request.protected_terms,
         )
+        # Two deterministic passes exist and they do different jobs. Measured
+        # on 2026-08-19:
+        #
+        #   rules.correct        "...the actual problem ... AND STUFF finishing
+        #                         school work."   spelling fixed, filler kept
+        #   _apply_fast_...      "...the actual prolem ... finishing school
+        #                         work."          filler removed, no dictionary
+        #
+        # rules.correct owns the dictionary; the fast rules own the syntax
+        # layer - discourse filler, subject-verb agreement, run-on splitting.
+        # Only the model's answer was getting the second one, through
+        # _final_cleanup_candidate, so a section that fell back to the
+        # deterministic repair shipped with its filler intact. Across the
+        # 20-essay animal-pet run that left 28 of 240 fillers in the finished
+        # documents, every one of them in a section the rules had repaired.
+        #
+        # Composing them keeps both: the spelling fix survives and the filler
+        # goes. It also picks up agreement on the way - "its needs is maybe
+        # MET" becomes "its needs are maybe MET".
+        deterministic = replace(
+            deterministic,
+            text=_apply_fast_proofread_rules(deterministic.text),
+        )
         categories = tuple(
             dict.fromkeys(
                 str(value.category.value)
