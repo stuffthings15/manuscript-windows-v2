@@ -2614,6 +2614,30 @@ class RewritePalette(QDialog):
         )
         if not self._ai_proofread:
             note += " AI proofreading is off for this review."
+        else:
+            # The AI is on for this review and has not answered for this
+            # section yet, so this text must not be acceptable. Labelling it
+            # was not enough.
+            #
+            # The rules cannot do the correction a reader expects here.
+            # Measured on 2026-08-20: "duck are funny pets", "ducks is funny
+            # pets" and "a duck are a funny pet" all come back unchanged from
+            # the rule engine, from the fast proofread rules, and from
+            # fix_subject_verb_agreement itself. So a writer who presses
+            # Replace on a rules-only card gets a sentence whose grammar was
+            # never repaired, and the owner hit exactly that.
+            #
+            # The first section of a review is where this bites: the card is
+            # built the moment the review opens, in the same millisecond the
+            # counter reads "1 of 11", while the model is still working. Eight
+            # sections were offered this way in one run against 81 AI
+            # completions, so the model is not failing - it simply had not been
+            # asked yet.
+            #
+            # Disabled rather than hidden, so the writer can still read the
+            # section and see that something is coming.
+            self.apply_suggestion_button.setEnabled(False)
+            note += " Waiting for the AI before this can be replaced."
         existing = self.suggestion_explanation.text().strip()
         combined = f"{existing} {note}".strip() if existing else note
         self.suggestion_explanation.setText(combined)

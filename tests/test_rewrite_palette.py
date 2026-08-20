@@ -4281,3 +4281,64 @@ def test_a_failed_proofread_does_not_strand_the_tone(app):
     assert asked == ["Friendly"], asked
     assert palette._pending_tone_rewrite == ""
     palette.close()
+
+
+def test_a_section_the_ai_has_not_corrected_cannot_be_replaced(app):
+    """Rules-only text must not be acceptable while the AI is still coming.
+
+    The card is built the moment a review opens, in the same millisecond the
+    counter reads "1 of 11", while the model is still working on that section.
+    Until 2026-08-20 the Replace button was live on it, and the card said so in
+    words - "The AI has not corrected this section" - while still letting the
+    writer take it.
+
+    The rules cannot do the repair a reader expects. Measured the same day,
+    "duck are funny pets", "ducks is funny pets" and "a duck are a funny pet"
+    come back unchanged from the rule engine, from the fast proofread rules,
+    and from fix_subject_verb_agreement itself. So pressing Replace there
+    returns a sentence whose grammar was never repaired, which is what the
+    owner hit and reported.
+
+    The model is not failing when this happens. One run offered eight sections
+    this way against 81 AI completions; they simply had not been asked yet.
+    """
+    palette = RewritePalette()
+    palette._ai_proofread = True
+    palette._ai_completed_ids.clear()
+    palette.apply_suggestion_button.setEnabled(True)
+
+    palette._mark_ai_provenance("sentence:not-done-yet")
+
+    assert not palette.apply_suggestion_button.isEnabled()
+    assert "built-in rules only" in palette.after_heading.text()
+    assert "Waiting for the AI" in palette.suggestion_explanation.text()
+
+
+def test_a_review_with_the_ai_switched_off_can_still_be_replaced(app):
+    """The guard must not strand a writer who has no AI at all.
+
+    When AI proofreading is off for the review the rule correction is the whole
+    product, not a placeholder, so it stays acceptable and the card says why.
+    """
+    palette = RewritePalette()
+    palette._ai_proofread = False
+    palette._ai_completed_ids.clear()
+    palette.apply_suggestion_button.setEnabled(True)
+
+    palette._mark_ai_provenance("sentence:no-ai-at-all")
+
+    assert palette.apply_suggestion_button.isEnabled()
+    assert "AI proofreading is off" in palette.suggestion_explanation.text()
+
+
+def test_a_section_the_ai_finished_is_replaceable(app):
+    """The ordinary path has to keep working, or the guard is a regression."""
+    palette = RewritePalette()
+    palette._ai_proofread = True
+    palette.apply_suggestion_button.setEnabled(True)
+    palette._ai_completed_ids.add("sentence:done")
+
+    palette._mark_ai_provenance("sentence:done")
+
+    assert palette.apply_suggestion_button.isEnabled()
+    assert palette.after_heading.text() == "Suggested text"
