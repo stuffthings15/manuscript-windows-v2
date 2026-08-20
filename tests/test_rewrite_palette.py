@@ -4405,3 +4405,45 @@ def test_a_completed_section_offers_no_rules_choice(app):
 
     assert palette.apply_suggestion_button.isEnabled()
     assert palette.use_rules_button.isHidden()
+
+
+def test_the_card_publishes_which_state_the_section_is_in(app):
+    """The harness waits on this string, so it has to be true.
+
+    review_readiness answers "is the whole review prepared". It can say yes
+    while THIS section is still waiting on the model - which is now the state
+    where Replace is disabled. Reading the review-level fact instead cost a
+    five-tone measurement run on 2026-08-20: the harness saw ready, found
+    Replace disabled, decided there was nothing to apply, and dismissed its
+    way through the document with presses=0, scoring every tone 0.0 percent
+    while measuring nothing.
+    """
+    palette = RewritePalette()
+    palette._ai_proofread = True
+    palette._ai_completed_ids.clear()
+    palette._ai_failed_ids.clear()
+
+    assert palette._section_provenance_label() == "waiting"
+
+    palette._ai_proofread = False
+    assert palette._section_provenance_label() == "no-ai"
+
+
+def test_the_published_state_follows_the_section(app, monkeypatch):
+    """ai and rules-only are read off the section on screen, not the review."""
+    palette = RewritePalette()
+    palette._ai_proofread = True
+
+    class _Suggestion:
+        suggestion_id = "sentence:on-screen"
+
+    monkeypatch.setattr(
+        palette, "_current_review_suggestion", lambda: _Suggestion()
+    )
+
+    palette._ai_completed_ids.add("sentence:on-screen")
+    assert palette._section_provenance_label() == "ai"
+
+    palette._ai_completed_ids.discard("sentence:on-screen")
+    palette._ai_failed_ids.add("sentence:on-screen")
+    assert palette._section_provenance_label() == "rules-only"

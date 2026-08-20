@@ -222,6 +222,49 @@ def review_readiness(hud) -> str:
     return ""
 
 
+def section_provenance(hud) -> str:
+    """Who produced the text on the card: ai, waiting, rules-only, no-ai.
+
+    Separate from review_readiness, because the review can report every section
+    ready while THIS one is still waiting on the model - and that is exactly
+    the state where Replace is disabled.
+
+    Reading the review-level fact instead cost a whole five-tone run on
+    2026-08-20: the harness saw "ready", found Replace disabled, concluded
+    there was nothing to apply, and dismissed its way through the document
+    with presses=0. Every tone scored 0.0 percent while measuring nothing.
+    """
+    if hud is None:
+        return ""
+    from repro_accept_advance import _descend
+
+    for control in _descend(hud):
+        try:
+            name = str(control.Name or "")
+        except Exception:  # noqa: BLE001 - the HUD may be repainting
+            continue
+        if "Current writing suggestion position" in name and ", section " in name:
+            return name.rsplit(", section ", 1)[1].strip()
+    return ""
+
+
+def wait_for_the_ai(hud_reader, hud, seconds: float = 90.0):
+    """Hold until the section stops waiting on the model, and say what it got.
+
+    Returns the HUD and the provenance it settled on. A section that is still
+    waiting when the time is up is reported as waiting rather than quietly
+    treated as having nothing to offer, because those are different facts and
+    only one of them is the product's fault.
+    """
+    deadline = time.monotonic() + seconds
+    state = section_provenance(hud)
+    while state == "waiting" and time.monotonic() < deadline:
+        time.sleep(2.0)
+        hud = hud_reader(8.0) or hud
+        state = section_provenance(hud)
+    return hud, state
+
+
 def invoke(control) -> bool:
     try:
         control.GetInvokePattern().Invoke()
@@ -586,6 +629,18 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
                         break
             else:
                 report["tone_unavailable"] = report.get("tone_unavailable", 0) + 1
+        # Wait for the model before looking at the button at all.
+        #
+        # Replace is disabled while a section has no AI answer yet, so reading
+        # the button first cannot tell "the AI is still working" from "there is
+        # nothing to apply here". The card states which it is; wait on that.
+        hud, provenance = wait_for_the_ai(hud_window, hud)
+        report.setdefault("provenance", []).append(provenance)
+        if provenance:
+            report["provenance_counts"] = report.get("provenance_counts", {})
+            report["provenance_counts"][provenance] = (
+                report["provenance_counts"].get(provenance, 0) + 1
+            )
         button = replace_button(hud)
         if button is None:
             break

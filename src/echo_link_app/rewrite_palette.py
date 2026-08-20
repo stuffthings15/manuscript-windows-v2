@@ -2169,6 +2169,29 @@ class RewritePalette(QDialog):
             )
         )
 
+    def _section_provenance_label(self) -> str:
+        """Who produced the text on the card right now, in one word.
+
+        The same four states the card acts on, published so a harness or a
+        screen reader can wait on the fact instead of inferring it from which
+        buttons happen to be enabled:
+
+            ai           the model answered and the guards accepted it
+            waiting      nothing back for this section yet; Replace is off
+            rules-only   the model was refused; the rules repair is offered
+                         behind a separate, deliberate control
+            no-ai        AI proofreading is off for this review
+        """
+        current = self._current_review_suggestion()
+        suggestion_id = str(getattr(current, "suggestion_id", ""))
+        if not self._ai_proofread:
+            return "no-ai"
+        if suggestion_id and suggestion_id in self._ai_completed_ids:
+            return "ai"
+        if suggestion_id and suggestion_id in self._ai_failed_ids:
+            return "rules-only"
+        return "waiting"
+
     def _review_readiness_label(self) -> str:
         """Whether every section in this review has a correction yet.
 
@@ -2481,8 +2504,23 @@ class RewritePalette(QDialog):
         # separate timing patches later, a different three or four documents
         # failed every run. This states the fact instead of leaving it guessed.
         readiness = self._review_readiness_label()
+        # The provenance of the section on screen, beside the readiness of the
+        # review as a whole. They are different facts and conflating them cost
+        # a whole measurement run.
+        #
+        # The review can report "all sections ready" while THIS section is
+        # still waiting on the model, which is now the state where Replace is
+        # disabled. The harness read the review-level fact, saw ready, decided
+        # a disabled Replace meant "nothing to apply here", and dismissed. On
+        # 2026-08-20 that produced a five-tone run with presses=0 and every
+        # tone scored 0.0 percent, measuring nothing at all.
+        #
+        # Stated rather than inferred, for the same reason readiness is: a
+        # harness that guesses from button states is a harness that gets four
+        # timing patches and still fails on a different document every run.
         self.card_position.setAccessibleName(
-            f"Current writing suggestion position, {progress}, {readiness}"
+            f"Current writing suggestion position, {progress}, {readiness}, "
+            f"section {self._section_provenance_label()}"
         )
         self.card_position.setAccessibleDescription(f"{progress}, {readiness}")
         self.card_position.setVisible(overall_total > 1)
