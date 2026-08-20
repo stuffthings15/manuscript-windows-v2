@@ -277,6 +277,46 @@ def invoke(control) -> bool:
             return False
 
 
+def release_document(path) -> None:
+    """Ask Word to let go of one document, without closing Word.
+
+    --as-a-writer leaves Word running between essays on purpose, which is what
+    a writer does. The cost is that Word still holds the .docx it last opened,
+    so copying a fresh source over it fails:
+
+        PermissionError: [Errno 13] Permission denied: build\\batch\\01_....docx
+
+    Measured on 2026-08-20, that killed a six-tone run outright. Every batch
+    died on the copy before opening Word at all, produced no rows, and each
+    tone was then judged against the stale document and scored 0.0 percent.
+    Six zeroes that measured nothing, for the second time in one day.
+
+    Closing Word entirely would work and would also throw away the session
+    that --as-a-writer exists to preserve. Closing the one document is what a
+    writer does before opening the same file again.
+    """
+    import comtypes.client
+
+    wanted = str(path.resolve()).casefold()
+    try:
+        word = comtypes.client.GetActiveObject("Word.Application", dynamic=True)
+    except Exception:  # noqa: BLE001 - Word is not running, so nothing holds it
+        return
+    for open_document in list(word.Documents):
+        try:
+            if str(open_document.FullName).casefold() != wanted:
+                continue
+        except Exception:  # noqa: BLE001 - Word raises assorted COM errors
+            continue
+        try:
+            # Positional, not SaveChanges=0: the keyword form silently does
+            # nothing through the dynamic COM wrapper, which is recorded
+            # further down this file and cost three documents staying open.
+            open_document.Close(0)
+        except Exception as exc:  # noqa: BLE001 - Word raises assorted COM errors
+            print(f"   warning: could not release the document: {exc}", flush=True)
+
+
 def close_word() -> None:
     import subprocess
 
@@ -854,6 +894,10 @@ def main() -> int:
             # a busy Word instead of killing it.
             if not args.as_a_writer:
                 close_word()
+            else:
+                # Word still holds the last copy of this document, and a fresh
+                # source cannot be written over a file Word has open.
+                release_document(target)
             shutil.copy2(source, target)  # every run starts from the original
             if not args.no_restart and not restart_app():
                 # The app did not come up. Every essay after this one will
