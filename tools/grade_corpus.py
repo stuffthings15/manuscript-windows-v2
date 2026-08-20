@@ -5,11 +5,25 @@ grade becomes an impression rather than a measurement. This scores each
 corrected document in build/batch against fixed weights:
 
     spelling 15  homophones 15  punctuation 20
-    grammar 20   organization 15  coherence 15
+    grammar 20   coherence 15
+
+scaled to 100 by SCALE below.
 
 The weights come from the hand grade of essay 14 on 2026-08-13 (spelling A,
 homophones A, punctuation A-, grammar B+, organization D, coherence F = 80), so
-the two are comparable.
+the two are comparable, except that organization has since been removed.
+
+Organization left the rubric on 2026-08-19 at the owner's decision, and this is
+the third category to go for one reason. Long sentences went, then meta
+commentary, and now this: each measured something the corrector is not allowed
+to change, so the term returned the same value whether the corrector worked
+perfectly or never ran at all. Organization scored where the AUTHOR put an
+ordinal marker. Essay 3 announces "Another benefit" three paragraphs before
+"The first reason is", and the only repair available is to reorder the writer's
+paragraphs, which the product must not do. About 4 of the 4.6 points the animal
+corpus was missing from 95 sat in that term and were unreachable by design.
+
+Scores from before that date are on the old scale and are not comparable.
 
 Every category is measured from the document. Nothing is assumed, and the
 per-essay counts are printed beside the score so a number can be checked
@@ -23,8 +37,10 @@ Read the limits before trusting a number:
 * Coherence is detected as meta-commentary, sentences whose subject is the text
   rather than the topic. That is general, but it does not see an argument that
   is merely weak.
-* Organization is judged only by where an ordinal discourse marker lands.
-* Both are proxies. A gain here that does not also appear on essays the rules
+* Coherence currently has no scored term at all, so it is always full marks.
+  That is stated again beside the code that does it. It inflates every score by
+  its whole weight and is the next thing this rubric has to resolve.
+* These are proxies. A gain here that does not also appear on essays the rules
   were never tuned against is overfitting, not a gain.
 
 Nothing that scores may ask the correction rules what they would still change.
@@ -118,7 +134,6 @@ META_COMMENTARY = re.compile(
     r"|\b(?:but|and) also not\b\s*[.!?]",
     re.IGNORECASE,
 )
-ORDINAL_MARKER = re.compile(r"\b(the first reason|to begin with|firstly)\b", re.IGNORECASE)
 SENTENCE = re.compile(r"[^.!?]*[.!?]")
 TOKEN = re.compile(r"[A-Za-z']+")
 # Two independent clauses joined with a conjunction and no punctuation at all.
@@ -158,9 +173,14 @@ WEIGHTS = {
     "homophones": 15,
     "punctuation": 20,
     "grammar": 20,
-    "organization": 15,
     "coherence": 15,
 }
+# The five remaining weights sum to 85. Every per-error penalty below was tuned
+# against its own category's weight, so the scale is applied once at the end
+# rather than by rewriting five sets of coefficients: that keeps a spelling
+# mistake worth exactly what it was worth relative to spelling, and only the
+# printed number changes.
+SCALE = 100 / sum(WEIGHTS.values())
 
 
 def essay_documents(directory: Path) -> list[Path]:
@@ -395,15 +415,6 @@ def grade(path: Path, dictionary: EnglishDictionary, engine: WritingSuggestionEn
     errors = error_score(text)
     grammar = max(0.0, WEIGHTS["grammar"] - 2.0 * errors - 1.5 * filler)
 
-    organization = float(WEIGHTS["organization"])
-    for index, line in enumerate(body):
-        if ORDINAL_MARKER.search(line):
-            # The body starts at paragraph 3, after title and subtitle. A first
-            # reason announced later than that arrives after the paragraphs it
-            # was supposed to introduce.
-            organization = max(0.0, WEIGHTS["organization"] - 2.0 * max(0, index - 3))
-            break
-
     # Meta commentary is ADVICE, not a coherence charge, from 2026-08-17 at the
     # owner's decision and for the same reason as sentence length: the only
     # repair available is deleting the writer's sentence, so the source and the
@@ -423,13 +434,16 @@ def grade(path: Path, dictionary: EnglishDictionary, engine: WritingSuggestionEn
 
     return {
         "name": path.stem,
-        "total": round(spelling + homophones + punctuation + grammar + organization + coherence),
-        "spelling": spelling,
-        "homophones": homophones,
-        "punctuation": punctuation,
-        "grammar": grammar,
-        "organization": organization,
-        "coherence": coherence,
+        "total": round(
+            SCALE * (spelling + homophones + punctuation + grammar + coherence)
+        ),
+        # Scaled as well as the total, so a column and the score it feeds are
+        # on the same scale and a reader can add the row up.
+        "spelling": SCALE * spelling,
+        "homophones": SCALE * homophones,
+        "punctuation": SCALE * punctuation,
+        "grammar": SCALE * grammar,
+        "coherence": SCALE * coherence,
         "unknown": len(unknown),
         "confusable": len(confusables),
         # Separated on 2026-08-17: these were added together, so a charged
@@ -470,13 +484,13 @@ def main() -> int:
 
     print(  # noqa: T201
         f"{'essay':34}{'/100':>5}{'spell':>7}{'homo':>6}{'punct':>7}"
-        f"{'gram':>6}{'org':>6}{'coh':>6}   unknown/confusable/runon/error/filler/meta/advice"
+        f"{'gram':>6}{'coh':>6}   unknown/confusable/runon/error/filler/meta/advice"
     )
     for row in rows:
         print(  # noqa: T201
             f"{row['name'][:32]:34}{row['total']:>5}{row['spelling']:>7.0f}"
             f"{row['homophones']:>6.0f}{row['punctuation']:>7.0f}"
-            f"{row['grammar']:>6.0f}{row['organization']:>6.0f}{row['coherence']:>6.0f}"
+            f"{row['grammar']:>6.0f}{row['coherence']:>6.0f}"
             f"      {row['unknown']}/{row['confusable']}/{row['run_ons']}/"
             f"{row['errors']}/{row['filler']}/{row['meta']}/{row['advice']}"
         )

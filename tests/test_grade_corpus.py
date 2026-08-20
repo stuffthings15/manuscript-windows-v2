@@ -21,6 +21,8 @@ if str(TOOLS) not in sys.path:
 
 from grade_corpus import (  # noqa: E402
     META_COMMENTARY,
+    SCALE,
+    WEIGHTS,
     _confusable_hits,
     _run_on_sentences,
 )
@@ -337,7 +339,7 @@ def test_a_long_correct_sentence_costs_no_punctuation_points(tmp_path) -> None:
 
     row = grade(path, EnglishDictionary(), WritingSuggestionEngine())
 
-    assert row["punctuation"] == 20
+    assert row["punctuation"] == pytest.approx(20 * SCALE)
     assert row["advice"] == 1
     assert row["run_ons"] == 0
 
@@ -373,7 +375,7 @@ def test_meta_commentary_costs_no_coherence_points(tmp_path) -> None:
 
     row = grade(path, EnglishDictionary(), WritingSuggestionEngine())
 
-    assert row["coherence"] == 15
+    assert row["coherence"] == pytest.approx(15 * SCALE)
     assert row["meta"] == 1
     assert row["advice"] >= 1
 
@@ -385,3 +387,37 @@ def test_ordinary_prose_earns_no_meta_advice() -> None:
     assert meta_commentary_advice(
         "The dog waited by the door and learned the routine.", META_COMMENTARY
     ) == ()
+
+
+def test_the_rubric_no_longer_scores_the_writers_paragraph_order() -> None:
+    """Organization scored where the AUTHOR put an ordinal marker.
+
+    Essay 3 announces "Another benefit" three paragraphs before "The first
+    reason is". The only repair available is reordering the writer's
+    paragraphs, which the product must not do, so the term returned the same
+    value whether the corrector worked perfectly or never ran. Removed on
+    2026-08-19 at the owner's decision, the third category to go for exactly
+    that reason after long sentences and meta commentary.
+    """
+    assert "organization" not in WEIGHTS
+    # The five that remain still add up to a score out of 100, so a reader can
+    # add a printed row up and get the total beside it.
+    assert sum(WEIGHTS.values()) * SCALE == pytest.approx(100)
+
+
+def test_a_perfect_document_scores_one_hundred(tmp_path) -> None:
+    """The rescale has to leave a clean document at 100, not at 85."""
+    from grade_corpus import grade
+    from echo_link_core.polish_spelling import EnglishDictionary
+    from echo_link_core.writing_suggestions import WritingSuggestionEngine
+
+    clean = (
+        "The dog waited by the door and learned the routine. "
+        "Its owner filled the water bowl every morning before work. "
+        "The walk came later, once the rain had stopped."
+    )
+    path = _docx(tmp_path, f"<w:p><w:r><w:t>{clean}</w:t></w:r></w:p>")
+
+    row = grade(path, EnglishDictionary(), WritingSuggestionEngine())
+
+    assert row["total"] == 100
