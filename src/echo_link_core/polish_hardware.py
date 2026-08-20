@@ -282,6 +282,31 @@ class HardwarePolicyManager:
         retry_limit = 1 if mode in {PolishMode.BALANCED, PolishMode.PROFESSIONAL} else 0
         if mode is PolishMode.AUTO:
             retry_limit = 1 if classifier.severity >= 0.75 else 0
+        # A section a writer asked for by hand gets at least one retry, whatever
+        # the mode decided.
+        #
+        # When the meaning guards refuse an answer the section falls back to the
+        # rules repair, and for grammar the rules are not a weaker correction,
+        # they are no correction: "duck are funny pets" comes back unchanged
+        # from every deterministic pass in the product. So a refusal spends the
+        # section, and spending it on a single attempt is too cheap.
+        #
+        # Measured on 2026-08-20 across one working session: 36 sections fell
+        # back to rules against 424 AI completions, about 8.5 percent, and 25
+        # of those were plain Proofreads. The reasons were modal meaning (9),
+        # actor changed (7), protected content (7) and prohibition (6) - drift
+        # the retry prompt is built to anchor, since it feeds the actor and
+        # negation inventories back to the model on the second attempt.
+        #
+        # This costs nothing on the sections that already work: the attempt
+        # loop breaks as soon as validation accepts, so only a section that was
+        # about to be refused ever spends the extra generation.
+        #
+        # Deliberately not a cascade to a smaller pack, which is what was first
+        # proposed. The refusals here are meaning drift, and a smaller model
+        # drifts more, not less.
+        if manual and mode is not PolishMode.INSTANT:
+            retry_limit = max(retry_limit, 1)
         require_full_gpu = backend in {
             RuntimeBackend.CUDA,
             RuntimeBackend.VULKAN,

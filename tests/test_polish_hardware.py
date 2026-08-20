@@ -749,3 +749,46 @@ def test_an_unanswered_runtime_query_is_not_read_as_an_empty_card() -> None:
         polish_hardware.time.time() - polish_hardware._LOADED_MODEL_CACHE_SECONDS - 1.0
     )
     assert polish_hardware._last_loaded_models() == ((), ())
+
+
+def test_a_manual_section_always_gets_a_retry_before_the_rules_take_over():
+    """A refusal spends the section, so one attempt is too cheap.
+
+    When the meaning guards refuse an answer the section falls back to the
+    rules repair, and for grammar the rules are not a weaker correction, they
+    are no correction: "duck are funny pets" comes back unchanged from every
+    deterministic pass in the product.
+
+    Measured on 2026-08-20 across one session, 36 sections fell back to rules
+    against 424 AI completions - about 8.5 percent - and the reasons were modal
+    meaning, actor changed, protected content and prohibition. Those are drift
+    the retry prompt anchors, because it feeds the actor and negation
+    inventories back to the model on the second attempt.
+
+    AUTO with a low severity used to get no retry at all, which is the case
+    this fixes.
+    """
+    plan = HardwarePolicyManager().plan(
+        snapshot(ram=64, vram=16, backend=RuntimeBackend.CUDA),
+        PolishTask.PROOFREAD,
+        PolishMode.AUTO,
+        classifier=decision(severity=0.1),
+        packs=PACKS,
+        manual=True,
+    )
+
+    assert plan.retry_limit >= 1
+
+
+def test_the_retry_floor_does_not_apply_to_instant():
+    """Instant is a latency promise, and a second generation would break it."""
+    plan = HardwarePolicyManager().plan(
+        snapshot(ram=64, vram=16, backend=RuntimeBackend.CUDA),
+        PolishTask.PROOFREAD,
+        PolishMode.INSTANT,
+        classifier=decision(severity=0.1, needs_llm=False),
+        packs=PACKS,
+        manual=True,
+    )
+
+    assert plan.retry_limit == 0
