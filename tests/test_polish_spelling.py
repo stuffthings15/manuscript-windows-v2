@@ -452,3 +452,77 @@ def test_a_context_that_cannot_settle_the_tie_still_refuses():
         ranker.choose(sentence, 9, 13, ("care", "chair"), "Thursday. Grey.")
         is None
     )
+
+
+def test_two_words_run_together_are_separated():
+    """"vendorsmay" is two words with the space missing, not a misspelling.
+
+    This is a dictation product first, and running speech into text is exactly
+    what glues a short function word onto the one before it. Found in essay 3
+    of the coherent corpus: "equipment from different vendorsmay not
+    communicate reliably".
+
+    The rule is deliberately narrow, and every threshold in it came from
+    measuring the 24,690 bundled misspellings rather than from taste:
+
+        any two dictionary words, 4-letter halves   786 rewritten (3.18%)
+        closed-class tail only                       14 rewritten (0.057%)
+        plus a 5-letter head                          5 rewritten (0.020%)
+        plus "no single-word repair at one edit"      1 rewritten (0.004%)
+
+    The guard in the last line is what keeps "bandwith" as bandwidth rather
+    than "band with". The single remaining casualty, "questionare", never
+    reaches this rule in the product because the bundled misspellings map
+    repairs it first - asserted below, so that stays true.
+    """
+    from echo_link_core.polish_spelling import PolishRuleEngine
+
+    engine = PolishRuleEngine()
+    engine.warm()
+
+    assert "vendors may not communicate" in engine.correct(
+        "At the same time, equipment from different vendorsmay not "
+        "communicate reliably after software updates."
+    ).text
+
+    # A plain misspelling with a real one-word repair must not be split.
+    assert "bandwidth" in engine.correct(
+        "The bandwith was not enough for the video call."
+    ).text
+    assert "accessible" in engine.correct(
+        "This form is not accessable to screen readers."
+    ).text
+    assert "questionnaire" in engine.correct(
+        "She filled in the questionare before the appointment."
+    ).text
+
+
+def test_a_word_with_several_equal_repairs_is_still_left_alone():
+    """"loids" has six candidates one edit away and none of them wins.
+
+    loads, lords, lois, lids, voids, loins. Frequency puts loads ahead of lords
+    by less than two to one, which is a coin toss, so the speller refuses and
+    the model gets to read the sentence.
+
+    The context ranker does not rescue this one and must not be widened until
+    it can. Measured on the real sentence from essay 3 of the coherent corpus,
+    "Control software can shift flexible loids, charge batteries when energy is
+    abundant": it ranks LORDS above loads, 0.8147 to 0.7968. The 0.02 margin is
+    the only thing that stopped a wrong word going into the document, and the
+    margin there was 0.0179.
+
+    It must also not be split into two words, which is why it is asserted here
+    beside the run-together rule.
+    """
+    from echo_link_core.polish_spelling import PolishRuleEngine
+
+    engine = PolishRuleEngine()
+    engine.warm()
+
+    result = engine.correct(
+        "Control software can shift flexible loids, charge batteries when "
+        "energy is abundant."
+    ).text
+
+    assert "loids" in result
+    assert "lords" not in result
