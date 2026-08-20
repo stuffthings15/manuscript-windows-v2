@@ -1152,9 +1152,38 @@ class PolishEngine:
         Meaning is not judged here. PolishValidator still has to accept the
         candidate before this is consulted.
         """
+        proofread = command.strip().casefold() == "proofread"
         if not quality.tone_verified:
-            return False
-        if command.strip().casefold() != "proofread":
+            # For a proofread this is a real veto: the answer drifted in style
+            # when it was asked only to correct.
+            #
+            # For a tone it is backwards, and it is why Friendly does not sound
+            # friendly. Losing here hands the section to the deterministic
+            # repair, which cannot satisfy the tone by construction - it is a
+            # proofread. So a rewrite that is meaning-safe and merely not
+            # VISIBLY warm was being replaced by text with no warmth at all,
+            # and the product came out colder for having checked.
+            #
+            # Measured on 2026-08-20, paragraph 4 of essay 1 asked for
+            # Friendly. The model returned "From a practical standpoint... the
+            # value of a hive shouldn't be exaggerated... helps prevent", which
+            # is warmer than the source. One added contraction is below the two
+            # that _friendly_rewrite_is_visible requires, so tone_verified came
+            # back False and the reader got the cold repair. The 27B judge then
+            # scored Friendly at 7.1 percent with the same reason fourteen
+            # times over: "clear and readable, but lacks warmth".
+            #
+            # The style check keeps its job - it still fails quality.complete,
+            # so the section is not called a verified tone and the retry added
+            # in 507afdb still runs first. This only decides the last question:
+            # having tried and not proved the warmth, is the model's answer or
+            # the rules repair the better thing to show. For a tone request it
+            # is the model's, provided it is no worse on error_score, which is
+            # the same bar every other candidate has to clear below.
+            if proofread:
+                return False
+            return quality.error_score <= deterministic_quality.error_score
+        if not proofread:
             return quality.complete
         if _ALWAYS_BLOCKING_RESIDUALS.intersection(quality.residual_errors):
             return False
@@ -1170,9 +1199,10 @@ class PolishEngine:
     ) -> str:
         """Ask the model once more about words that are still misspelled.
 
-        Only for a proofread, and only when the model already ran: a rules-only
-        answer has not had its chance yet, and a tone rewrite is not the place
-        to be changing words.
+        Only when the model already ran, because a rules-only answer has not
+        had its chance yet. Proofreads and tone rewrites both qualify: this
+        repairs spellings, it does not change words, and a tone answer that
+        keeps a misspelling is discarded in favour of the cold rules repair.
 
         Everything that comes back goes through `accept_residual_repair`, which
         allows a changed word only where the word was unknown before and is
@@ -1195,12 +1225,26 @@ class PolishEngine:
                 len(final_text),
             )
             return final_text
-        if request.command.strip().casefold() != "proofread":
-            logger.info(
-                "Residual spelling pass skipped: command is %r, not a proofread",
-                request.command,
-            )
-            return final_text
+        # Tone rewrites get this too, and the reason is measured.
+        #
+        # A tone answer that still carries a misspelling scores worse on
+        # error_score than the plain rules repair, loses the comparison against
+        # it, and is thrown away - so the writer gets the rules text, which has
+        # no tone in it at all. Skipping the repair here was what made the tone
+        # unshippable.
+        #
+        # Measured on 2026-08-20, paragraph 4 of essay 1 asked for Friendly:
+        # the model returned "From a practical standpoint... shouldn't... helps
+        # prevent" - genuinely warmer - and it was refused, leaving the reader
+        # a correct, cold proofread. The refused text still read "ThE entire
+        # subject", which this pass exists to fix.
+        #
+        # Safe for a tone because accept_residual_repair is not a rewrite: it
+        # allows a changed word only where that word was unknown before and is
+        # known after, with every other word identical and in the same order. A
+        # model that rewords is refused whole. The old docstring said "a tone
+        # rewrite is not the place to be changing words", which is true, and
+        # this pass does not change words - it repairs spellings.
         dictionary = getattr(self.rules, "dictionary", None)
         if dictionary is None:
             logger.info(
@@ -3175,11 +3219,28 @@ class PolishEngine:
         quality_complete = bool(
             used_llm and validation.accepted and quality.complete
         )
+        # A tone the engine decided to ship is review-ready even when the style
+        # check could not verify it.
+        #
+        # These two have to agree or the product contradicts itself. The
+        # candidate comparison now prefers a meaning-safe tone rewrite over the
+        # deterministic repair, because the repair cannot carry a tone at all -
+        # but review_ready still demanded quality.complete, which the same
+        # style check had just set to False. The result would be text the
+        # engine chose to show and the card refused to let the writer accept,
+        # marked "the AI has not corrected this section" over the model's own
+        # words.
+        #
+        # quality_complete is left alone above: it still says the tone was not
+        # verified, which is true and is what the retry and the reporting read.
+        # This says only that the model wrote what is on screen, which is the
+        # question the review card asks.
+        tone_request = request.command.strip().casefold() != "proofread"
         review_ready = bool(
             final_text.strip()
             and used_llm
             and validation.accepted
-            and quality.complete
+            and (quality.complete or tone_request)
         )
         if rejected_llm and runtime_failure_kind is RuntimeFailureKind.NONE:
             runtime_failure_kind = RuntimeFailureKind.VALIDATION_FAILURE
