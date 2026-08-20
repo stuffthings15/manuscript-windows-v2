@@ -1366,3 +1366,80 @@ def _save_capture(widget, filename: str) -> None:
     directory = Path(target)
     directory.mkdir(parents=True, exist_ok=True)
     assert widget.grab().save(str(directory / filename))
+
+
+def test_the_hud_is_lowered_even_while_the_selection_monitor_is_paused(
+    app, tmp_path, monkeypatch
+):
+    """The HUD must not behave as pinned when Pin was never pressed.
+
+    The window is created with WindowStaysOnTopHint and set_stays_on_top(True)
+    runs the moment the writer is detected in a document, so the only thing
+    that can lower it again is _release_hud_top_if_focus_left. That had one
+    caller, _handle_automatic_selection_cleared, which runs from the selection
+    monitor - and the monitor returns immediately while paused. It is paused
+    for the whole time a review is being worked on.
+
+    So during a review nothing could lower the HUD, which is exactly what the
+    owner reported: it stays in front of everything without Pin being clicked.
+    """
+    from echo_link_app import window as window_module
+
+    window = EchoLinkWindow(
+        EchoLinkStore(tmp_path / "echo-link.db"),
+        enable_hotkey=False,
+        enable_tray=False,
+    )
+    palette = window.rewrite_palette
+    palette.show()
+    app.processEvents()
+    assert not palette.pinned
+    palette.set_stays_on_top(True)
+    assert bool(palette.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+
+    # The writer has clicked something that is neither the HUD nor the
+    # document under review.
+    class _Other:
+        handle = 987654
+        process_id = 4242
+
+    monkeypatch.setattr(window_module, "active_window", lambda: _Other())
+    window.selected_text_record = None
+
+    window._check_palette_focus()
+    app.processEvents()
+
+    assert not bool(palette.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+    window.close()
+
+
+def test_a_pinned_hud_is_not_lowered_by_the_focus_check(app, tmp_path, monkeypatch):
+    """Pin is the writer's explicit instruction and outranks focus following.
+
+    The fix above must not turn Pin into a suggestion.
+    """
+    from echo_link_app import window as window_module
+
+    window = EchoLinkWindow(
+        EchoLinkStore(tmp_path / "echo-link.db"),
+        enable_hotkey=False,
+        enable_tray=False,
+    )
+    palette = window.rewrite_palette
+    palette.show()
+    palette._set_pinned(True)
+    app.processEvents()
+    assert bool(palette.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+
+    class _Other:
+        handle = 987654
+        process_id = 4242
+
+    monkeypatch.setattr(window_module, "active_window", lambda: _Other())
+    window.selected_text_record = None
+
+    window._check_palette_focus()
+    app.processEvents()
+
+    assert bool(palette.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+    window.close()

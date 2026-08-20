@@ -2944,6 +2944,24 @@ class EchoLinkWindow(QMainWindow):
         self.target_underline.show_rectangles(rectangles)
 
     def _check_palette_focus(self) -> None:
+        # Released here, on a Qt timer, and not only from the selection
+        # monitor's cleared callback.
+        #
+        # The owner reported the HUD staying in front of everything without
+        # ever pressing Pin. The window is created with WindowStaysOnTopHint
+        # and set_stays_on_top(True) is called the moment the writer is
+        # detected in a document, so the only thing that can lower it again is
+        # _release_hud_top_if_focus_left. That had exactly one caller,
+        # _handle_automatic_selection_cleared, which runs from the selection
+        # monitor - and the monitor returns immediately while it is paused.
+        # It is paused for the whole time a review is being worked on. So
+        # during a review the HUD could not be lowered by anything, which is
+        # indistinguishable from pinned.
+        #
+        # This timer already runs every 175ms whatever the monitor is doing,
+        # and the release is guarded and cheap: it returns at once when the
+        # HUD is hidden or genuinely pinned.
+        self._release_hud_top_if_focus_left()
         record = self.selected_text_record
         if (
             record is None
