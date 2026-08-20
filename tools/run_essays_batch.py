@@ -800,8 +800,24 @@ def main() -> int:
             if not args.as_a_writer:
                 close_word()
             shutil.copy2(source, target)  # every run starts from the original
-            if not args.no_restart:
-                restart_app()
+            if not args.no_restart and not restart_app():
+                # The app did not come up. Every essay after this one will
+                # report zero presses and "the Writing HUD never appeared",
+                # which is an environment failure wearing the costume of a
+                # quality result.
+                #
+                # On 2026-08-20 the overnight full tier hit this on its first
+                # essay and kept going, and would have spent about five hours
+                # producing nothing. Stopping here is the difference between
+                # reporting that the app would not start and reporting twenty
+                # essays of zeroes that somebody has to interpret.
+                print(  # noqa: T201
+                    "\nSTOPPING: the app did not start, so nothing after this "
+                    "would measure the writing. This is an environment "
+                    "failure, not a corpus result.",
+                    flush=True,
+                )
+                return 2
             started = time.monotonic()
             try:
                 result = review_one(target, tone=args.tone)

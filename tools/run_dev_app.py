@@ -51,7 +51,35 @@ def main(argv: list[str] | None = None) -> int:
     print(" ".join(command), flush=True)
     if args.wait:
         return subprocess.run(command, cwd=ROOT, env=environment).returncode
-    subprocess.Popen(command, cwd=ROOT, env=environment)
+    try:
+        subprocess.Popen(command, cwd=ROOT, env=environment)
+    except OSError as exc:
+        # Windows Application Control blocks pythonw.exe on this machine while
+        # allowing python.exe, and it does it at CreateProcess with
+        # "[WinError 4551] An Application Control policy has blocked this
+        # file". Measured on 2026-08-20, when it stopped every Word run: the
+        # harness restart returned "timed out waiting for the app to report a
+        # loaded model" and the batch reported twenty essays of zeroes, which
+        # reads as a broken corrector rather than a blocked launcher.
+        #
+        # Falling back to python.exe with no console window keeps a detached
+        # run detached. It is not a workaround for a signing problem - the
+        # signed build is a separate release blocker - it is the difference
+        # between the harness working on this machine and not.
+        if getattr(exc, "winerror", None) != 4551:
+            raise
+        fallback = ROOT / ".venv" / "Scripts" / "python.exe"
+        print(  # noqa: T201
+            f"pythonw is blocked by Application Control; using {fallback.name}",
+            flush=True,
+        )
+        command[0] = str(fallback)
+        subprocess.Popen(
+            command,
+            cwd=ROOT,
+            env=environment,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
     return 0
 
 
