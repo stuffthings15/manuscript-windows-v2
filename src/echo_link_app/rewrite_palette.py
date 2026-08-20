@@ -798,6 +798,21 @@ class RewritePalette(QDialog):
         self.undo_button.clicked.connect(self._undo_last_applied)
         self.undo_button.hide()
         actions.addWidget(self.undo_button, 1)
+        # Only for a section the AI answered and the guards refused. The rules
+        # repair is real work - spelling, punctuation, casing are all applied -
+        # but for grammar it is not a correction at all, so it must never be
+        # the button under the writer's thumb. Taking it is a separate,
+        # deliberate press. Hidden the rest of the time, for the same reason
+        # Undo is: a permanently dead control is furniture.
+        self.use_rules_button = QPushButton("Use built-in correction")
+        self.use_rules_button.setAccessibleName(
+            "Apply the built-in rule correction the AI could not replace"
+        )
+        self.use_rules_button.setObjectName("hudTextButton")
+        self.use_rules_button.setFixedHeight(32)
+        self.use_rules_button.clicked.connect(self._apply_current_suggestion)
+        self.use_rules_button.setVisible(False)
+        actions.addWidget(self.use_rules_button, 1)
         layout.addLayout(actions)
 
         self.previous_button = QPushButton("Previous", page)
@@ -2594,7 +2609,11 @@ class RewritePalette(QDialog):
             QTimer.singleShot(50, self._reassert_current_view_size)
 
     def _mark_ai_provenance(self, suggestion_id: str) -> None:
-        """Say on the card whether the AI produced the text being offered.
+        """Decide what the card may do with the text it is showing.
+
+        Hidden first, every time. This runs for each section as the card moves,
+        and a control left visible from the previous section is how a
+        deliberate choice becomes an accidental one.
 
         Two things can bring a section here without an AI result. The local AI
         can be unavailable or switched off, in which case the whole review is
@@ -2603,6 +2622,7 @@ class RewritePalette(QDialog):
         exactly like an AI correction, which is how a rules-only essay reads
         as a working corrector right up until it is graded.
         """
+        self.use_rules_button.setVisible(False)
         if suggestion_id and suggestion_id in self._ai_completed_ids:
             self.after_heading.setText("Suggested text")
             return
@@ -2614,6 +2634,24 @@ class RewritePalette(QDialog):
         )
         if not self._ai_proofread:
             note += " AI proofreading is off for this review."
+        elif suggestion_id and suggestion_id in self._ai_failed_ids:
+            # The model answered and a guard turned the answer down. Nothing
+            # more is coming for this section, so waiting would strand the
+            # writer - but the rules repair still must not be the default
+            # action, because for grammar it is not a correction at all.
+            #
+            # Refusing to offer anything here was tried and was worse: seven
+            # sections were dismissed uncorrected and an essay went from 0
+            # unknown words to 18. So the text stays on the card, readable,
+            # and taking it becomes a deliberate second choice rather than the
+            # button under the writer's thumb.
+            self.apply_suggestion_button.setEnabled(False)
+            self.use_rules_button.setVisible(True)
+            self.use_rules_button.setEnabled(True)
+            note += (
+                " The AI could not correct this section safely. Use the "
+                "built-in correction only if you want it."
+            )
         else:
             # The AI is on for this review and has not answered for this
             # section yet, so this text must not be acceptable. Labelling it

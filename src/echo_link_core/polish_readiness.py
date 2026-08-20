@@ -112,6 +112,63 @@ def _polish_result_ready_for_review(result: object) -> bool:
     )
 
 
+# Where the text on a review card came from. One vocabulary, asked for in one
+# place, because the card and the window used to work this out separately and
+# could disagree - and did.
+#
+# The distinction that did not exist before and matters most is PENDING versus
+# REJECTED. Both used to look like "no AI result", so both were offered as
+# acceptable text. One is a race worth waiting out; the other is a decision the
+# writer should make knowingly.
+AI = "ai"
+AI_PENDING = "ai_pending"
+AI_REJECTED = "ai_rejected"
+AI_UNAVAILABLE = "ai_unavailable"
+
+
+def correction_provenance(result: object, *, ai_enabled: bool = True) -> str:
+    """Who produced the text being offered: the model, or the rules.
+
+    The engine already answers this truthfully - review_ready is used_llm and
+    validation.accepted and quality.complete - and the app used to override it.
+    This keeps the engine as the source and gives every surface the same word
+    for what happened.
+
+    AI              the model answered and the guards accepted it.
+    AI_PENDING      nothing has come back for this section yet.
+    AI_REJECTED     the model answered and a meaning guard turned it down.
+    AI_UNAVAILABLE  there is no AI stage: it is switched off, or the runtime
+                    faulted, so the rules repair is the whole product here.
+
+    `ai_enabled` is the review's setting, not the engine's opinion. A review
+    with AI proofreading off must never report PENDING, because nothing is
+    coming.
+    """
+    if not ai_enabled:
+        return AI_UNAVAILABLE
+    if result is None:
+        return AI_PENDING
+    validation = getattr(result, "validation", None)
+    if (
+        getattr(result, "used_llm", False)
+        and getattr(validation, "accepted", False)
+        and (
+            getattr(result, "quality_complete", False)
+            or getattr(result, "review_ready", False)
+        )
+    ):
+        return AI
+    # VALIDATION_FAILURE is set only when the model answered and the answer was
+    # turned down, never when the runtime itself broke. That is the whole
+    # difference between "the AI tried and I refused it" and "there was no AI".
+    if (
+        getattr(result, "runtime_failure_kind", RuntimeFailureKind.NONE)
+        is RuntimeFailureKind.VALIDATION_FAILURE
+    ):
+        return AI_REJECTED
+    return AI_UNAVAILABLE
+
+
 def _polish_task_for(command: str, text: str) -> PolishTask:
     if command == "Proofread":
         if len(text) > 1200 or len([part for part in text.split("\n\n") if part.strip()]) > 2:

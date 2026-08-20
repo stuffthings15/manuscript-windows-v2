@@ -4342,3 +4342,66 @@ def test_a_section_the_ai_finished_is_replaceable(app):
 
     assert palette.apply_suggestion_button.isEnabled()
     assert palette.after_heading.text() == "Suggested text"
+
+
+def test_a_section_the_ai_refused_offers_the_rules_repair_as_a_separate_choice(app):
+    """Refused is not the same as pending, and must not behave the same.
+
+    When a meaning guard turns the model's answer down, nothing more is coming
+    for that section, so waiting would strand the writer. Refusing to offer
+    anything was tried and was worse: seven sections were dismissed
+    uncorrected and an essay went from 0 unknown words to 18.
+
+    So the rules repair stays on the card and readable, Replace is still
+    disabled, and taking it becomes a deliberate second press instead of the
+    button under the writer's thumb.
+    """
+    palette = RewritePalette()
+    palette._ai_proofread = True
+    palette._ai_completed_ids.clear()
+    palette._ai_failed_ids.add("sentence:guard-refused")
+    palette.apply_suggestion_button.setEnabled(True)
+
+    palette._mark_ai_provenance("sentence:guard-refused")
+
+    assert not palette.apply_suggestion_button.isEnabled()
+    # isHidden, not isVisible: a child of a window that was never shown
+    # reports isVisible() False whatever it was asked to do, so isVisible
+    # would pass here even if the control were never offered.
+    assert not palette.use_rules_button.isHidden()
+    assert palette.use_rules_button.isEnabled()
+    assert "could not correct this section safely" in (
+        palette.suggestion_explanation.text()
+    )
+
+
+def test_the_rules_choice_does_not_linger_onto_the_next_section(app):
+    """A control left visible from the last section is an accidental press.
+
+    _mark_ai_provenance runs for every section as the card moves, so the
+    deliberate choice has to be withdrawn as deliberately as it was offered.
+    """
+    palette = RewritePalette()
+    palette._ai_proofread = True
+    palette._ai_failed_ids.add("sentence:refused")
+    palette._mark_ai_provenance("sentence:refused")
+    assert not palette.use_rules_button.isHidden()
+
+    # The next section is still waiting on the model, not refused.
+    palette._mark_ai_provenance("sentence:still-waiting")
+
+    assert palette.use_rules_button.isHidden()
+    assert not palette.apply_suggestion_button.isEnabled()
+
+
+def test_a_completed_section_offers_no_rules_choice(app):
+    """The ordinary path shows one action, not two."""
+    palette = RewritePalette()
+    palette._ai_proofread = True
+    palette._ai_completed_ids.add("sentence:done")
+    palette.apply_suggestion_button.setEnabled(True)
+
+    palette._mark_ai_provenance("sentence:done")
+
+    assert palette.apply_suggestion_button.isEnabled()
+    assert palette.use_rules_button.isHidden()
