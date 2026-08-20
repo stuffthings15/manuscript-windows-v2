@@ -1,8 +1,17 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import sys
 
-from echo_link_app.main import diagnostics
+# Every other tool in this folder does this and this one did not, so it only
+# ever ran with PYTHONPATH set by hand and failed with ModuleNotFoundError for
+# anybody who ran it the way its own documentation describes.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
+
+from echo_link_app.main import diagnostics  # noqa: E402
 
 
 def main() -> int:

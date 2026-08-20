@@ -1,5 +1,12 @@
 # Local Writing Quality Acceptance
 
+> Superseded in part on 2026-08-19. The release gate is now
+> `docs/RELEASE_ACCEPTANCE.md`. The model figures below are stale: they
+> cite a configured 3B model and a 14B comparison, while the product ships
+> gemma4 e2b, e4b and 12b packs chosen by mode in
+> `src/echo_link_core/polish_hardware.py`. The fifteen-case gate itself is
+> still a valid narrow check and is not part of the release gate.
+
 Echo-Link uses a locked set of 15 synthetic cases to expose writing-model gaps without uploading or retaining user text. There are three cases each for grammar/punctuation, style/tone, rewrite meaning, summary, and translation.
 
 ## What the gate proves
