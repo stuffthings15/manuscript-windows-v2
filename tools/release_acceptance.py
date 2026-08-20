@@ -67,6 +67,13 @@ TONE_PERCENT = 95.0
 # The six in the palette, on the owner's instruction of 2026-08-16. The gate
 # measures what the product offers, not everything the engine can do.
 PALETTE_TONES = ("Clear", "Improve", "Rephrase", "Shorten", "Formal", "Friendly")
+# The judge, named here rather than left to the tool's default.
+#
+# tone_correctness defaults to gemma4:12b-it-q4_K_M, which is not installed on
+# this machine, so every judged run died with HTTP 404 and was recorded as
+# 0.0 percent. The judge is a measuring instrument and the gate has to say
+# which one it used, the same way it says which corpus it graded.
+JUDGE_MODEL = "gemma3:27b"
 
 # Coherent prose with seeded surface damage: what a user's writing actually
 # looks like, and the corpus the corrections threshold is set against.
@@ -319,11 +326,27 @@ def full_tier(results: dict[str, object], started: float) -> list[str]:
             [str(PYTHON), "tools/tone_correctness.py",
              "--source", str(source),
              "--result", str(BATCH / source.name),
-             "--tone", tone, "--json", str(target)],
+             "--tone", tone, "--model", JUDGE_MODEL, "--json", str(target)],
             f"tone judge: {tone}",
         )
         match = re.search(r"(\d+(?:\.\d+)?)%", output)
-        percent = float(match.group(1)) if match else 0.0
+        # A judge that could not run is not a score of zero.
+        #
+        # On 2026-08-20 this reported all six tones at 0.0 percent and the gate
+        # read as a total tone failure. Two things were wrong and neither was
+        # the product: the judge's default model is not installed on this
+        # machine, so it died with HTTP 404, and this line turned that into
+        # 0.0. Six zeroes for tones that had in fact been applied 25 times per
+        # document. A missing number has to fail loudly as a broken
+        # measurement, because a plausible zero is worse than an error.
+        if not passed or match is None:
+            tones[tone] = None
+            failures.append(
+                f"tone {tone} could not be judged: "
+                f"{output.strip().splitlines()[-1][:120] if output.strip() else 'no output'}"
+            )
+            continue
+        percent = float(match.group(1))
         tones[tone] = percent
         if percent < TONE_PERCENT:
             failures.append(f"tone {tone} at {percent}% is below {TONE_PERCENT}%")

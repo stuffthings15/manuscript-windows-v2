@@ -51,8 +51,28 @@ def sections(text: str) -> list[str]:
     something the product is forbidden to change - there is a meaning guard for
     exactly that - so paragraphs pair up reliably.
     """
-    newline = chr(10)
-    blocks = [block.strip() for block in text.split(newline) if block.strip()]
+    # Split on the paragraph separator, never on a bare newline.
+    #
+    # A single newline also occurs INSIDE a paragraph, and this corpus is full
+    # of them: the seeded damage breaks lines mid-sentence, as in "...because
+    # street" / "street trees...". Splitting on it made one paragraph into two
+    # blocks on the source side and one on the corrected side, because removing
+    # those breaks is exactly what the corrector is supposed to do.
+    #
+    # Measured on 2026-08-20, essay 1 of the coherent corpus: the source had 18
+    # paragraphs of which 7 held an internal newline, and the corrected
+    # document had 18 of which none did. This returned 18 and 14, the counts
+    # did not match, and every tone scored 0.0 percent in the release gate -
+    # six tones, all zero, on documents whose tone had in fact been applied 25
+    # times each. The product was being marked down for repairing the damage.
+    separator = chr(10) * 2
+    blocks = [
+        # Line breaks that survive inside a paragraph are not boundaries, so
+        # they are flattened before the block is measured or judged.
+        " ".join(block.split())
+        for block in text.split(separator)
+        if block.strip()
+    ]
     # Titles and boilerplate are not prose and cannot carry a tone. Judging
     # "intentionally error-filled practice essay 7" for warmth cost essay 7 a
     # tenth of its score and told nobody anything. Every real paragraph in this
@@ -129,7 +149,13 @@ def score(
 
 
 def document_text(path: Path) -> str:
-    return "\n".join(paragraphs(path))
+    """The document as text, with paragraphs separated unambiguously.
+
+    Joined with a blank line rather than a single newline, because `sections`
+    has to be able to tell a paragraph boundary from a line break inside a
+    paragraph, and this corpus is full of the latter.
+    """
+    return (chr(10) * 2).join(paragraphs(path))
 
 
 def main(argv: list[str] | None = None) -> int:
