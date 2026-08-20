@@ -258,7 +258,43 @@ def _known(word: str, dictionary: EnglishDictionary) -> bool:
         for character in unicodedata.normalize("NFD", folded)
         if not unicodedata.combining(character)
     )
-    return stripped != folded and dictionary.contains(stripped)
+    if stripped != folded and dictionary.contains(stripped):
+        return True
+    return _frequency_dictionary_knows(folded, dictionary)
+
+
+def _frequency_dictionary_knows(folded: str, dictionary: EnglishDictionary) -> bool:
+    """Whether the second bundled word list knows this word exactly.
+
+    The Hunspell list is not the only word list in the build and it is not the
+    larger one. It is missing ordinary English that the 82,834-word frequency
+    dictionary beside it has: "unaffordable" at 131,969 and "genotypes" at
+    632,148. Charging an essay for those measures the dictionary, which is the
+    same reason the accented "cafe" case above exists.
+
+    Measured on 2026-08-19 on the first five essays of the coherent corpus.
+    Twenty-four words were counted unknown; nineteen were correct English.
+    Essay 3 scored 0 of 18 for spelling while its "misspellings" were
+    "microgrids", "cybersecurity" and "tradeoffs".
+
+    No frequency floor, because the list has no junk to keep out. Its lowest
+    entries are "inhibitive", "rasbora", "insatiably" and "defoliate" at counts
+    around 12,700; a floor would exclude real words and admit nothing.
+
+    False accepts were measured against the 24,690 bundled misspellings rather
+    than argued about: 171 of them appear here, 0.69 percent, and reading them
+    shows they are real words that happen to be wrong somewhere else -
+    "behaviour", "apologise", "barbeque", "affective", "campion". Treating
+    those as known is correct for a count of unknown words, not a leak.
+
+    What this does NOT fix, said so a low spelling score can still be read:
+    "cybersecurity", "microgrid", "tradeoff", "makerspace" and "outplanting"
+    are in neither list and are still charged. They are real English and the
+    coverage gap is real. They are deliberately not hand-added, because they
+    are the words in this corpus and adding them is memorising the answer.
+    """
+    value = dictionary.suggestion(folded)
+    return bool(value and value[0].casefold() == folded and value[1] == 0)
 
 
 # Confusable words the speller can never see, because both spellings are real.
@@ -359,11 +395,22 @@ def grade(path: Path, dictionary: EnglishDictionary, engine: WritingSuggestionEn
     text = "\n".join(body)
 
     # Capitalised tokens are names, which are not the speller's business.
-    unknown = [
+    # Distinct words, not occurrences. One word the dictionary does not have is
+    # one thing for a writer to resolve however many times they use it, and
+    # charging per occurrence measures how often a subject comes up rather than
+    # how correct the writing is. Measured on 2026-08-19: essay 3 of the
+    # coherent corpus scored 0 of 18 for spelling on fifteen charges that were
+    # five distinct words, seven of them the single word "microgrids".
+    #
+    # No error is hidden by this. Every distinct unknown word is still charged,
+    # and the full list goes into the report so a low score can be read rather
+    # than guessed at.
+    unknown_words = [
         word
         for word in WORD.findall(text)
         if not word[:1].isupper() and not _known(word, dictionary)
     ]
+    unknown = sorted({word.casefold() for word in unknown_words})
     spelling = max(0.0, WEIGHTS["spelling"] - 1.5 * len(unknown))
 
     # Three categories used to be scored on what the deterministic rules would
@@ -445,6 +492,10 @@ def grade(path: Path, dictionary: EnglishDictionary, engine: WritingSuggestionEn
         "grammar": SCALE * grammar,
         "coherence": SCALE * coherence,
         "unknown": len(unknown),
+        # Named, like the confusable words are, because an unknown-word count
+        # is unreadable on its own: fifteen charges on essay 3 looked like a
+        # broken corrector and were "microgrids" and "cybersecurity".
+        "unknown_words": unknown,
         "confusable": len(confusables),
         # Separated on 2026-08-17: these were added together, so a charged
         # run-on and an advisory long sentence were indistinguishable in the
