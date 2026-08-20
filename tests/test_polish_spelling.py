@@ -342,3 +342,54 @@ def test_mangled_case_repair_leaves_what_it_cannot_be_sure_of():
 
     for untouched in ("RePahIr", "CANLA", "PhD", "OnE", "Ancient", "ancient"):
         assert _mangled_case_repair(untouched, dictionary) == untouched
+
+
+def test_a_word_wearing_damaged_capitals_is_not_protected_as_a_name():
+    """Nobody is called RePahIr.
+
+    Capitalized words are shielded because a name and its near neighbours are
+    both real - "Malik" and "Mali" - and guessing between them renames someone.
+    That reasoning only holds where the capitalisation could be deliberate.
+    RePahIr reached the guard with the answer already found: symspell ranked
+    "Repair" one edit away at a frequency of 49 million, and the name guard
+    refused it, so the word survived a whole Word run of essay 17.
+
+    The name protection itself is unchanged for real names.
+    """
+    from echo_link_core.polish_spelling import _capitalized_repair_is_safe
+
+    assert _capitalized_repair_is_safe("RePahIr", "Repair")
+    # Still refused, which is the case the guard exists for.
+    assert not _capitalized_repair_is_safe("Malik", "Mali")
+
+
+def test_a_repaired_word_does_not_inherit_the_damaged_capitals():
+    """The repair takes the case its position calls for, not the source's.
+
+    SymSpell returns its own casing, so RePahIr came back as "Repair" and left
+    a capital mid-sentence. Lowering it unconditionally was tried next and
+    produced "repair work is needed here." at the start of a sentence, because
+    nothing downstream puts that capital back on this path.
+    """
+    from echo_link_core.polish_spelling import PolishRuleEngine
+
+    engine = PolishRuleEngine()
+    engine.warm()
+
+    assert (
+        engine.correct("the bridge needs RePahIr work before winter").text
+        == "The bridge needs repair work before winter."
+    )
+    assert (
+        engine.correct("RePahIr work is needed here").text
+        == "Repair work is needed here."
+    )
+    assert (
+        engine.correct("The road was fine. RePahIr came later.").text
+        == "The road was fine. Repair came later."
+    )
+    # A real name is still left exactly as the writer typed it.
+    assert (
+        engine.correct("Malik visited the site last spring").text
+        == "Malik visited the site last spring."
+    )

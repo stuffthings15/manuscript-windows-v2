@@ -541,6 +541,18 @@ class PolishRuleEngine:
                 continue
             if not _capitalized_repair_is_safe(word, replacement):
                 continue
+            if _case_is_mangled(word):
+                # The source capitals were damage, so they cannot be copied on
+                # to the repair. SymSpell returns its own casing - "Repair" for
+                # RePahIr - which leaves a capital mid-sentence. Lowering it
+                # unconditionally was tried first and produced "repair work is
+                # needed here." at the start of a sentence: nothing downstream
+                # puts that capital back on this path.
+                replacement = (
+                    replacement.capitalize()
+                    if _is_sentence_start(text, match.start())
+                    else replacement.lower()
+                )
             material = (
                 f"symspell\0{match.start()}\0{match.end()}\0"
                 f"{word}\0{replacement}"
@@ -763,6 +775,16 @@ def _case_changes(word: str) -> int:
     )
 
 
+def _case_is_mangled(word: str) -> bool:
+    """Whether the word's capitals are damage rather than a real spelling."""
+    if len(word) <= 3 or "'" in word or word.isupper() or word.islower():
+        return False
+    if word.istitle():
+        return False
+    letters = max(1, len([c for c in word if c.isalpha()]) - 1)
+    return _case_changes(word) / letters >= _MANGLED_CASE_RATIO
+
+
 def _mangled_case_repair(word: str, dictionary) -> str:
     """Lower-case a word whose capitals are damage, or return it unchanged.
 
@@ -779,10 +801,7 @@ def _mangled_case_repair(word: str, dictionary) -> str:
     dictionary already knows when folded. A word it does not know is left for
     the ordinary spelling repair below, which is better at it.
     """
-    if len(word) <= 3 or "'" in word or word.isupper() or word.islower():
-        return word
-    letters = max(1, len([c for c in word if c.isalpha()]) - 1)
-    if word.istitle() or _case_changes(word) / letters < _MANGLED_CASE_RATIO:
+    if not _case_is_mangled(word):
         return word
     lowered = word.lower()
     if not dictionary.contains(lowered):
@@ -833,6 +852,15 @@ def _capitalized_repair_is_safe(word: str, replacement: str) -> bool:
     Lowercase words never reach this; they are repaired on the usual rules.
     """
     if not word[:1].isupper():
+        return True
+    # Alternating capitals are damage, not a name. Nobody is called RePahIr.
+    # The guard above exists because "Malik" and "Mali" are both real, and
+    # guessing between them renames someone - but that reasoning only holds for
+    # a word whose capitalisation could be deliberate. RePahIr reached here
+    # with the answer already found: symspell ranked "Repair" one edit away at
+    # a frequency of 49 million, and this refused it, so the word survived a
+    # whole Word run of essay 17.
+    if _case_is_mangled(word):
         return True
     return _typo_shape_rank(word.casefold(), replacement.casefold()) <= 1
 
