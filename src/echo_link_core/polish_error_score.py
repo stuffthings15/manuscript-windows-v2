@@ -30,7 +30,23 @@ _LOWER = "a-z"
 
 _KNOWN_ERRORS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(?:I|you|we|they) is\b", re.IGNORECASE),
-    re.compile(r"\b(?:he|she|it|this|that) are\b", re.IGNORECASE),
+    # "that" is deliberately not in this list. It is a relative pronoun as
+    # often as a demonstrative, and as a relative pronoun it takes the number
+    # of whatever it refers to, so "loads that are not necessary" and "claims
+    # that are unsupported" are correct English. A regex here cannot see the
+    # antecedent.
+    #
+    # Measured on 2026-08-19 over the coherent corpus: all 17 occurrences of
+    # "that are" were correct writing and none was an error, while "it are"
+    # appeared 11 times and "this are" once and both are always wrong. So this
+    # charged six points against essays 3 and 4 for writing nothing was wrong
+    # with, and dropping "that" loses no real detection.
+    #
+    # This is not only a grading term. polish.py:1161 compares a candidate's
+    # error_score against the deterministic repair's to decide which one the
+    # writer sees, so charging correct text here can make the engine reject a
+    # good answer.
+    re.compile(r"\b(?:he|she|it|this) are\b", re.IGNORECASE),
     re.compile(r"\b(?:these|those) is\b", re.IGNORECASE),
     re.compile(r"\bthose included is\b", re.IGNORECASE),
     re.compile(
