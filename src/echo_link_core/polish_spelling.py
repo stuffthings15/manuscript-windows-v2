@@ -488,6 +488,31 @@ class PolishRuleEngine:
                 continue
             if _should_skip_word(text, match.start(), word):
                 continue
+            repaired_case = _mangled_case_repair(word, self.dictionary)
+            if repaired_case != word:
+                material = (
+                    f"mangled-case\0{match.start()}\0{match.end()}\0"
+                    f"{word}\0{repaired_case}"
+                )
+                candidate_digest = hashlib.sha256(
+                    material.encode("utf-8")
+                ).hexdigest()[:16]
+                suggestions.append(
+                    WritingSuggestion(
+                        suggestion_id=f"ws:{source_digest}:{candidate_digest}",
+                        category=SuggestionCategory.SPELLING,
+                        title="Correct capitalization",
+                        explanation=(
+                            f'"{word}" carries capitals in the middle of the '
+                            f'word; the word meant here is "{repaired_case}".'
+                        ),
+                        start=match.start(),
+                        end=match.end(),
+                        original=word,
+                        replacement=repaired_case,
+                    )
+                )
+                continue
             if self.dictionary.contains(word):
                 continue
             value = self.dictionary.suggestion(word)
@@ -709,6 +734,60 @@ def _apostrophe_is_doing_its_job(word: str) -> bool:
     """Whether the apostrophe forms a possessive or a contraction."""
     head, _, tail = word.rpartition("'")
     return not head or tail.casefold() in _CONTRACTION_ENDINGS
+
+
+# Alternating-case damage flips on almost every letter; a real mixed-case word
+# flips two or three times wherever it happens to be long. Counting flips alone
+# put JavaScript and McDonald on three and lowercased both, so the test is the
+# RATIO of flips to letters. Measured on the words that matter:
+#
+#   SuSpEcTeD      8 flips / 8  = 1.00   damage
+#   ThIs           3 / 3        = 1.00   damage
+#   ArChAeOlOgIsTs 13 / 13      = 1.00   damage
+#   eBay           2 / 3        = 0.67   real
+#   MacBook        3 / 6        = 0.50   real
+#   JavaScript     3 / 9        = 0.33   real
+#
+# 0.7 sits in the gap. eBay is the closest real word to the line and it is the
+# reason this is not set lower.
+_MANGLED_CASE_RATIO = 0.7
+
+
+def _case_changes(word: str) -> int:
+    """How many times the word switches between upper and lower case."""
+    letters = [c for c in word if c.isalpha()]
+    return sum(
+        1
+        for first, second in zip(letters, letters[1:])
+        if first.isupper() != second.isupper()
+    )
+
+
+def _mangled_case_repair(word: str, dictionary) -> str:
+    """Lower-case a word whose capitals are damage, or return it unchanged.
+
+    The dictionary cannot help decide this. `_dictionary_form` casefolds, and
+    the word set holds only casefolded entries, so `contains("SuSpEcTeD")` and
+    `contains("iPhone")` are both True and indistinguishable. That is exactly
+    why these survived: the scan asks `contains` first and skips anything it
+    recognises, so a word wearing mangled capitals looked correct and was left
+    alone. Essay 17 of error-riddled-20-docx finished with SuSpEcTeD, OnE and
+    ArChAeOlOgIsTs still in it while the model fixed AnCiEnT and ThIs in the
+    same document - it had to notice, and it noticed inconsistently.
+
+    So the shape of the capitals decides instead, and only for words the
+    dictionary already knows when folded. A word it does not know is left for
+    the ordinary spelling repair below, which is better at it.
+    """
+    if len(word) <= 3 or "'" in word or word.isupper() or word.islower():
+        return word
+    letters = max(1, len([c for c in word if c.isalpha()]) - 1)
+    if word.istitle() or _case_changes(word) / letters < _MANGLED_CASE_RATIO:
+        return word
+    lowered = word.lower()
+    if not dictionary.contains(lowered):
+        return word
+    return lowered
 
 
 def _should_skip_word(text: str, start: int, word: str) -> bool:

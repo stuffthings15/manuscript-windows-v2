@@ -289,3 +289,56 @@ def test_every_repair_here_only_removes_the_apostrophe():
     for text, wrong, _ in STRAY_APOSTROPHE:
         repaired = _repairs(text)[wrong]
         assert repaired.casefold() == wrong.replace("'", "").casefold(), text
+
+
+def test_alternating_case_damage_is_repaired_but_real_mixed_case_is_not():
+    """A word wearing mangled capitals looked correct and was left alone.
+
+    The scan asks `dictionary.contains(word)` and skips anything it knows, but
+    `_dictionary_form` casefolds and the word set holds only casefolded
+    entries, so `contains("SuSpEcTeD")` is True. The word was recognised, so
+    nothing repaired it, and only the model could - which it did
+    inconsistently. Essay 17 of error-riddled-20-docx finished with SuSpEcTeD,
+    OnE and ArChAeOlOgIsTs still in it while AnCiEnT and ThIs in the same
+    document were fixed.
+
+    The dictionary cannot decide this: iPhone and SuSpEcTeD are the same to it.
+    The shape of the capitals decides instead, by the RATIO of case flips to
+    letters. Counting flips alone put JavaScript and McDonald on three and
+    lowercased both.
+    """
+    from echo_link_core.polish_spelling import EnglishDictionary, _mangled_case_repair
+
+    dictionary = EnglishDictionary()
+    dictionary.warm()
+
+    for damaged, expected in (
+        ("SuSpEcTeD", "suspected"),
+        ("ArChAeOlOgIsTs", "archaeologists"),
+        ("ThIs", "this"),
+        ("AnCiEnT", "ancient"),
+    ):
+        assert _mangled_case_repair(damaged, dictionary) == expected
+
+    # Real mixed-case words are left exactly as written. eBay is the closest of
+    # these to the line and is why the ratio is not set lower.
+    for kept in ("iPhone", "JavaScript", "McDonald", "MacBook", "YouTube", "eBay"):
+        assert _mangled_case_repair(kept, dictionary) == kept
+
+
+def test_mangled_case_repair_leaves_what_it_cannot_be_sure_of():
+    """It only touches words the dictionary knows once folded.
+
+    RePahIr is damage too, but lowercasing gives "repahir", which is not a
+    word. That one belongs to the ordinary spelling repair, which is better at
+    it. ALLCAPS is out of scope entirely - _should_skip_word already refuses
+    those - so CANLA is not this rule's business, and short words are skipped
+    before it, which is what keeps PhD and OnE out of reach.
+    """
+    from echo_link_core.polish_spelling import EnglishDictionary, _mangled_case_repair
+
+    dictionary = EnglishDictionary()
+    dictionary.warm()
+
+    for untouched in ("RePahIr", "CANLA", "PhD", "OnE", "Ancient", "ancient"):
+        assert _mangled_case_repair(untouched, dictionary) == untouched
