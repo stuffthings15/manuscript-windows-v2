@@ -44,6 +44,15 @@ measured through Word and the HUD, accepting each section the way a writer
 does. Never headless: a headless run scored a corpus at 62 on 2026-08-14 and it
 was reported as a product regression when the local AI had simply latched off.
 
+Every Word batch runs `--as-a-writer`: one Word session and one app for the
+whole run, documents opened one after another. The default restarts the app and
+kills Word between essays, which is isolation and not use. That default exists
+because the HUD carried one document's review into the next and reported "4 of
+11" for a ten-section essay - and while it is on, that defect cannot happen, so
+the number says nothing about what a writer gets on their second document. A
+gate that only measures the first document of a freshly started app measures a
+situation almost no user is ever in.
+
 The gated corpus is `test-corpus/error-riddled-20-docx`, coherent prose with
 seeded surface damage, because that is what a user's writing actually looks
 like. `20_Animal_Pet_Essays_800_Percent_More_Errors` is reported on every full

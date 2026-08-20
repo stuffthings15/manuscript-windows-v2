@@ -23,6 +23,16 @@ This composes the tools that already exist. It does not reimplement grading,
 judging or Word driving, and if a number here disagrees with the tool that
 produces it, the tool is right and this is wrong.
 
+Every Word batch runs `--as-a-writer`, and that is not a detail. The default
+kills Word and restarts the app between essays, which is isolation rather than
+use: it exists because the Writing HUD carried one document's review into the
+next and reported "4 of 11" for a ten-section essay, and while it is switched
+on that defect cannot happen, so no number measures what a writer gets on their
+second document. A release gate that only ever measures the first document of a
+freshly started app is measuring a situation almost no user is ever in. One
+Word session, one app, documents opened one after another, the way somebody
+actually works.
+
 Word runs take the screen. Nothing here starts one without --fast or --full
 being asked for explicitly, and the runner prints what it is about to do and
 how long it takes before it does it.
@@ -237,7 +247,8 @@ def fast_tier(results: dict[str, object], started: float) -> list[str]:
     _say("\n=== five essays through Word (takes the screen, about 10 minutes)")
     passed, _ = _run(
         [str(PYTHON), "tools/run_essays_batch.py",
-         "--from", "1", "--to", "5", "--corpus", str(COHERENT)],
+         "--from", "1", "--to", "5", "--corpus", str(COHERENT),
+         "--as-a-writer"],
         "Word smoke, essays 1 to 5",
     )
     if not passed:
@@ -263,7 +274,8 @@ def full_tier(results: dict[str, object], started: float) -> list[str]:
     ):
         passed, _ = _run(
             [str(PYTHON), "tools/run_essays_batch.py",
-             "--from", "1", "--to", "20", "--corpus", str(corpus)],
+             "--from", "1", "--to", "20", "--corpus", str(corpus),
+             "--as-a-writer"],
             f"twenty essays, {label} corpus",
         )
         if not passed:
@@ -295,7 +307,7 @@ def full_tier(results: dict[str, object], started: float) -> list[str]:
         passed, _ = _run(
             [str(PYTHON), "tools/run_essays_batch.py",
              "--from", "1", "--to", "3", "--corpus", str(COHERENT),
-             "--tone", tone],
+             "--tone", tone, "--as-a-writer"],
             f"tone through Word: {tone}",
         )
         if not passed:
