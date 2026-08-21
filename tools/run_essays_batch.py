@@ -165,6 +165,7 @@ def select_tone(hud, tone: str) -> bool:
         time.sleep(1.0)
         item = automation.MenuItemControl(searchDepth=12, Name=tone)
         if not item.Exists(4, 0.4):
+            _close_any_open_menu()
             continue
         try:
             item.GetInvokePattern().Invoke()
@@ -176,7 +177,25 @@ def select_tone(hud, tone: str) -> bool:
         time.sleep(1.5)
         if tone.casefold() in current_tone(hud_window(8.0) or hud).casefold():
             return True
+    # Failing to choose a tone must not also break everything after it. This
+    # opens the tone menu and, when the item is not found, used to return with
+    # the menu still hanging over the card - so replace_button found nothing,
+    # the press loop broke on its first section, and a run that should have
+    # reported "the tone was not applied" reported presses=0 and corrected
+    # nothing at all. Measured on 2026-08-20: the same essay completed with
+    # presses=25 without --tone and died at presses=0 with it.
+    _close_any_open_menu()
     return False
+
+
+def _close_any_open_menu() -> None:
+    """Send Escape, so a half-opened dropdown cannot cover the card."""
+    try:
+        import uiautomation as automation
+
+        automation.SendKeys("{Esc}", waitTime=0.2)
+    except Exception:  # noqa: BLE001 - nothing was open, or the HUD closed
+        return
 
 
 def regenerate_button(hud):
