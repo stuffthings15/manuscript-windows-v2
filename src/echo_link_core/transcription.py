@@ -215,19 +215,49 @@ class LocalWhisperTranscriber:
         selected_mode = mode or self._settings.mode
         beam_size = 3 if selected_mode is DictationMode.ACCURACY else 1
         language = None if self._settings.language.lower() == "auto" else self._settings.language
+        def run(vad_filter: bool) -> str:
+            segments, _info = model.transcribe(
+                array,
+                language=language,
+                beam_size=beam_size,
+                best_of=beam_size,
+                vad_filter=vad_filter,
+                vad_parameters=(
+                    _vad_parameters(self._settings.whisper_mode) if vad_filter else None
+                ),
+                condition_on_previous_text=False,
+                temperature=0.0,
+            )
+            return " ".join(
+                segment.text.strip() for segment in segments if segment.text.strip()
+            ).strip()
+
         try:
             with self._inference_lock, _ComAndGcGuard():
-                segments, _info = model.transcribe(
-                    array,
-                    language=language,
-                    beam_size=beam_size,
-                    best_of=beam_size,
-                    vad_filter=True,
-                    vad_parameters=_vad_parameters(self._settings.whisper_mode),
-                    condition_on_previous_text=False,
-                    temperature=0.0,
-                )
-                result = " ".join(segment.text.strip() for segment in segments if segment.text.strip()).strip()
+                result = run(True)
+                if not result:
+                    # The voice filter discarded the whole recording. Measured
+                    # from Curtis's log on 2026-08-21: it removed all 1.25
+                    # seconds of a 1.25 second clip and the dictation failed
+                    # with "No speech was detected", and it removed 2.55 of
+                    # 2.85 seconds on another.
+                    #
+                    # The audio is already in hand, so the words are still
+                    # there to be had. Handing the writer nothing and making
+                    # them say it again is the worst available outcome, and it
+                    # is what "extremely inconsistent" felt like.
+                    #
+                    # A retry is deterministic. Lowering the threshold would be
+                    # a guess tuned to one sample, and the default profile does
+                    # not even set one - it inherits faster-whisper's 0.5,
+                    # which is what is strict here.
+                    logger.info(
+                        "Dictation voice filter removed everything; "
+                        "transcribing the recording again without it "
+                        "audio_seconds=%.1f",
+                        float(array.size) / 16000.0,
+                    )
+                    result = run(False)
         except Exception as exc:
             self.release_model()
             raise TranscriptionError(f"Speech recognition failed: {exc}") from exc

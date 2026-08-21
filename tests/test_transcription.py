@@ -143,3 +143,64 @@ def test_releasing_the_speech_model_says_so(caplog):
         "Dictation speech model released" in record.getMessage()
         for record in caplog.records
     ), [record.getMessage() for record in caplog.records]
+
+
+class VadSilencingModel:
+    """A model whose VAD filter discards every segment, as faster-whisper's did.
+
+    Measured from Curtis's own log on 2026-08-21 08:25:48: the VAD removed all
+    1.25 seconds of a 1.25 second recording, and again 2.55 of 2.85 seconds.
+    """
+
+    def __init__(self):
+        self.calls = []
+
+    def transcribe(self, audio, **kwargs):
+        self.calls.append(kwargs.get("vad_filter"))
+        if kwargs.get("vad_filter"):
+            return [], object()
+        return [SimpleNamespace(text=" the words that were nearly lost ")], object()
+
+
+def test_speech_is_not_thrown_away_when_the_vad_eats_the_clip():
+    """Losing what the writer said is worse than any tuning trade-off.
+
+    A recording that survives the microphone and reaches the model still
+    contains the words. Failing with "No speech was detected" hands the writer
+    nothing and makes them say it again, which is the "extremely inconsistent"
+    experience reported on 2026-08-21.
+
+    Retrying without the filter is deterministic - the audio is already in
+    hand - where lowering a threshold is a guess against one sample.
+    """
+    model = VadSilencingModel()
+    transcriber = LocalWhisperTranscriber(DictationSettings())
+    transcriber._get_model = lambda _callback=None: model
+    source = np.full(16000, 8000.0, dtype=np.float32)
+
+    assert transcriber.transcribe(source) == "the words that were nearly lost"
+    assert model.calls == [True, False], model.calls
+
+
+def test_genuine_silence_still_reports_that_nothing_was_said():
+    """The retry must not turn real silence into a false success."""
+    import pytest
+
+    class SilentModel:
+        def __init__(self):
+            self.calls = []
+
+        def transcribe(self, audio, **kwargs):
+            self.calls.append(kwargs.get("vad_filter"))
+            return [], object()
+
+    from echo_link_core.transcription import TranscriptionError
+
+    model = SilentModel()
+    transcriber = LocalWhisperTranscriber(DictationSettings())
+    transcriber._get_model = lambda _callback=None: model
+    source = np.full(16000, 8000.0, dtype=np.float32)
+
+    with pytest.raises(TranscriptionError):
+        transcriber.transcribe(source)
+    assert model.calls == [True, False]
