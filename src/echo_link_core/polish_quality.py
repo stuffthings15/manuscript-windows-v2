@@ -37,6 +37,10 @@ _COMMON_PROHIBITIONS = (
     "changed actors",
     "changed numbers or dates",
     "changed negations or obligations",
+    # The largest single class of tone refusal measured on 2026-08-20: 14 of
+    # 19 modal refusals were one hedge added and none removed. A hedge is not
+    # a style choice, it is a weaker claim than the writer made.
+    "added or removed hedges such as can, may, might, could or would",
     "broken grammar",
 )
 _TONE_WORD = re.compile(r"[A-Za-z0-9]+(?:[.:'_-][A-Za-z0-9]+)*\.?")
@@ -101,7 +105,15 @@ TONE_CONTRACTS: dict[str, ToneContract] = {
     "Friendly": _contract(
         "Friendly",
         "Make every paragraph visibly warm, approachable, and conversational. Recast existing "
-        "claims around helping people and making their work easier wherever the source supports it.",
+        "claims around helping people and making their work easier wherever the source supports it. "
+        # Warmth has to be sent somewhere. Friendly's measured failure was
+        # never too little hedging - usefulness was 4.13 while style sat at
+        # 3.20 - so forbidding its favourite move without naming another
+        # leaves the model with nothing and the judge saying "readable but
+        # lacks warmth" for the fifteenth time.
+        "Get the warmth from word choice, rhythm, and directly addressing the reader, "
+        "never from hedging: prefer plain everyday words over formal ones, vary sentence "
+        "length, and speak to the reader as you where the source allows it.",
         vocabulary="approachable",
         formality="conversational",
         warmth="warm",
@@ -954,6 +966,17 @@ def tone_contract_instruction(command: str) -> str:
         f"Formality: {contract.formality}. Warmth: {contract.warmth}. "
         f"Directness: {contract.directness}. Sentence length: {contract.sentence_length}. "
         f"Contractions: {contract.contractions}. Structure: {contract.structure}. "
+        # Spelled out for every tone, with the words named.
+        #
+        # In English a register shift often IS a modal shift, so a model asked
+        # to sound warmer reaches for "might" over "may", or slips a "can"
+        # into a flat claim, by doing exactly what was asked. The meaning
+        # guards refuse that and they are right to: "hesitation blocks
+        # progress" and "hesitation can block progress" are different claims.
+        # Measured 2026-08-20, this was 14 of 19 modal refusals on Friendly.
+        "Modality: keep the writer's certainty exactly as it is. Do not add or "
+        "remove can, may, might, could, would, or any other hedge, and do not "
+        "soften a plain statement into a possibility. "
         f"Do not produce: {prohibited}."
     )
 
