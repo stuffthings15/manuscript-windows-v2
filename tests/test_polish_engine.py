@@ -2444,9 +2444,40 @@ def test_rephrase_retries_when_source_action_verbs_are_replaced():
     assert "explain" in retry_terms
 
 
-def test_preverified_style_fallback_uses_one_generation_attempt():
+def test_a_staged_style_retries_even_when_a_proofread_exists():
+    """A tone gets its retries, and a proofread waiting behind it changes nothing.
+
+    This asserted a single generation whenever preverified_fallback_available
+    was set. That was a cost saving resting on one assumption: a refused tone
+    could always fall back to the proofread, so a second attempt was not worth
+    paying for.
+
+    The assumption is gone. The staged layer no longer replaces a tone that is
+    merely unverified, so the tone is what the writer gets, and one attempt at
+    it is not enough. Measured on 2026-08-20: Friendly scored 7.1 percent
+    through Word with the judge saying "clear and readable, but lacks warmth"
+    fourteen times, and through the adapter the tone stage came back
+    used_llm=False - its single generation had been refused, so its "tone
+    result" was the deterministic text, which is a proofread and cannot be
+    warm.
+
+    The candidate here is still refused, and must be. "must stop unless the
+    council approves it" becoming "can continue without council approval"
+    inverts a prohibition, which is a meaning guard doing its job, so the
+    retry is spent and the answer is still not complete. That is the point:
+    the extra generation is spent exactly where an answer was about to be
+    thrown away.
+    """
     source = "The funding must stop unless the council approves it."
-    runtime = FakeRuntime(("The funding can continue without council approval.",))
+    # Two answers, because the retry now happens and the fixture is asked
+    # twice. Both invert the prohibition, so the guard has to refuse both and
+    # the safety assertion below still means something.
+    runtime = FakeRuntime(
+        (
+            "The funding can continue without council approval.",
+            "The funding can keep going even if the council says no.",
+        )
+    )
     value, _ = engine(classifier=FakeClassifier(), runtime=runtime)
 
     result = value.analyze(
@@ -2460,7 +2491,8 @@ def test_preverified_style_fallback_uses_one_generation_attempt():
         )
     )
 
-    assert len(runtime.generate_calls) == 1
+    assert len(runtime.generate_calls) > 1
+    # The meaning guard still refuses it, retry or no retry.
     assert not result.quality_complete
 
 

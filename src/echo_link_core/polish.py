@@ -1633,14 +1633,27 @@ class PolishEngine:
         safe_candidates: list[_SafeCandidate] = []
         used_safe_tone_fallback = False
         attempt_protected_terms = generated_protected_terms
-        attempt_count = (
-            1
-            if (
-                request.preverified_fallback_available
-                and request.command in _STAGED_STYLE_COMMANDS
-            )
-            else accepted_plan.retry_limit + 1
-        )
+        # A staged tone gets its retries like anything else.
+        #
+        # This used to be a single attempt whenever a proofread already
+        # existed, on the reasoning that a refused tone could always fall back
+        # to it. That reasoning is gone: the staged layer no longer replaces a
+        # tone that is merely unverified, so the tone is what the writer gets,
+        # and one shot at it is not enough.
+        #
+        # Measured on 2026-08-20. Friendly scored 7.1 percent through Word with
+        # the judge saying "clear and readable, but lacks warmth" fourteen
+        # times. Through the adapter the tone stage came back used_llm=False:
+        # its one generation was refused, so its "tone result" was the
+        # deterministic text, which is a proofread and cannot be warm. The
+        # retry prompt is built for exactly this - it feeds the actor and
+        # negation inventories back on the second attempt - and it was never
+        # allowed to run on the path that needed it most.
+        #
+        # Free on the tones that already work: the attempt loop breaks as soon
+        # as validation accepts, so only a section about to be refused spends
+        # the extra generation.
+        attempt_count = accepted_plan.retry_limit + 1
         for attempt in range(attempt_count):
             retry_note = ""
             if attempt:
@@ -3589,11 +3602,56 @@ class PolishWritingAssistantAdapter:
                         "AI proofread plus safe plain-language fallback ready."
                     ),
                 )
+        # Replacing a tone with a proofread guarantees no tone, so it has to be
+        # reserved for a tone result that is unsafe or unusable - never for one
+        # that is merely unproved.
+        #
+        # This used to fire on "not result.quality_complete", which is False
+        # for any tone whose style could not be VERIFIED. d3e9e1a leaves it
+        # False on purpose so the retry and the reporting can read it. The
+        # effect was that the engine accepted a warm rewrite and this layer
+        # immediately swapped it for the earlier proofread, and the writer got
+        # correct, cold prose.
+        #
+        # Measured on 2026-08-20: Friendly scored 7.1 percent through Word with
+        # a 27B judge giving the same reason fourteen times, "clear and
+        # readable, but lacks warmth", while the app said so itself on the
+        # button - "Correction ready. Requested Friendly style was not safely
+        # applied." Every tone in the palette is in _STAGED_STYLE_COMMANDS, so
+        # every one of them took this path.
+        #
+        # The pair below is the same test _beats_deterministic uses at line
+        # 1188 for the same kind of decision: did the meaning move, and is
+        # there a residual that always blocks. Deliberately not a second
+        # vocabulary for "is this answer safe".
+        tone_is_unusable = (
+            not str(getattr(result, "text", "") or "").strip()
+            or not getattr(result.validation, "accepted", False)
+            or bool(
+                _ALWAYS_BLOCKING_RESIDUALS.intersection(result.residual_errors)
+            )
+        )
+        if command in _STAGED_STYLE_COMMANDS and command != "Caveman":
+            # Say what happened to the tone, every time. This decision had no
+            # trace at all, and the only way it was ever found was a writer
+            # reading "Requested Friendly style was not safely applied" off a
+            # button. A staged fallback that leaves no log cannot be counted,
+            # and a tone that cannot be counted cannot be fixed.
+            logger.info(
+                "Staged %s: keeping=%s accepted=%s complete=%s ready=%s "
+                "residual=%s",
+                command,
+                "proofread" if tone_is_unusable else "tone",
+                getattr(result.validation, "accepted", None),
+                result.quality_complete,
+                result.review_ready,
+                result.residual_errors or "none",
+            )
         if (
             command in _STAGED_STYLE_COMMANDS
             and command != "Caveman"
             and proofread is not None
-            and (not result.quality_complete or not result.review_ready)
+            and tone_is_unusable
         ):
             command_key = command.strip().casefold()
             proofread_already_matches_tone = bool(
