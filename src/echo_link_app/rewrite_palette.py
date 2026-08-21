@@ -49,6 +49,10 @@ from echo_link_app.accessibility import set_accessible, update_status_label
 from echo_link_app.ai_status import user_ai_status
 from echo_link_app.review_spans import (
     FILTERS,
+    TONE_BATCH_PARAGRAPHS,
+    join_tone_batch,
+    split_tone_batch,
+    tone_request_batches,
     _apply_all_sentence_suggestions,
     _apply_sentence_suggestion,
     _category_name,
@@ -268,6 +272,15 @@ class RewritePalette(QDialog):
         # attempt id -> suggestion id. The foreground attempt additionally
         # drives the busy state, progress timer, and timeout UI.
         self._ai_attempts: dict[int, str] = {}
+        # Which sections travelled together in one tone request, keyed by
+        # attempt. One entry per batched request; a single-section request
+        # records nothing here and behaves exactly as it always has.
+        self._ai_batch_members: dict[int, tuple[str, ...]] = {}
+        # Sections whose batch came back with the wrong paragraph count. They
+        # are re-requested one at a time, and never batched again, so a model
+        # that merges cannot put the same sections through the same failure on
+        # a loop.
+        self._ai_batch_blocked: set[str] = set()
         # How many attempts may run at once. The host window raises this on
         # capable hardware; the default keeps historical single-flight
         # behavior everywhere else.
@@ -1446,6 +1459,25 @@ class RewritePalette(QDialog):
                 "Sentence rewrite returned no text. Showing the current correction."
             )
             return
+        members = self._ai_batch_members.pop(attempt, ())
+        if len(members) > 1:
+            parts = split_tone_batch(rewritten, len(members))
+            if parts is None:
+                # The model merged or split the paragraphs it was given. The
+                # whole answer must NOT go to the first section - that would
+                # write five paragraphs over one - so the batch is thrown away
+                # and every member is requested on its own, which is the
+                # behaviour that existed before batching.
+                for member in members:
+                    self._ai_requested_ids.discard(member)
+                    self._ai_batch_blocked.add(member)
+                self._restore_visible_suggestion(suggestion_id)
+                self._set_status("Preparing this section on its own.")
+                QTimer.singleShot(0, self._request_next_ai_prefetch)
+                return
+            for member, part in zip(members[1:], parts[1:]):
+                self._file_batch_sibling(member, part, message)
+            rewritten = parts[0]
         updated_suggestions = []
         found = False
         for suggestion in self._suggestions:
@@ -1518,6 +1550,11 @@ class RewritePalette(QDialog):
             )
             return
         self._ai_attempts.pop(attempt, None)
+        # A batched request that failed took its siblings down with it. Let
+        # them be requested again individually rather than leaving them marked
+        # as requested and never answered.
+        for member in self._ai_batch_members.pop(attempt, ())[1:]:
+            self._ai_requested_ids.discard(member)
         foreground = attempt == self._active_ai_attempt_id
         was_background = self._active_ai_background if foreground else True
         if foreground:
@@ -1583,6 +1620,7 @@ class RewritePalette(QDialog):
         self._active_ai_attempt_id = 0
         self._active_ai_suggestion_id = ""
         self._ai_attempts.clear()
+        self._ai_batch_members.clear()
         self._analysis_pending = False
         self._busy = False
         self._preview_base = ""
@@ -1642,6 +1680,7 @@ class RewritePalette(QDialog):
         self._active_ai_attempt_id = 0
         self._active_ai_suggestion_id = ""
         self._ai_attempts.clear()
+        self._ai_batch_members.clear()
         self._analysis_pending = False
         self._closing_after_choice = True
         self.hide()
@@ -1770,6 +1809,91 @@ class RewritePalette(QDialog):
         self._cancel_active_ai_request()
         self._request_sentence_rewrite()
 
+    def _tone_batch_ids(self, primary_id: str, command: str) -> tuple[str, ...]:
+        """The sections that should travel with this one in a tone request.
+
+        A tone applied one paragraph at a time cannot sound like anything: the
+        app log recorded requests as small as "command=Formal characters=43".
+        Grouping is by 4 to 5 paragraphs or 800 characters, whichever comes
+        first, which is the shape Curtis set from using the product.
+
+        Proofread is deliberately excluded. It measures well per section
+        already - Improve 71.4 percent, Clear 66.7 - and there is no reason to
+        put a working path through a new one.
+
+        Only sections that have not been requested yet can join, and only
+        consecutive ones, so this never reorders or revisits the document.
+        """
+        if command == "Proofread" or primary_id in self._ai_batch_blocked:
+            return (primary_id,)
+        available: list[str] = []
+        started = False
+        for suggestion in self._review_suggestions:
+            suggestion_id = str(getattr(suggestion, "suggestion_id", ""))
+            if not suggestion_id:
+                continue
+            if suggestion_id == primary_id:
+                started = True
+            elif not started:
+                continue
+            if suggestion_id != primary_id and (
+                suggestion_id in self._ai_requested_ids
+                or suggestion_id in self._ai_completed_ids
+                or suggestion_id in self._ai_failed_ids
+                or suggestion_id in self._ai_batch_blocked
+            ):
+                break
+            available.append(suggestion_id)
+            if len(available) >= TONE_BATCH_PARAGRAPHS:
+                break
+        if not available:
+            return (primary_id,)
+        texts = [self._review_text_for(value) for value in available]
+        first = tone_request_batches(texts)[0]
+        return tuple(available[index] for index in first)
+
+    def _review_text_for(self, suggestion_id: str) -> str:
+        for suggestion in self._review_suggestions:
+            if str(getattr(suggestion, "suggestion_id", "")) == suggestion_id:
+                return str(getattr(suggestion, "replacement", "")).strip()
+        return ""
+
+    def _file_batch_sibling(self, suggestion_id: str, text: str, message: str) -> None:
+        """Record one batched paragraph's answer against its own section.
+
+        The apply unit stays one paragraph. This is what keeps the batching
+        safe: the model saw five paragraphs, but each one is filed and later
+        replaced on its own, so no replacement ever spans a paragraph mark.
+        """
+        updated = []
+        found = False
+        for suggestion in self._suggestions:
+            if str(getattr(suggestion, "suggestion_id", "")) != suggestion_id:
+                updated.append(suggestion)
+                continue
+            found = True
+            updated.append(
+                replace(
+                    suggestion,
+                    category="Rewrite",
+                    categories=("Rewrite",),
+                    title="Local sentence rewrite",
+                    explanation=(
+                        "Review this local rewrite, then choose Replace Text or Dismiss."
+                    ),
+                    replacement=text,
+                    has_changes=text != str(suggestion.original),
+                )
+            )
+        if not found:
+            return
+        self._suggestions = tuple(updated)
+        self._ai_completed_ids.add(suggestion_id)
+        self._ai_request_started.pop(suggestion_id, 0.0)
+        self._ai_failed_ids.discard(suggestion_id)
+        self._ai_failure_messages.pop(suggestion_id, None)
+        self._ai_ready_messages[suggestion_id] = message
+
     def _request_ai_proofread_current(self) -> bool:
         if not self._ai_proofread or self._busy or self._view not in {"card", "loading"}:
             return False
@@ -1786,12 +1910,20 @@ class RewritePalette(QDialog):
         source = str(getattr(suggestion, "replacement", "")).strip()
         if not source:
             return False
-        self._ai_requested_ids.add(suggestion_id)
+        command = self._selected_tone_command(automatic=True)
+        members = self._tone_batch_ids(suggestion_id, command)
+        for member in members:
+            self._ai_requested_ids.add(member)
+        if len(members) > 1:
+            source = join_tone_batch(
+                [self._review_text_for(member) for member in members]
+            )
         self._start_sentence_ai_request(
             suggestion_id,
             source,
-            self._selected_tone_command(automatic=True),
+            command,
             "AI proofread" if self.tone_combo.currentText() == "Clear" else "tone rewrite",
+            members,
         )
         return True
 
@@ -1820,12 +1952,20 @@ class RewritePalette(QDialog):
             source = str(getattr(suggestion, "replacement", "")).strip()
             if not source:
                 continue
-            self._ai_requested_ids.add(suggestion_id)
+            command = self._selected_tone_command(automatic=True)
+            members = self._tone_batch_ids(suggestion_id, command)
+            for member in members:
+                self._ai_requested_ids.add(member)
+            if len(members) > 1:
+                source = join_tone_batch(
+                    [self._review_text_for(member) for member in members]
+                )
             self._start_sentence_ai_request(
                 suggestion_id,
                 source,
-                self._selected_tone_command(automatic=True),
+                command,
                 "AI proofread",
+                members,
             )
             QTimer.singleShot(0, self._request_next_ai_prefetch)
             return True
@@ -1864,6 +2004,7 @@ class RewritePalette(QDialog):
         source: str,
         command: str,
         activity: str,
+        batch_members: tuple[str, ...] = (),
     ) -> None:
         # Windows editors separate paragraphs with bare \r, which language
         # models do not reliably read as a line break: they merged the
@@ -1873,6 +2014,8 @@ class RewritePalette(QDialog):
         self._ai_attempt_counter += 1
         attempt_id = self._ai_attempt_counter
         self._ai_attempts[attempt_id] = suggestion_id
+        if len(batch_members) > 1:
+            self._ai_batch_members[attempt_id] = batch_members
         current = self._current_review_suggestion()
         current_id = str(getattr(current, "suggestion_id", ""))
         quiet = bool(
@@ -2074,6 +2217,7 @@ class RewritePalette(QDialog):
         for pending in self._ai_attempts.values():
             self._ai_requested_ids.discard(pending)
         self._ai_attempts.clear()
+        self._ai_batch_members.clear()
         if suggestion_id:
             self._ai_requested_ids.discard(suggestion_id)
         if self._busy:

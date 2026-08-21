@@ -4452,3 +4452,100 @@ def test_the_published_state_follows_the_section(app, monkeypatch):
     palette._ai_completed_ids.discard("sentence:on-screen")
     palette._ai_failed_ids.add("sentence:on-screen")
     assert palette._section_provenance_label() == "rules-only"
+
+
+def _replacement_texts(palette):
+    return [str(getattr(item, "replacement", "")) for item in palette._suggestions]
+
+
+def test_a_tone_request_covers_several_paragraphs_at_once(app):
+    """A tone gets a span big enough to have a tone.
+
+    Measured 2026-08-20: tones were applied one paragraph at a time and the
+    app log recorded "command=Formal characters=43". Proofread is deliberately
+    left per-section, so this only changes the tone path.
+    """
+    palette = RewritePalette(
+        suggestion_engine=_SuggestionEngine(),
+        ai_proofread=True,
+    )
+    requests = []
+    palette.sentence_rewrite_requested.connect(lambda *args: requests.append(args))
+    palette.tone_combo.setCurrentText("Friendly")
+    palette.show_capture(
+        "Echo-Link are ready. Clean sentence. Third sentence.\nAnother sentence."
+    )
+    app.processEvents()
+    palette.badge_button.click()
+    app.processEvents()
+
+    assert requests
+    source = requests[0][2]
+    assert chr(10) * 2 in source, source
+    palette.finish_choice()
+
+
+def test_a_batch_answer_is_filed_to_each_paragraph_in_order(app):
+    palette = RewritePalette(
+        suggestion_engine=_SuggestionEngine(),
+        ai_proofread=True,
+    )
+    requests = []
+    palette.sentence_rewrite_requested.connect(lambda *args: requests.append(args))
+    palette.tone_combo.setCurrentText("Friendly")
+    palette.show_capture(
+        "Echo-Link are ready. Clean sentence. Third sentence.\nAnother sentence."
+    )
+    app.processEvents()
+    palette.badge_button.click()
+    app.processEvents()
+
+    attempt, first_id, source, *_ = requests[0]
+    count = len(source.split(chr(10) * 2))
+    answer = (chr(10) * 2).join(f"Warm paragraph {n}." for n in range(1, count + 1))
+    palette.show_sentence_result(attempt, first_id, answer, "Friendly ready.")
+    app.processEvents()
+
+    texts = _replacement_texts(palette)
+    assert "Warm paragraph 1." in texts
+    if count > 1:
+        # Every paragraph of the answer reached its OWN section, and no
+        # section received more than its own paragraph.
+        assert "Warm paragraph 2." in texts
+        assert not any(chr(10) * 2 in value for value in texts)
+    palette.finish_choice()
+
+
+def test_a_merged_batch_answer_never_reaches_a_section(app):
+    """The essay-2 fusing defect, caught instead of applied.
+
+    A model that merges the paragraphs it was given returns one block for
+    several sections. Writing that block into the first section would put
+    several paragraphs where one belongs, and applying it would delete the
+    breaks between them. The batch is discarded and the sections are prepared
+    individually instead.
+    """
+    palette = RewritePalette(
+        suggestion_engine=_SuggestionEngine(),
+        ai_proofread=True,
+    )
+    requests = []
+    palette.sentence_rewrite_requested.connect(lambda *args: requests.append(args))
+    palette.tone_combo.setCurrentText("Friendly")
+    palette.show_capture(
+        "Echo-Link are ready. Clean sentence. Third sentence.\nAnother sentence."
+    )
+    app.processEvents()
+    palette.badge_button.click()
+    app.processEvents()
+
+    attempt, first_id, source, *_ = requests[0]
+    if len(source.split(chr(10) * 2)) < 2:
+        palette.finish_choice()
+        return
+    merged = "Everything the model was given, run together into one block."
+    palette.show_sentence_result(attempt, first_id, merged, "Friendly ready.")
+    app.processEvents()
+
+    assert merged not in _replacement_texts(palette)
+    palette.finish_choice()

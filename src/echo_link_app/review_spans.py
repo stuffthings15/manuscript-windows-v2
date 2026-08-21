@@ -27,6 +27,91 @@ _REVIEW_MAX_CHARACTERS = 1_200
 _REVIEW_MAX_WORDS = 180
 
 
+# How much text one TONE request covers.
+#
+# A tone was being applied one paragraph at a time, and the app log recorded
+# requests as small as "command=Formal characters=43". Nothing sounds friendly
+# in 43 characters. Curtis set this shape from using the product: 4 to 5
+# paragraphs, or at least 800 characters, whichever comes first.
+#
+# This governs the REQUEST only. The apply unit stays one paragraph - see
+# split_tone_batch for why that separation is not negotiable.
+TONE_BATCH_PARAGRAPHS = 5
+TONE_BATCH_MINIMUM_CHARACTERS = 800
+# A ceiling so one request cannot run past the correction timeout. Five full
+# 1200-character sections would be 6000; this stops a batch well short of that
+# while still clearing the 800 floor several times over.
+TONE_BATCH_MAXIMUM_CHARACTERS = 4_000
+# Paragraphs go to the model separated by a blank line. A bare newline is what
+# the corpus damage uses INSIDE a paragraph, so it cannot mark a boundary.
+TONE_BATCH_SEPARATOR = chr(10) * 2
+
+
+def tone_request_batches(texts: Sequence[str]) -> tuple[tuple[int, ...], ...]:
+    """Group consecutive sections into single tone requests.
+
+    Returns tuples of indices into `texts`. A batch closes when it reaches
+    TONE_BATCH_PARAGRAPHS sections or TONE_BATCH_MINIMUM_CHARACTERS, whichever
+    comes first, and never grows past TONE_BATCH_MAXIMUM_CHARACTERS.
+
+    A section that is already long enough to carry a tone by itself ends up in
+    a batch of one, which is exactly today's behaviour for it.
+    """
+    batches: list[tuple[int, ...]] = []
+    current: list[int] = []
+    total = 0
+    for index, value in enumerate(texts):
+        length = len(str(value or ""))
+        if current and total + length > TONE_BATCH_MAXIMUM_CHARACTERS:
+            batches.append(tuple(current))
+            current = []
+            total = 0
+        current.append(index)
+        total += length
+        if len(current) >= TONE_BATCH_PARAGRAPHS or total >= TONE_BATCH_MINIMUM_CHARACTERS:
+            batches.append(tuple(current))
+            current = []
+            total = 0
+    if current:
+        batches.append(tuple(current))
+    return tuple(batches)
+
+
+def join_tone_batch(texts: Sequence[str]) -> str:
+    """One request body, paragraphs separated by a blank line."""
+    return TONE_BATCH_SEPARATOR.join(str(value or "").strip() for value in texts)
+
+
+def split_tone_batch(answer: str, expected: int) -> tuple[str, ...] | None:
+    """Split a batch answer back into one string per paragraph, or refuse it.
+
+    Returns None when the model did not return exactly `expected` paragraphs.
+    That is the whole safety of this feature. Reviewing across a paragraph mark
+    and writing the answer back as a single run silently DELETES the break -
+    essay 2's title and subtitle came back fused, ten paragraphs in and nine
+    out - and the AI Brain records from 2026-08-01 that both local models merge
+    multi-paragraph requests, which is why batching was avoided until now.
+
+    Refusing here sends those sections back to individual requests, so the
+    worst case of a merged answer is today's behaviour, never a lost paragraph
+    break.
+    """
+    blocks = [
+        " ".join(block.split())
+        for block in re.split(r"(?:\r?\n){2,}", str(answer or ""))
+        if block.strip()
+    ]
+    if len(blocks) != int(expected):
+        logger.info(
+            "Writing HUD tone batch refused: expected %s paragraphs, model returned %s",
+            expected,
+            len(blocks),
+        )
+        return None
+    return tuple(blocks)
+
+
+
 @dataclass(frozen=True, slots=True)
 class _SentenceSuggestion:
     suggestion_id: str
