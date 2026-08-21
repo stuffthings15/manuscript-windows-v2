@@ -502,6 +502,7 @@ class DictationEngine:
                 recovery_session_key=f"{time.time_ns()}-{session_id}",
                 hands_free=bool(hands_free),
             )
+            microphone_started = time.monotonic()
             try:
                 self.recorder.start(
                     resolve_microphone(
@@ -509,6 +510,15 @@ class DictationEngine:
                         settings_snapshot.microphone_name,
                     ),
                     level_callback=self._emit_level,
+                )
+                # How long the writer waited between asking to dictate and the
+                # microphone actually listening. Anything spent here is speech
+                # the writer has already said and the recorder never heard,
+                # which shows up later as the VAD discarding the clip rather
+                # than as slowness.
+                logger.info(
+                    "Dictation recording started seconds=%.3f",
+                    time.monotonic() - microphone_started,
                 )
             except Exception as exc:
                 try:
@@ -1126,7 +1136,18 @@ class DictationEngine:
             except Exception:
                 logger.warning("Could not record insertion uncertainty", exc_info=True)
         self._insertion_in_progress = True
+        insert_started = time.monotonic()
         record = self.inserter.insert_into(self._target_window, text)
+        # The last unmeasured stretch. Everything before this was timed and
+        # came back fast, while the writer still waited - so the gap between
+        # the refined text existing and it appearing on screen had to be
+        # closed too. Characters only, never the text.
+        logger.info(
+            "Dictation insertion finished seconds=%.3f characters=%d inserted=%s",
+            time.monotonic() - insert_started,
+            len(str(text or "")),
+            record is not None,
+        )
         if record is None:
             self._insertion_in_progress = False
             raise RuntimeError(
