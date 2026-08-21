@@ -28,6 +28,7 @@ for entry in (ROOT / "src", ROOT / "tools"):
     if str(entry) not in sys.path:
         sys.path.insert(0, str(entry))
 
+import harness_state  # noqa: E402
 from animal_essay_corpus_probe import CORPUS, _essay_files, load_essays  # noqa: E402
 from repro_accept_advance import (  # noqa: E402
     counter_text,
@@ -120,7 +121,24 @@ def tone_combo(hud):
 
 
 def current_tone(hud) -> str:
-    """The tone the control is showing now, or "" if it cannot be read."""
+    """The tone the control is showing now, or "" if it cannot be read.
+
+    The published state answers this directly, and it is believed first.
+
+    Measured 2026-08-21: a Friendly run reported `tone_selected=0`,
+    `tone_unavailable=1` and `applied=0`, while the app's own log showed it had
+    run Friendly - the click had worked and only the READ-BACK failed. Reading
+    a control's name through UI Automation while the HUD is repainting is
+    exactly the kind of guess this whole exercise is replacing, and here it
+    made a working selection look like an unreachable control. That produced
+    the message "The HUD tone control is not reachable through UI Automation",
+    which was false and misled two investigations.
+    """
+    published = harness_state.recent_state()
+    if published is not None:
+        stated = harness_state.selected_tone(published)
+        if stated:
+            return stated
     combo = tone_combo(hud)
     if combo is None:
         return ""
@@ -216,10 +234,23 @@ def regenerate_button(hud):
 def review_readiness(hud) -> str:
     """What the HUD says about its own readiness, or "" if it is not saying.
 
-    The counter's accessible name now carries it, so this waits on a stated
-    fact instead of inferring readiness from which buttons happen to be
-    enabled. Every timing patch in this file before now was a guess at that.
+    Read from the published state first, and only fall back to the accessible
+    name when the app is not publishing one.
+
+    The label version could only recognise sentences it already knew, and
+    returned "unknown" for anything else. Measured 2026-08-21: a failing tone
+    run reported unknown=54, pressed nothing, and reported applied=0 - while
+    the app's own event log showed it had requested the tone, filed the batch
+    and restored the card. The signal existed and nothing was reading it.
     """
+    published = harness_state.recent_state()
+    if published is not None:
+        stated = harness_state.readiness(published)
+        if stated:
+            return stated
+    published = harness_state.recent_state()
+    if published is not None and published.get("provenance"):
+        return str(published["provenance"])
     if hud is None:
         return ""
     from repro_accept_advance import _descend
@@ -243,6 +274,9 @@ def review_readiness(hud) -> str:
 
 def section_provenance(hud) -> str:
     """Who produced the text on the card: ai, waiting, rules-only, no-ai.
+
+    From the published state when there is one, for the same reason as
+    readiness: a fact the app states beats a sentence the harness parses.
 
     Separate from review_readiness, because the review can report every section
     ready while THIS one is still waiting on the model - and that is exactly
