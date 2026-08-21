@@ -27,15 +27,61 @@ def log_length() -> int:
         return 0
 
 
-def main() -> int:
-    start = log_length()
-    # pythonw has no console, so the old instance is stopped by image name.
-    for image in ("pythonw.exe",):
-        subprocess.call(
-            ["taskkill", "/F", "/IM", image],
+def stop_the_running_app() -> int:
+    """Stop Manuscript whatever interpreter it is running under.
+
+    This used to kill pythonw.exe by image name, which was right until the
+    launcher stopped using pythonw. Windows Application Control blocks
+    pythonw.exe on this machine, so run_dev_app falls back to python.exe -
+    and the killer did not follow it.
+
+    Measured on 2026-08-20: the app had been running as python.exe since
+    10:47, roughly six hours, while every "restart" in between reported
+    success and changed nothing. Every Word measurement in that window ran
+    against code from 10:47, so four separate product fixes were invisible to
+    the harness that was supposed to prove them, and the HUD kept reporting
+    behaviour those fixes had already changed.
+
+    Matched on the command line, not the image name, and only ever on
+    run_echo_link. Killing python.exe by image would take the test suite, the
+    grader and this tool's own parent with it.
+
+    Returns how many processes were stopped, so a caller can tell "nothing was
+    running" from "the old one is still there".
+    """
+    script = "run_echo_link"
+    query = (
+        "Get-CimInstance Win32_Process | "
+        f"Where-Object {{ $_.CommandLine -like '*{script}*' }} | "
+        "ForEach-Object { $_.ProcessId }"
+    )
+    try:
+        found = subprocess.run(  # noqa: S603
+            ["powershell", "-NoProfile", "-Command", query],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    stopped = 0
+    for line in found.splitlines():
+        pid = line.strip()
+        if not pid.isdigit():
+            continue
+        subprocess.call(  # noqa: S603
+            ["taskkill", "/F", "/PID", pid],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        stopped += 1
+    print(f"stopped {stopped} running app process(es)", flush=True)
+    return stopped
+
+
+def main() -> int:
+    start = log_length()
+    stop_the_running_app()
     time.sleep(2.0)
     subprocess.Popen(
         [
