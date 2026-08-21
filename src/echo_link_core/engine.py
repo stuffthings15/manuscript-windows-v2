@@ -932,7 +932,18 @@ class DictationEngine:
             warning = deterministic.warning
             ai_ready = True
             if settings.mode not in (DictationMode.FAST, DictationMode.DEVELOPER):
+                # Measured 2026-08-21: transcription itself runs in 0.0 to 0.3
+                # seconds on CPU and never reloads, so the minute Curtis waited
+                # was never the speech model. Getting the WRITING model ready is
+                # the candidate, and nothing timed it at the point of use.
+                ai_wait_started = time.monotonic()
                 ai_ready = self.prepare_ai_for_execution(settings=settings)
+                logger.info(
+                    "Dictation AI ready_wait seconds=%.3f ready=%s mode=%s",
+                    time.monotonic() - ai_wait_started,
+                    ai_ready,
+                    settings.mode.value,
+                )
             if settings.keep_recovery_text:
                 try:
                     self.store.checkpoint_recovery(
@@ -1008,9 +1019,17 @@ class DictationEngine:
             try:
                 if not ai_ready:
                     raise RuntimeError("Accepted local AI is not ready.")
+                refine_started = time.monotonic()
                 with self._correction_lock:
                     self.correction.update_settings(settings)
                     refined = self.correction.correct(raw_text, DictationMode.REFINE)
+                # The refinement pass, timed at the point of use. Characters
+                # only - never the text itself.
+                logger.info(
+                    "Dictation refinement finished seconds=%.3f characters=%d",
+                    time.monotonic() - refine_started,
+                    len(str(raw_text or "")),
+                )
                 warning = _join_warning(warning, refined.warning)
             except Exception:
                 logger.warning("Post-insert refinement failed; keeping deterministic text", exc_info=True)
