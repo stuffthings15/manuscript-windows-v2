@@ -1938,7 +1938,23 @@ class EchoLinkWindow(QMainWindow):
         if int(focused.handle) == int(palette.winId()):
             return
         record = self.selected_text_record
-        if record is not None and (
+        if record is None:
+            # Not knowing which document is under review is not the same as
+            # the writer having left it, and it must not be treated as such.
+            #
+            # This used to run only from the selection monitor's cleared
+            # callback, where a missing record really did mean the capture was
+            # gone. d6dae27 put it on the 175ms focus timer to fix a HUD that
+            # could never be lowered during a review, and that made a
+            # momentary gap between captures enough to drop the card behind
+            # Word - which the owner reported as the suggestion window sitting
+            # behind the document while it worked.
+            #
+            # A review that is still preparing is exactly when the writer needs
+            # to see it, so the safe answer to "which document is this?" being
+            # unknown is to change nothing.
+            return
+        if (
             focused.handle == record.window.handle
             and focused.process_id == record.window.process_id
         ):

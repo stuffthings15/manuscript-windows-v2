@@ -1404,7 +1404,18 @@ def test_the_hud_is_lowered_even_while_the_selection_monitor_is_paused(
         process_id = 4242
 
     monkeypatch.setattr(window_module, "active_window", lambda: _Other())
-    window.selected_text_record = None
+
+    # A KNOWN document that is not the focused window. That is what "the
+    # writer moved away" looks like; a missing record only means the app does
+    # not know which document this is, and is handled separately below.
+    class _Window:
+        handle = 111
+        process_id = 222
+
+    class _Record:
+        window = _Window()
+
+    window.selected_text_record = _Record()
 
     window._check_palette_focus()
     app.processEvents()
@@ -1434,6 +1445,44 @@ def test_a_pinned_hud_is_not_lowered_by_the_focus_check(app, tmp_path, monkeypat
     class _Other:
         handle = 987654
         process_id = 4242
+
+    monkeypatch.setattr(window_module, "active_window", lambda: _Other())
+    window.selected_text_record = None
+
+    window._check_palette_focus()
+    app.processEvents()
+
+    assert bool(palette.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+    window.close()
+
+
+def test_an_unknown_document_does_not_lower_the_hud(app, tmp_path, monkeypatch):
+    """Not knowing which document is under review is not the writer leaving it.
+
+    d6dae27 moved this check onto the 175ms focus timer so a HUD could be
+    lowered during a review at all. That made a momentary gap between captures
+    enough to drop the card behind Word, which the owner reported as the
+    suggestion window sitting behind the document while it was still working.
+
+    A review that is still preparing is exactly when the writer needs to see
+    it, so an unknown document must change nothing.
+    """
+    from echo_link_app import window as window_module
+
+    window = EchoLinkWindow(
+        EchoLinkStore(tmp_path / "echo-link.db"),
+        enable_hotkey=False,
+        enable_tray=False,
+    )
+    palette = window.rewrite_palette
+    palette.show()
+    palette.set_stays_on_top(True)
+    app.processEvents()
+    assert bool(palette.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+
+    class _Other:
+        handle = 424242
+        process_id = 999
 
     monkeypatch.setattr(window_module, "active_window", lambda: _Other())
     window.selected_text_record = None
