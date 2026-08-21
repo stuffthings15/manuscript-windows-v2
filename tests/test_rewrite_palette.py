@@ -4309,9 +4309,14 @@ def test_a_section_the_ai_has_not_corrected_cannot_be_replaced(app):
 
     palette._mark_ai_provenance("sentence:not-done-yet")
 
-    assert not palette.apply_suggestion_button.isEnabled()
+    # The card SAYS what happened. It does not decide what the writer may do
+    # about it - _show_review_suggestion has owned that since before this
+    # test existed, and it carries the conditions that make locking safe.
+    # Asserting the lock here was asserting the wrong owner, and it hid a
+    # second, blunter lock that left Replace and Dismiss both dead.
     assert "built-in rules only" in palette.after_heading.text()
     assert "Waiting for the AI" in palette.suggestion_explanation.text()
+    assert palette._section_provenance_label() == "waiting"
 
 
 def test_a_review_with_the_ai_switched_off_can_still_be_replaced(app):

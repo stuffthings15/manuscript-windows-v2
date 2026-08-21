@@ -2710,9 +2710,20 @@ class RewritePalette(QDialog):
             # completions, so the model is not failing - it simply had not been
             # asked yet.
             #
-            # Disabled rather than hidden, so the writer can still read the
-            # section and see that something is coming.
-            self.apply_suggestion_button.setEnabled(False)
+            # Said, not enforced here. The enforcement lives in the render
+            # above, which has been locking an unanswered section for the
+            # ordered document review since before this branch existed and
+            # carries the conditions that make it safe: only in the card or
+            # loading view, only for the ordered replacer or the request
+            # actually in flight.
+            #
+            # 27116e7 added a second, blunter lock in this method - no view
+            # check, no flow check - and two mechanisms doing one job with
+            # different conditions is how a card ends up with Replace and
+            # Dismiss both dead and a harness recording "1 of 25, all sections
+            # ready, section ai" while pressing nothing. One owner for the
+            # decision, and it is not this method: this one describes what
+            # happened, the render decides what the writer may do about it.
             note += " Waiting for the AI before this can be replaced."
         existing = self.suggestion_explanation.text().strip()
         combined = f"{existing} {note}".strip() if existing else note
