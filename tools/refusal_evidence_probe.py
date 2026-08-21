@@ -39,6 +39,14 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--essays", default="1,2")
     parser.add_argument("--label", default="")
+    # A tone is refused by different guards than a proofread is, and the tone
+    # numbers measured on 2026-08-20 were all held back by refusals, so the
+    # probe has to be able to ask for one.
+    parser.add_argument("--command", default="Proofread")
+    # The tone numbers came from the coherent docx corpus, not the animal
+    # essays this probe shipped with. Evidence has to come from the same text
+    # as the measurement it is explaining.
+    parser.add_argument("--docx", default="", help="directory of .docx essays")
     arguments = parser.parse_args()
     wanted = {
         int(piece)
@@ -67,7 +75,21 @@ def main() -> int:
 
     PolishValidator.validate = recording_validate  # type: ignore[method-assign]
     try:
-        essays = load_essays(CORPUS)
+        if arguments.docx:
+            from grade_corpus import paragraphs as docx_paragraphs
+
+            essays = [
+                {"name": path.stem, "text": chr(10).join(docx_paragraphs(path))}
+                for path in sorted(Path(arguments.docx).glob("*.docx"))
+            ]
+        else:
+            essays = load_essays(CORPUS)
+        command = str(arguments.command)
+        task = (
+            PolishTask.PROOFREAD
+            if command.casefold() == "proofread"
+            else PolishTask.TONE
+        )
         engine = PolishEngine()
         lines: list[str] = ["# Refused corrections, with the answer refused", ""]
         for number, essay in enumerate(essays, start=1):
@@ -79,9 +101,9 @@ def main() -> int:
                 result = engine.analyze(
                     CorrectionRequest(
                         text=piece,
-                        task=PolishTask.PROOFREAD,
+                        task=task,
                         mode=PolishMode("balanced"),
-                        command="Proofread",
+                        command=command,
                         download_consent=True,
                         manual=True,
                     )
