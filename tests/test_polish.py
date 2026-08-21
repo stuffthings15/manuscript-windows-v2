@@ -632,3 +632,23 @@ def test_rewritten_sentence_opening_is_not_an_invented_name(validator):
     )
 
     assert "new named entity added" not in result.failures, result.failures
+
+
+def test_morphological_negation_equals_syntactic_negation(validator):
+    """"unsupported" and "aren't supported" are the same claim.
+
+    Tested directly against _NEGATION on 2026-08-20: "claims that is
+    unsupported" counts 0 negations and "claims that aren't supported" counts
+    1, so unpacking a negative prefix - the plainest of plain-English moves,
+    and one every warm register makes - read as an ADDED negation and was
+    refused as a meaning change.
+    """
+    result = validator.validate(
+        "claims that is unsupported",
+        "claims that aren't supported",
+        task=PolishTask.TONE,
+    )
+
+    assert not any(
+        failure.startswith("negation changed") for failure in result.failures
+    ), result.failures

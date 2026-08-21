@@ -17,6 +17,7 @@ from .polish_entities import (
     _edit_distance_at_most,
     _named_entities,
     _named_entity_matches_source_phrase,
+    _is_ordinary_english_word,
     _named_entity_respelled_in,
     _runtime_opaque_entities,
     _sentence_initial_common_word,
@@ -6197,7 +6198,48 @@ def _restore_source_phrase_casing(source: str, candidate: str) -> str:
             flags=re.IGNORECASE,
         )
     return candidate
+# "unless" is the one common word that survives the tests below - its
+# remainder "less" is a real word and the whole word is too - and it is not a
+# negation of "less". The others are here as cheap insurance.
+_NOT_MORPHOLOGICAL_NEGATIONS = frozenset(
+    {"unless", "unison", "united", "unity", "universal", "university", "until"}
+)
+
+
+def _expand_morphological_negation(text: str) -> str:
+    """Write "unsupported" as "not supported" so both spellings count alike.
+
+    Tested directly on 2026-08-20: _NEGATION found 0 negations in "claims that
+    is unsupported" and 1 in "claims that aren't supported". The two say the
+    same thing, so unpacking a negative prefix - the plainest of plain-English
+    moves, and one every warm register makes - registered as an ADDED negation
+    and was refused as a change of meaning.
+
+    Applied to BOTH sides before counting, so this cannot widen what is
+    accepted: it makes the two spellings agree, and a candidate that genuinely
+    adds or drops a negation still differs and still fails.
+
+    Only "un" is handled, because only "un" was measured. A prefix is unpacked
+    only when what follows it is itself an ordinary English word of at least
+    four letters, which is what keeps "until", "under", "union" and "unique"
+    out of it, and "unless" is named explicitly because it passes that test
+    while meaning nothing of the kind.
+    """
+
+    def expand(match: re.Match[str]) -> str:
+        whole = match.group(0)
+        stem = match.group(1)
+        if whole.casefold() in _NOT_MORPHOLOGICAL_NEGATIONS:
+            return whole
+        if len(stem) < 4 or not _is_ordinary_english_word(stem):
+            return whole
+        return f"not {stem}"
+
+    return re.sub(r"\bun([a-z]+)\b", expand, text, flags=re.IGNORECASE)
+
+
 def _negation_counter(text: str) -> Counter[str]:
+    text = _expand_morphological_negation(text)
     values = []
     for match in _NEGATION.finditer(text):
         value = " ".join(match.group(0).casefold().split())
@@ -6241,6 +6283,12 @@ def _equivalent_absence_count(negative_text: str, state_text: str) -> int:
 
 
 def _negation_count(text: str) -> int:
+    # Both spellings of a negation count alike. This is the counter the
+    # validator's own failure message quotes, and it reads _NEGATION directly
+    # rather than going through _negation_counter, so the expansion has to be
+    # applied here too or "unsupported" against "aren't supported" still reads
+    # as source 0 versus candidate 1.
+    text = _expand_morphological_negation(text)
     # "Neither X nor Y" expresses one negative coordination. Counting both
     # words separately rejects the mandatory repair of malformed
     # "neither X or Y."
