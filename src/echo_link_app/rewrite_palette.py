@@ -1233,6 +1233,16 @@ class RewritePalette(QDialog):
         activate: bool,
         reposition: bool = True,
     ) -> None:
+        # Publish the change, because anything reading the state has to see it.
+        #
+        # State was only written from _render_suggestions, so a view change
+        # without a repaint left the file saying "loading" after the card had
+        # come back. Measured 2026-08-21: the state sat at view=loading,
+        # replace_enabled=True, frozen at the exact second the card was
+        # restored - and a harness trusting that would conclude it could never
+        # press Replace. Instrumentation that goes stale is worse than none,
+        # because it is believed.
+        session_state.record_event("view_changed", view=str(view))
         pages = {
             "badge": self.badge_page,
             "loading": self.loading_page,
@@ -1243,6 +1253,10 @@ class RewritePalette(QDialog):
             raise ValueError(f"Unknown HUD view: {view}")
         old_position = self.pos()
         self._view = view
+        # The published state has to follow the view immediately. Waiting for
+        # the next repaint left it reporting "loading" after the card was
+        # already back, which is a lie a reader cannot detect.
+        self._publish_state(self.card_position.text(), self._review_readiness_label())
         if view == "badge":
             self.target_changed.emit(-1, -1)
         target_page = pages[view]
@@ -1441,6 +1455,9 @@ class RewritePalette(QDialog):
         message = user_ai_status(message)
         attempt = int(attempt_id)
         if attempt not in self._ai_attempts and attempt != self._active_ai_attempt_id:
+            session_state.record_event(
+                "result_ignored_stale", attempt=int(attempt_id), section=str(suggestion_id)[:8]
+            )
             logger.info(
                 "Writing HUD ignored stale AI result attempt=%s active=%s suggestion=%s",
                 attempt_id,
@@ -1639,6 +1656,11 @@ class RewritePalette(QDialog):
         self._ai_progress_timer.stop()
         self._active_ai_attempt_id = 0
         self._active_ai_suggestion_id = ""
+        session_state.record_event(
+            "review_reset",
+            sections=len(self._suggestions),
+            completed=len(self._ai_completed_ids),
+        )
         self._ai_attempts.clear()
         self._ai_batch_members.clear()
         self._ai_toned_ids.clear()
@@ -1700,6 +1722,11 @@ class RewritePalette(QDialog):
         self._ai_progress_timer.stop()
         self._active_ai_attempt_id = 0
         self._active_ai_suggestion_id = ""
+        session_state.record_event(
+            "review_reset",
+            sections=len(self._suggestions),
+            completed=len(self._ai_completed_ids),
+        )
         self._ai_attempts.clear()
         self._ai_batch_members.clear()
         self._ai_toned_ids.clear()
@@ -1799,6 +1826,13 @@ class RewritePalette(QDialog):
             source = join_tone_batch(
                 [self._review_text_for(member) for member in members]
             )
+        session_state.record_event(
+            "tone_requested",
+            tone=command,
+            members=len(members),
+            characters=len(source),
+            section=suggestion_id[:8],
+        )
         self._start_sentence_ai_request(
             suggestion_id,
             source,
@@ -2296,9 +2330,21 @@ class RewritePalette(QDialog):
         self._active_ai_background = False
         for pending in self._ai_attempts.values():
             self._ai_requested_ids.discard(pending)
+        session_state.record_event(
+            "request_cancelled",
+            sections=len(self._suggestions),
+            completed=len(self._ai_completed_ids),
+        )
         self._ai_attempts.clear()
         self._ai_batch_members.clear()
-        self._ai_toned_ids.clear()
+        # NOT the toned set. Cancelling a request in flight does not un-tone
+        # the sections a finished batch already wrote.
+        #
+        # Clearing it here meant selecting a tone wiped the record of what had
+        # just been toned - and selecting a tone is exactly when this runs. The
+        # harness could never learn that a section was already done, so it
+        # regenerated all of them: measured 2026-08-21, four sections in 271
+        # seconds with the skip in place and never once taken.
         if suggestion_id:
             self._ai_requested_ids.discard(suggestion_id)
         if self._busy:
@@ -2452,6 +2498,17 @@ class RewritePalette(QDialog):
                     "provenance": self._section_provenance_label(),
                     "replace_enabled": bool(self.apply_suggestion_button.isEnabled()),
                     "tone_selected": str(self.tone_combo.currentText()),
+                    # Whether the section ON THE CARD has already had the
+                    # selected tone applied to it. A batched tone request tones
+                    # four or five sections at once, so by the time the card
+                    # reaches them the work is done - and the harness was still
+                    # re-selecting the tone and pressing Regenerate for every
+                    # one, at about 69 seconds a section. Nothing published
+                    # said "this one is already done", so nothing could skip it.
+                    "section_toned": bool(
+                        str(getattr(self._current_review_suggestion(), "suggestion_id", ""))
+                        in self._ai_toned_ids
+                    ),
                     "ai_requested": len(self._ai_requested_ids),
                     "ai_completed": len(self._ai_completed_ids),
                     "ai_failed": len(self._ai_failed_ids),

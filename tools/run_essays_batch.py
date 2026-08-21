@@ -695,6 +695,7 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
     for press in range(1, max_presses + 1):
         hud = hud_window(10.0)
         if hud is None:
+            report["stopped_because"] = f"the HUD was gone at press {press}"
             break
         before = counter_text(hud)
         if tone:
@@ -710,10 +711,22 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
             # already chosen, and it is what a writer would press too.
             if select_tone(hud, tone):
                 report["tone_selected"] = report.get("tone_selected", 0) + 1
-                again = regenerate_button(hud)
-                if again is not None and again.IsEnabled and invoke(again):
-                    report["tone_regenerated"] = report.get("tone_regenerated", 0) + 1
-                waited = time.monotonic() + 90.0
+                # Skip the regenerate when this section already carries the
+                # tone. A batched tone request tones four or five sections at
+                # once, so most sections arrive already done, and regenerating
+                # them spent about 69 seconds each re-asking for work that had
+                # been finished minutes earlier: 4 sections in 277 seconds.
+                published = harness_state.recent_state()
+                already = bool(published and published.get("section_toned"))
+                if already:
+                    report["tone_already"] = report.get("tone_already", 0) + 1
+                else:
+                    again = regenerate_button(hud)
+                    if again is not None and again.IsEnabled and invoke(again):
+                        report["tone_regenerated"] = (
+                            report.get("tone_regenerated", 0) + 1
+                        )
+                waited = time.monotonic() + (0.0 if already else 90.0)
                 while time.monotonic() < waited:
                     time.sleep(3.0)
                     hud = hud_window(8.0) or hud
@@ -736,6 +749,10 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
             )
         button = replace_button(hud)
         if button is None:
+            report["stopped_because"] = (
+                f"no Replace button at press {press}; "
+                + harness_state.describe(harness_state.read_state())
+            )
             break
         if not button.IsEnabled:
             # Only wait while the app might still produce a correction. Once it
@@ -766,11 +783,24 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
                 )
                 break
         if not invoke(button):
+            report["stopped_because"] = (
+                f"pressing Replace failed at press {press}; "
+                + harness_state.describe(harness_state.read_state())
+            )
             break
         report["presses"] = press
         time.sleep(6.0)
         hud = hud_window(8.0)
         if hud is None:
+            # The last unnamed exit, and the one that was actually being taken.
+            # A run stopped at four presses of twenty-five with no stall, no
+            # error and no reason, three times in a row, because this break
+            # recorded nothing. presses is set just above it, so the count
+            # looked like a result rather than an interruption.
+            report["stopped_because"] = (
+                f"the HUD could not be found within 8s after press {press}; "
+                + harness_state.describe(harness_state.read_state())
+            )
             break
         after = counter_text(hud)
         report["counters"].append(f"{before}->{after}")
