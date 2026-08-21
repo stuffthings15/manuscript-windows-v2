@@ -73,12 +73,21 @@ def sections(text: str) -> list[str]:
         for block in text.split(separator)
         if block.strip()
     ]
-    # Titles and boilerplate are not prose and cannot carry a tone. Judging
-    # "intentionally error-filled practice essay 7" for warmth cost essay 7 a
-    # tenth of its score and told nobody anything. Every real paragraph in this
-    # corpus runs to sixty words or more, so the line is drawn well clear of
-    # them rather than tuned to the boundary.
-    return [block for block in blocks if len(block.split()) >= MINIMUM_PROSE_WORDS]
+    # Every block, in order, with nothing dropped.
+    #
+    # Titles and boilerplate still must not be judged for warmth - "error-filled
+    # practice essay 7" cost essay 7 a tenth of its score and told nobody
+    # anything - but they are skipped AFTER the two sides are paired, never
+    # before.
+    #
+    # Filtering first makes the pairing depend on the very thing being
+    # measured. Measured twice on 2026-08-20 on the same essay: before the tone
+    # ran, the source had 18 blocks and 14 long enough to score while the
+    # corrected document had 18 and 14; after Friendly ran, a short block grew
+    # past the threshold and the sides came out 14 against 15. Both times the
+    # judge refused to score and the tone was reported as 0.0 percent.
+    # Paragraph structure is what pairs reliably, so pair on that.
+    return blocks
 
 
 def score(
@@ -108,6 +117,13 @@ def score(
     for index, (before, after) in enumerate(
         zip(source_sections, result_sections), start=1
     ):
+        if (
+            len(before.split()) < MINIMUM_PROSE_WORDS
+            and len(after.split()) < MINIMUM_PROSE_WORDS
+        ):
+            # A title or byline on both sides. Not prose, so not judged - but
+            # it kept its place in the pairing, which is the point.
+            continue
         if before == after:
             # Nothing was applied here. It is not a tone failure to judge, but
             # it is certainly not a tone success, so it counts against the
