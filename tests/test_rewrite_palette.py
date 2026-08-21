@@ -4549,3 +4549,36 @@ def test_a_merged_batch_answer_never_reaches_a_section(app):
 
     assert merged not in _replacement_texts(palette)
     palette.finish_choice()
+
+
+def test_the_tone_button_batches_the_sections_after_it(app):
+    """The path a writer actually takes has to be the batched one.
+
+    The first batching commit wired only the automatic proofread path, which
+    is deliberately NOT batched, so no tone request ever grew. Measured live
+    against the running app: one Friendly request of "characters=43".
+
+    The sections after this one already carry a completed PROOFREAD, and that
+    must not disqualify them from being toned - it disqualified all of them,
+    which is precisely how the batch collapsed to one section.
+    """
+    palette = RewritePalette(
+        suggestion_engine=_SuggestionEngine(),
+        ai_proofread=False,
+    )
+    requests = []
+    palette.sentence_rewrite_requested.connect(lambda *args: requests.append(args))
+    palette.show_capture(
+        "Echo-Link are ready. Clean sentence. Third sentence.\nAnother sentence."
+    )
+    app.processEvents()
+    palette.badge_button.click()
+    app.processEvents()
+    requests.clear()
+    palette.tone_combo.setCurrentText("Friendly")
+    app.processEvents()
+
+    assert requests, "choosing a tone made no request"
+    source = requests[-1][2]
+    assert chr(10) * 2 in source, f"tone request was not batched: {source!r}"
+    palette.finish_choice()

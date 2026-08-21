@@ -281,6 +281,9 @@ class RewritePalette(QDialog):
         # that merges cannot put the same sections through the same failure on
         # a loop.
         self._ai_batch_blocked: set[str] = set()
+        # Sections that already have this tone applied to them, so a later
+        # batch does not tone them a second time.
+        self._ai_toned_ids: set[str] = set()
         # How many attempts may run at once. The host window raises this on
         # capable hardware; the default keeps historical single-flight
         # behavior everywhere else.
@@ -1477,6 +1480,7 @@ class RewritePalette(QDialog):
                 return
             for member, part in zip(members[1:], parts[1:]):
                 self._file_batch_sibling(member, part, message)
+            self._ai_toned_ids.update(members)
             rewritten = parts[0]
         updated_suggestions = []
         found = False
@@ -1621,6 +1625,7 @@ class RewritePalette(QDialog):
         self._active_ai_suggestion_id = ""
         self._ai_attempts.clear()
         self._ai_batch_members.clear()
+        self._ai_toned_ids.clear()
         self._analysis_pending = False
         self._busy = False
         self._preview_base = ""
@@ -1681,6 +1686,7 @@ class RewritePalette(QDialog):
         self._active_ai_suggestion_id = ""
         self._ai_attempts.clear()
         self._ai_batch_members.clear()
+        self._ai_toned_ids.clear()
         self._analysis_pending = False
         self._closing_after_choice = True
         self.hide()
@@ -1767,11 +1773,22 @@ class RewritePalette(QDialog):
         self._ai_failed_ids.discard(suggestion_id)
         self._ai_failure_messages.pop(suggestion_id, None)
         self._set_view("loading", activate=True)
+        # The tone the writer asked for covers a span big enough to have a
+        # tone. This is the path a writer actually takes when they pick a tone
+        # and press the button, and batching only the automatic proofread path
+        # left it sending one paragraph at a time - measured live at
+        # "command=Friendly characters=43".
+        members = self._tone_batch_ids(suggestion_id, command, tone_pass=True)
+        if len(members) > 1:
+            source = join_tone_batch(
+                [self._review_text_for(member) for member in members]
+            )
         self._start_sentence_ai_request(
             suggestion_id,
             source,
-            self._selected_tone_command(),
+            command,
             "sentence rewrite",
+            members,
         )
 
     def _selected_tone_command(self, *, automatic: bool = False) -> str:
@@ -1809,7 +1826,13 @@ class RewritePalette(QDialog):
         self._cancel_active_ai_request()
         self._request_sentence_rewrite()
 
-    def _tone_batch_ids(self, primary_id: str, command: str) -> tuple[str, ...]:
+    def _tone_batch_ids(
+        self,
+        primary_id: str,
+        command: str,
+        *,
+        tone_pass: bool = False,
+    ) -> tuple[str, ...]:
         """The sections that should travel with this one in a tone request.
 
         A tone applied one paragraph at a time cannot sound like anything: the
@@ -1837,10 +1860,26 @@ class RewritePalette(QDialog):
             elif not started:
                 continue
             if suggestion_id != primary_id and (
-                suggestion_id in self._ai_requested_ids
-                or suggestion_id in self._ai_completed_ids
-                or suggestion_id in self._ai_failed_ids
-                or suggestion_id in self._ai_batch_blocked
+                suggestion_id in self._ai_batch_blocked
+                or (
+                    # A writer asking for a tone is a pass over the document in
+                    # its own right. The sections after this one have already
+                    # been PROOFREAD, which is why they sit in
+                    # _ai_completed_ids, and that must not disqualify them from
+                    # being toned - it disqualified every one of them, so a
+                    # manual tone batch always collapsed to a single section
+                    # and no tone request was ever larger than one paragraph.
+                    (
+                        suggestion_id in self._review_resolved
+                        or suggestion_id in self._ai_toned_ids
+                    )
+                    if tone_pass
+                    else (
+                        suggestion_id in self._ai_requested_ids
+                        or suggestion_id in self._ai_completed_ids
+                        or suggestion_id in self._ai_failed_ids
+                    )
+                )
             ):
                 break
             available.append(suggestion_id)
@@ -2218,6 +2257,7 @@ class RewritePalette(QDialog):
             self._ai_requested_ids.discard(pending)
         self._ai_attempts.clear()
         self._ai_batch_members.clear()
+        self._ai_toned_ids.clear()
         if suggestion_id:
             self._ai_requested_ids.discard(suggestion_id)
         if self._busy:
