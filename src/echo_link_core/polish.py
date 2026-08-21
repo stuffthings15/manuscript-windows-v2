@@ -19,6 +19,7 @@ from .polish_entities import (
     _named_entity_matches_source_phrase,
     _named_entity_respelled_in,
     _runtime_opaque_entities,
+    _sentence_initial_common_word,
 )
 from .polish_hardware import (
     BenchmarkRecord,
@@ -932,6 +933,25 @@ class PolishValidator:
             # doing exactly the job asked of it.
             and not _named_entity_respelled_in(value, source)
             and not _named_entity_respelled_in(value, wording_reference)
+            # A capital the model created by rewriting the OPENING of a
+            # sentence is grammar, not a name. `_named_entities` reads any
+            # capitalized run as one, and there was already an exemption for
+            # the capital created by SPLITTING a run-on - this is the same
+            # capital arriving by the other route a rewrite can produce it.
+            #
+            # Measured 2026-08-20 in build/refusal-evidence-{formal,friendly}.md:
+            # 3 of 11 Formal refusals and 9 of 50 Friendly refusals were this
+            # one thing. "and dismissing that fear" -> "Dismissal of that
+            # fear", "reducing preventable waste" -> "Helping to reduce
+            # preventable waste", "serious discussion examine" -> "Let's have
+            # a serious discussion". Every one carried a semantic similarity
+            # above 0.96 and was refused anyway.
+            #
+            # Narrow on purpose: it applies only to a single word that starts
+            # a sentence AND is an ordinary lowercase English word. An invented
+            # proper noun is not in the dictionary, so "Malik" -> "Mali" at a
+            # sentence start still fails, which its test asserts.
+            and not _sentence_initial_common_word(value, candidate, source_names)
         }
         removed_names = {
             value

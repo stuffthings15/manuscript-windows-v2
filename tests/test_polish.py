@@ -609,3 +609,26 @@ def test_warmth_counts_the_signals_this_product_says_it_counts():
     assert not _friendly_rewrite_is_visible(
         "it doesn't matter much", "It doesn't matter much."
     )
+
+
+def test_rewritten_sentence_opening_is_not_an_invented_name(validator):
+    """Capitalizing a rewritten opening is grammar, not a new proper noun.
+
+    Measured on 2026-08-20 in build/refusal-evidence-formal.md and
+    build/refusal-evidence-friendly.md: 3 of 11 Formal refusals and 9 of 50
+    Friendly refusals were this. "and dismissing that fear" became "Dismissal
+    of that fear", "reducing preventable waste" became "Helping to reduce
+    preventable waste", and each new first word was read as an invented name
+    because `_named_entities` treats any capitalized run as one.
+
+    There was already an exemption for a capital created by SPLITTING a
+    run-on. Rewriting the opening is the same kind of capital and had none,
+    which meant the guard refused tone rewrites for doing what a tone does.
+    """
+    result = validator.validate(
+        "and dismissing that fear can damage public trust.",
+        "Dismissal of that fear can damage public trust.",
+        task=PolishTask.TONE,
+    )
+
+    assert "new named entity added" not in result.failures, result.failures

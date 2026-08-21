@@ -536,3 +536,84 @@ def _runtime_opaque_entities(text: str, document: str = "") -> tuple[str, ...]:
         for value in _maximal_named_entities(text, document)
         if " " not in value or value in versioned
     )
+
+
+@lru_cache(maxsize=1)
+def _common_word_dictionary():
+    """The English dictionary, loaded once and only when a guard needs it."""
+    from .polish_spelling import EnglishDictionary
+
+    return EnglishDictionary()
+
+
+def _is_ordinary_english_word(word: str) -> bool:
+    """True when the dictionary knows this word as it stands.
+
+    An invented proper noun is not in an English dictionary; "helping",
+    "dismissal" and "let" are. That is the whole discriminator, and it is the
+    same test the corpus grader uses to decide a word is real English: the
+    dictionary offers the word back unchanged, at distance 0.
+    """
+    folded = word.casefold()
+    if not folded or not folded.isalpha():
+        return False
+    try:
+        value = _common_word_dictionary().suggestion(folded)
+    except Exception:  # noqa: BLE001 - a guard must never fail open on load
+        return False
+    return bool(value and value[0].casefold() == folded and value[1] == 0)
+
+
+def _sentence_initial_common_word(
+    value: str,
+    candidate: str,
+    source_names: frozenset[str] | set[str] = frozenset(),
+) -> bool:
+    """True when this "name" is an ordinary word that starts a sentence.
+
+    A capital the model created by rewriting the OPENING of a sentence is
+    grammar, not a name. There is already an allowance for the capital created
+    by SPLITTING a run-on; this is the same capital arriving by the other route
+    a rewrite can produce it.
+
+    Measured 2026-08-20 in build/refusal-evidence-formal.md and
+    build/refusal-evidence-friendly.md: 3 of 11 Formal refusals and 9 of 50
+    Friendly refusals were this single thing. "and dismissing that fear" ->
+    "Dismissal of that fear", "reducing preventable waste" -> "Helping to
+    reduce preventable waste", "serious discussion examine" -> "Let's have a
+    serious discussion". Each carried a semantic similarity above 0.96 and was
+    refused anyway.
+
+    Narrow deliberately. THREE conditions must hold: the word is ordinary
+    English, every place it appears in the candidate is a sentence start, and
+    it is not a near-miss of a name the source already had.
+
+    That third condition is the one that matters, because the dictionary alone
+    is not a proper-noun test: it knows "mali" and "cusco" perfectly well.
+    What separates "Malik" -> "Mali" from "and dismissing" -> "Dismissal" is
+    not vocabulary, it is that the first is a source NAME come back altered.
+    Without this the guard let a changed name through, and its own test caught
+    that immediately.
+    """
+    if " " in value:
+        return False
+    if not _is_ordinary_english_word(value.split("'")[0]):
+        return False
+    # A name from the source arriving back one letter different is a changed
+    # name, whatever the dictionary thinks of the result.
+    for name in source_names:
+        if name.casefold() == value.casefold():
+            continue
+        if _edit_distance_at_most(name.casefold(), value.casefold(), 1):
+            return False
+    occurrences = list(re.finditer(rf"(?<!\w){re.escape(value)}(?!\w)", candidate))
+    if not occurrences:
+        return False
+    for match in occurrences:
+        before = candidate[: match.start()].rstrip()
+        # Nothing before it, or a sentence ending before it. A comma or a
+        # semicolon does not start a sentence, so a mid-sentence capital is
+        # still judged to be a name.
+        if before and not re.search(r"""[.!?]['"\)\]]*$""", before):
+            return False
+    return True
