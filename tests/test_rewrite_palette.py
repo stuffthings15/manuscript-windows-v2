@@ -2469,12 +2469,26 @@ def test_palette_rewrites_one_clean_sentence_then_moves_next(app):
     palette.rewrite_sentence_button.click()
     assert len(requests) == 1
     attempt_id, suggestion_id, source, command = requests[0]
-    assert source == "Clean sentence."
+    # A tone request now covers several paragraphs at once, so this asks for
+    # both sections rather than only the one on the card.
+    #
+    # Changed requirement, not a broken fix. A tone applied one paragraph at a
+    # time cannot sound like anything - the app log recorded tone requests as
+    # small as "characters=43" - so requests were batched deliberately while
+    # the APPLY unit stayed one paragraph. This test encoded the old contract,
+    # asserting the request held exactly the sentence on the card.
+    #
+    # It had been failing since commit cef5978 and was not noticed, because
+    # that commit was verified with targeted tests instead of the full suite.
+    assert source == "Clean sentence.\n\nAnother sentence."
     assert command == "Rewrite"
+    # One paragraph back for each one sent. An answer whose paragraph count
+    # does not match is refused outright, which is what stops a batch from
+    # writing several paragraphs over one.
     palette.show_sentence_result(
         attempt_id,
         suggestion_id,
-        "This sentence is cleaner.",
+        "This sentence is cleaner.\n\nAnd so is this one.",
         "Sentence rewrite ready.",
     )
 
@@ -4581,4 +4595,81 @@ def test_the_tone_button_batches_the_sections_after_it(app):
     assert requests, "choosing a tone made no request"
     source = requests[-1][2]
     assert chr(10) * 2 in source, f"tone request was not batched: {source!r}"
+    palette.finish_choice()
+
+
+def test_a_tone_batch_skips_a_section_whose_proofread_is_still_running(app):
+    """Two answers for one section race, and the review never settles.
+
+    Measured live on 2026-08-21: the card stayed on "1 of 25" while the ready
+    count climbed to 21 and then restarted, nine times in twenty minutes, and
+    Friendly went from 26.7 percent to applied=0 on three runs out of three.
+    A tone must be applied on top of a FINISHED proofread, never alongside one
+    that is still in flight.
+    """
+    palette = RewritePalette(
+        suggestion_engine=_SuggestionEngine(),
+        ai_proofread=True,
+    )
+    palette.show_capture(
+        "Echo-Link are ready. Clean sentence. Third sentence.\nAnother sentence."
+    )
+    app.processEvents()
+    palette.badge_button.click()
+    app.processEvents()
+
+    ids = [str(getattr(item, "suggestion_id", "")) for item in palette._review_suggestions]
+    assert len(ids) >= 2, ids
+    # The section after this one has been asked for but has not answered.
+    palette._ai_requested_ids.add(ids[1])
+    palette._ai_completed_ids.discard(ids[1])
+
+    members = palette._tone_batch_ids(ids[0], "Friendly", tone_pass=True)
+
+    assert ids[1] not in members, members
+    palette.finish_choice()
+
+
+def test_the_hud_publishes_its_state_where_a_machine_can_read_it(app, tmp_path, monkeypatch):
+    """The signal the harness never had.
+
+    Everything the HUD knew was published only as an English sentence, so the
+    harness string-matched it and called anything unrecognised "unknown" -
+    fifty-four times in one failing run, after which it pressed nothing and
+    reported applied=0.
+    """
+    import json
+
+    from echo_link_core import session_state
+
+    monkeypatch.setenv("MANUSCRIPT_STATE_DIR", str(tmp_path / "state"))
+    palette = RewritePalette(suggestion_engine=_SuggestionEngine(), ai_proofread=True)
+    palette.show_capture(
+        "Echo-Link are ready. Clean sentence. Third sentence.\nAnother sentence."
+    )
+    app.processEvents()
+    palette.badge_button.click()
+    app.processEvents()
+
+    state = json.loads(session_state.state_path().read_text(encoding="utf-8"))
+    assert state["section_total"] >= 1
+    assert state["sections_total"] >= 1
+    assert "replace_enabled" in state
+    assert "tone_selected" in state
+    assert state["build"], "a state with no build lets a run measure the wrong process"
+    palette.finish_choice()
+
+
+def test_the_published_state_never_carries_the_writers_text(app, tmp_path, monkeypatch):
+    from echo_link_core import session_state
+
+    monkeypatch.setenv("MANUSCRIPT_STATE_DIR", str(tmp_path / "state"))
+    palette = RewritePalette(suggestion_engine=_SuggestionEngine(), ai_proofread=True)
+    palette.show_capture("Echo-Link are ready. A distinctive sentence to look for.")
+    app.processEvents()
+    palette.badge_button.click()
+    app.processEvents()
+
+    body = session_state.state_path().read_text(encoding="utf-8")
+    assert "distinctive sentence" not in body
     palette.finish_choice()

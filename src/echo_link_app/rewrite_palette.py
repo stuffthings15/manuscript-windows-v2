@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from collections.abc import Callable
 import ctypes
 from dataclasses import replace
@@ -63,6 +65,7 @@ from echo_link_app.review_spans import (
 from echo_link_app.theme import COLORS
 from echo_link_app.branding import APP_NAME, ICON_PNG
 from echo_link_core.paths import resource_path
+from echo_link_core import session_state
 from echo_link_core.selected_text import COMMANDS
 from echo_link_core.polish_spelling import PolishRuleEngine
 from echo_link_core.writing_suggestions import (
@@ -1466,6 +1469,9 @@ class RewritePalette(QDialog):
         if len(members) > 1:
             parts = split_tone_batch(rewritten, len(members))
             if parts is None:
+                session_state.record_event(
+                    "tone_batch_refused", members=len(members), section=suggestion_id[:8]
+                )
                 # The model merged or split the paragraphs it was given. The
                 # whole answer must NOT go to the first section - that would
                 # write five paragraphs over one - so the batch is thrown away
@@ -1481,6 +1487,7 @@ class RewritePalette(QDialog):
             for member, part in zip(members[1:], parts[1:]):
                 self._file_batch_sibling(member, part, message)
             self._ai_toned_ids.update(members)
+            session_state.record_event("tone_batch_filed", members=len(members))
             rewritten = parts[0]
         updated_suggestions = []
         found = False
@@ -1501,6 +1508,14 @@ class RewritePalette(QDialog):
                 )
             )
         if not found:
+            # The card is left on whatever view it was on. A tone request
+            # switches to "loading" first, so returning here without restoring
+            # the card strands the HUD on a spinner forever - measured
+            # 2026-08-21: view=loading, frozen, while the answer had already
+            # arrived and every section was ready.
+            session_state.record_event("result_section_missing", section=suggestion_id[:8])
+            if self._view == "loading":
+                self._set_view("card", activate=True)
             self._set_status("That sentence changed. Rewrite it again.", assertive=True)
             return
         self._suggestions = tuple(updated_suggestions)
@@ -1522,6 +1537,7 @@ class RewritePalette(QDialog):
         current_message = self._ai_ready_messages.get(current_id, message)
         self._set_status(current_message if was_background else message)
         if self._view == "loading":
+            session_state.record_event("card_restored", section=suggestion_id[:8])
             self._set_view("card", activate=True)
             self.apply_suggestion_button.setFocus(Qt.FocusReason.OtherFocusReason)
         self.apply_suggestion_button.setToolTip(current_message)
@@ -1849,6 +1865,15 @@ class RewritePalette(QDialog):
         """
         if command == "Proofread" or primary_id in self._ai_batch_blocked:
             return (primary_id,)
+        # One switch that returns the tone path to sending a single section.
+        #
+        # Batching is a change to how the whole review behaves, and on
+        # 2026-08-21 a tone that had scored 26.7 percent came back applied=0
+        # three runs in a row after it landed. Being able to turn it off is
+        # what makes "is batching the cause" a one-run experiment instead of
+        # an argument, and it gives a way back if it misbehaves in the wild.
+        if os.environ.get("MANUSCRIPT_TONE_BATCH", "1").strip() in {"0", "off", "false"}:
+            return (primary_id,)
         available: list[str] = []
         started = False
         for suggestion in self._review_suggestions:
@@ -1872,6 +1897,22 @@ class RewritePalette(QDialog):
                     (
                         suggestion_id in self._review_resolved
                         or suggestion_id in self._ai_toned_ids
+                        # A section whose PROOFREAD is still in flight must not
+                        # join a tone batch. Both answers would arrive for the
+                        # same section and race to file over each other, and
+                        # the review never settles: measured 2026-08-21, the
+                        # card stayed on "1 of 25" while the count climbed to
+                        # 21 and then restarted, nine times in twenty minutes,
+                        # and Friendly went from 26.7 percent to applied=0
+                        # three runs out of three.
+                        #
+                        # Requested AND completed is the safe case - that is a
+                        # finished proofread, which is exactly what a tone
+                        # should be applied on top of.
+                        or (
+                            suggestion_id in self._ai_requested_ids
+                            and suggestion_id not in self._ai_completed_ids
+                        )
                     )
                     if tone_pass
                     else (
@@ -2376,6 +2417,49 @@ class RewritePalette(QDialog):
             return "rules-only"
         return "waiting"
 
+    def _publish_state(self, progress: str, readiness: str) -> None:
+        """Write what the HUD is doing where a machine can read it.
+
+        Counts, indexes and control states only - never the writer's text.
+        These files are read by tooling and pasted into reports.
+
+        A failure here must never reach the writer. Losing the signal costs a
+        measurement; an exception out of a repaint costs the session.
+        """
+        try:
+            index, _, total = str(progress or "").partition(" of ")
+            ready = sum(
+                1
+                for item in self._suggestions
+                if str(getattr(item, "suggestion_id", "")) in self._ai_completed_ids
+            )
+            refused = sum(
+                1
+                for item in self._suggestions
+                if str(getattr(item, "suggestion_id", "")) in self._ai_failed_ids
+            )
+            session_state.write_state(
+                {
+                    "build": session_state.build_identifier(),
+                    "view": self._view,
+                    "busy": bool(self._busy),
+                    "section_index": int(index) if index.strip().isdigit() else 0,
+                    "section_total": int(total) if total.strip().isdigit() else 0,
+                    "sections_ready": ready,
+                    "sections_refused": refused,
+                    "sections_total": len(self._suggestions),
+                    "readiness": readiness,
+                    "provenance": self._section_provenance_label(),
+                    "replace_enabled": bool(self.apply_suggestion_button.isEnabled()),
+                    "tone_selected": str(self.tone_combo.currentText()),
+                    "ai_requested": len(self._ai_requested_ids),
+                    "ai_completed": len(self._ai_completed_ids),
+                    "ai_failed": len(self._ai_failed_ids),
+                }
+            )
+        except Exception:  # noqa: BLE001 - a repaint must never die for a log
+            logger.debug("Could not publish the HUD state", exc_info=True)
+
     def _review_readiness_label(self) -> str:
         """Whether every section in this review has a correction yet.
 
@@ -2707,6 +2791,18 @@ class RewritePalette(QDialog):
             f"section {self._section_provenance_label()}"
         )
         self.card_position.setAccessibleDescription(f"{progress}, {readiness}")
+        # The same facts, written where a machine can read them.
+        #
+        # Everything above is published only as an English sentence, and the
+        # harness was reduced to string-matching it: anything the sentence did
+        # not literally say became "unknown". A failing tone run on 2026-08-21
+        # reported unknown=54 - fifty-four looks at the card, no idea what it
+        # was seeing - then pressed nothing and reported applied=0, which reads
+        # exactly like a product that corrected nothing.
+        #
+        # Emitted HERE, from the same variables that build the sentence, so the
+        # two cannot drift apart.
+        self._publish_state(progress, readiness)
         self.card_position.setVisible(overall_total > 1)
         self.card_position.adjustSize()
         self.card_position.updateGeometry()
