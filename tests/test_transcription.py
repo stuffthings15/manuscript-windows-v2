@@ -94,3 +94,52 @@ def test_local_model_discovery_labels_english_and_multilingual_packs(tmp_path):
     assert [model.name for model in models] == ["base.en", "small"]
     assert models[0].multilingual is False
     assert models[1].multilingual is True
+
+
+def test_a_transcription_records_how_long_it_took(caplog):
+    """Without this the log cannot say why a dictation felt slow.
+
+    Curtis reported dictation "taking over a minute" and being "extremely
+    inconsistent" on 2026-08-21. The log recorded that a transcription had
+    STARTED and nothing else - no duration, no device, no model load - so a
+    slow reload, a slow transcription and GPU contention all looked identical
+    after the fact. Two of the three causes found that night were only
+    identifiable because a separate preload line happened to exist.
+
+    Never the words themselves. Durations and the device, nothing else.
+    """
+    import logging
+
+    model = CaptureModel()
+    transcriber = LocalWhisperTranscriber(DictationSettings())
+    transcriber._get_model = lambda _callback=None: model
+    source = np.full(8000, 16000.0, dtype=np.float32)
+    with caplog.at_level(logging.INFO, logger="echo_link_core.transcription"):
+        transcriber.transcribe(source)
+
+    finished = [
+        record.getMessage()
+        for record in caplog.records
+        if "Dictation transcription finished" in record.getMessage()
+    ]
+    assert finished, [record.getMessage() for record in caplog.records]
+    line = finished[0]
+    assert "seconds=" in line
+    assert "device=" in line
+    assert "test phrase" not in line, "the transcript must never be logged"
+
+
+def test_releasing_the_speech_model_says_so(caplog):
+    """A silent release is why the reload it causes looks like a mystery."""
+    import logging
+
+    transcriber = LocalWhisperTranscriber(DictationSettings())
+    transcriber._model = CaptureModel()
+    transcriber._model_key = ("base.en", "cuda", "int8")
+    with caplog.at_level(logging.INFO, logger="echo_link_core.transcription"):
+        transcriber.release_model()
+
+    assert any(
+        "Dictation speech model released" in record.getMessage()
+        for record in caplog.records
+    ), [record.getMessage() for record in caplog.records]

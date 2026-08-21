@@ -130,6 +130,10 @@ class LocalWhisperTranscriber:
         self._lock = threading.RLock()
         self._inference_lock = threading.Lock()
         self._last_used = 0.0
+        # How many times the speech model has actually been loaded. A reload
+        # is the difference between an instant dictation and a slow one, and
+        # nothing recorded it.
+        self._model_loads = 0
         self._release_timer: threading.Timer | None = None
 
     def update_settings(self, settings: DictationSettings) -> None:
@@ -204,7 +208,10 @@ class LocalWhisperTranscriber:
         if array.size < 4000:
             raise TranscriptionError("No clear speech was recorded. Try again and speak a little longer.")
 
+        started = time.monotonic()
+        loads_before = self._model_loads
         model = self._get_model(status_callback)
+        model_ready = time.monotonic()
         selected_mode = mode or self._settings.mode
         beam_size = 3 if selected_mode is DictationMode.ACCURACY else 1
         language = None if self._settings.language.lower() == "auto" else self._settings.language
@@ -225,6 +232,24 @@ class LocalWhisperTranscriber:
             self.release_model()
             raise TranscriptionError(f"Speech recognition failed: {exc}") from exc
         self._last_used = time.monotonic()
+        # What a slow dictation was actually spent on. Curtis reported
+        # dictation "taking over a minute" and being "extremely inconsistent"
+        # on 2026-08-21, and the log could not tell a model reload from a slow
+        # transcription from GPU contention: it recorded that a transcription
+        # had started and nothing more.
+        #
+        # Durations and the device only. The words are never logged.
+        key = self._model_key or ("unknown", "unknown", "unknown")
+        logger.info(
+            "Dictation transcription finished seconds=%.3f load_seconds=%.3f "
+            "audio_seconds=%.1f device=%s model=%s reloaded=%s",
+            self._last_used - started,
+            model_ready - started,
+            float(array.size) / 16000.0,
+            key[1],
+            key[0],
+            self._model_loads > loads_before,
+        )
         self._schedule_gpu_release()
         if not result:
             raise TranscriptionError("No speech was detected. Check the microphone and try again.")
@@ -277,6 +302,7 @@ class LocalWhisperTranscriber:
                 )
             if status_callback:
                 status_callback(f"Loading {key[0]} on {key[1].upper()}...")
+            load_started = time.monotonic()
             try:
                 from faster_whisper import WhisperModel
 
@@ -289,6 +315,16 @@ class LocalWhisperTranscriber:
                     local_files_only=True,
                 )
                 self._model_key = key
+                self._model_loads += 1
+                logger.info(
+                    "Dictation speech model loaded seconds=%.3f device=%s "
+                    "compute=%s model=%s load_count=%s",
+                    time.monotonic() - load_started,
+                    key[1],
+                    key[2],
+                    key[0],
+                    self._model_loads,
+                )
             except Exception as exc:
                 self._model = None
                 self._model_key = None
@@ -317,8 +353,20 @@ class LocalWhisperTranscriber:
                 if self._release_timer is not None:
                     self._release_timer.cancel()
                     self._release_timer = None
+                released = self._model is not None
+                key = self._model_key or ("unknown", "unknown", "unknown")
                 self._model = None
                 self._model_key = None
+        if released:
+            # The next dictation will pay a full reload, and until now the log
+            # gave no sign that this had happened at all.
+            logger.info(
+                "Dictation speech model released device=%s model=%s "
+                "idle_seconds=%.1f",
+                key[1],
+                key[0],
+                max(0.0, time.monotonic() - self._last_used),
+            )
         gc.collect()
 
 
