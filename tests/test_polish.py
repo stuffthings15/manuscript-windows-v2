@@ -652,3 +652,56 @@ def test_morphological_negation_equals_syntactic_negation(validator):
     assert not any(
         failure.startswith("negation changed") for failure in result.failures
     ), result.failures
+
+
+def test_a_tone_is_judged_by_the_tone_similarity_floor(validator):
+    """A tone command is ASKED to say it differently, so it gets the tone floor.
+
+    The relaxed floor was granted only to PolishTask.REWRITE, and the staged
+    tone path runs as PolishTask.TONE - four call sites in polish.py - so every
+    palette tone was measured against the 0.88 PROOFREADING floor instead.
+
+    The pair below is the REAL one, captured with tools/tone_stage_probe.py
+    from essay 1 paragraph 2 on 2026-08-21: the model's warm Friendly rewrite,
+    refused for "semantic similarity window 2 0.8793 is below 0.880" - short by
+    0.0007. The writer got the deterministic proofread instead, which is why
+    every judge for two days said "readable but lacks warmth", and why Rephrase
+    - the tone that must depart from the source most - scored lowest of six.
+
+    A hand-written pair was tried first and proved nothing: it scored above
+    0.88, so neither task refused it and the test passed against the defect.
+
+    This is not a hole for invention. Every other meaning gate still applies to
+    a tone: protected tokens, named entities, numbers, negation, prohibition,
+    modal meaning, obligation, ordering and actor. This number only ever
+    measured how DIFFERENTLY the text says the same thing.
+    """
+    import json
+    from pathlib import Path
+
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "friendly_similarity_refusal.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    as_tone = validator.validate(
+        fixture["source"], fixture["candidate"], task=PolishTask.TONE
+    )
+    as_rewrite = validator.validate(
+        fixture["source"], fixture["candidate"], task=PolishTask.REWRITE
+    )
+
+    tone_refusals = [
+        failure for failure in as_tone.failures if failure.startswith("semantic similarity")
+    ]
+    rewrite_refusals = [
+        failure
+        for failure in as_rewrite.failures
+        if failure.startswith("semantic similarity")
+    ]
+    assert tone_refusals == rewrite_refusals, (
+        "a tone was held to a stricter distance than a rewrite: "
+        f"tone={tone_refusals} rewrite={rewrite_refusals}"
+    )
+    assert not tone_refusals, tone_refusals

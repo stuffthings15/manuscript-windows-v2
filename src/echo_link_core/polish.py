@@ -993,7 +993,30 @@ class PolishValidator:
         # ordering and actor. Those are what stop a rewrite from changing what
         # the text says. This number only ever measured how differently it says
         # it, which for a tone command is the point of the request.
-        tone_mode = not grammar_mode and task is PolishTask.REWRITE
+        # A TONE is a tone. The allowance above was written for exactly this
+        # request and then granted only to REWRITE, while every palette tone -
+        # Friendly, Formal, Shorten, Rephrase, Improve - runs as
+        # PolishTask.TONE (polish.py 3429, 3503, 3553, 3597). They were all
+        # measured against the 0.88 PROOFREADING floor instead.
+        #
+        # Traced 2026-08-21 with tools/tone_stage_probe.py, essay 1 paragraph
+        # 2, Friendly: the model returned warm rewrites of 836 and 846
+        # characters and both were refused at 0.8793, short of the floor by
+        # 0.0007. What reached the writer was the deterministic proofread. That
+        # is why every judge for two days said "readable but lacks warmth", and
+        # why Rephrase - the tone whose whole definition is departing from the
+        # source - scored lowest of the six at 14.3 percent while Improve and
+        # Clear, the tones that change least, scored highest.
+        #
+        # This widens nothing that was not already intended to be wide. Every
+        # other meaning gate applies to a tone unchanged: protected tokens,
+        # named entities, numbers, negation, prohibition, modal meaning,
+        # obligation, ordering and actor. This number only ever measured how
+        # differently the text says the same thing.
+        tone_mode = not grammar_mode and task in {
+            PolishTask.REWRITE,
+            PolishTask.TONE,
+        }
         if dense_source and (grammar_mode or tone_mode):
             similarity_floor = 0.74
         elif grammar_mode or tone_mode:
