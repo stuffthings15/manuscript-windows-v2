@@ -167,6 +167,16 @@ def select_tone(hud, tone: str) -> bool:
     import uiautomation as automation
 
     button = tone_combo(hud)
+    # What the read-back saw, printed whether it worked or not. The false
+    # message "the HUD tone control is not reachable" has now misled three
+    # investigations, and every one of them had to reconstruct by hand what
+    # this function saw at the moment it gave up. It says so itself now.
+    published = harness_state.recent_state()
+    print(
+        f"    tone read-back: want={tone} state={harness_state.selected_tone(published)!r} "
+        f"state_fresh={published is not None} combo={button is not None}",
+        flush=True,
+    )
     if button is None:
         return False
     if tone.casefold() in current_tone(hud).casefold():
