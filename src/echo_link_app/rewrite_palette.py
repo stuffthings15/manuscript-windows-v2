@@ -1843,7 +1843,15 @@ class RewritePalette(QDialog):
 
     def _selected_tone_command(self, *, automatic: bool = False) -> str:
         command = {
-            "Clear": "Rewrite",
+            # "Clear" used to map to "Rewrite", and polish_quality defines a
+            # Clear contract but no Rewrite contract - so picking Clear sent a
+            # command with no tone contract at all and the writer got a plain
+            # rewrite. Measured 2026-08-23: Clear selected 5 times, confirmed
+            # by the published state each time, and the app logged
+            # {Proofread: 25, Rewrite: 3} with no Clear request in it. A tone
+            # that silently proofreads scores exactly like a tone that "lacks
+            # warmth", which is what the tone table had been reporting.
+            "Clear": "Clear",
             "Improve": "Improve",
             "Rephrase": "Rephrase",
             "Shorten": "Shorten",
@@ -1867,7 +1875,16 @@ class RewritePalette(QDialog):
             "Assertive": "Assertive",
             "Caveman": "Caveman",
         }.get(self.tone_combo.currentText(), "Rewrite")
-        return "Proofread" if automatic and command == "Rewrite" else command
+        # The automatic pass proofreads and never tones, whatever is selected.
+        # This used to lean on Clear collapsing to "Rewrite" to reach that
+        # result, so giving Clear its own command would have started applying
+        # a tone to every automatic section - a far worse defect than the one
+        # that change fixes. The condition is keyed on `automatic` and on the
+        # two no-tone commands explicitly, so it no longer depends on how any
+        # single label happens to map.
+        if automatic and command in {"Rewrite", "Clear"}:
+            return "Proofread"
+        return command
 
     def _tone_selected(self, _tone: str) -> None:
         suggestion = self._current_review_suggestion()

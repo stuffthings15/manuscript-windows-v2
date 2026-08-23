@@ -2039,7 +2039,9 @@ def test_palette_timeout_then_tone_rewrite_shows_text_unlocks_accept_and_resizes
 
     assert second_id == suggestion_id
     assert second_attempt != first_attempt
-    assert command == "Rewrite"
+    # The combo defaults to Clear, and Clear now carries its own command
+    # instead of collapsing to "Rewrite" - see the tone mapping test above.
+    assert command == "Clear"
     assert not palette.apply_suggestion_button.isEnabled()
 
     palette.show_sentence_result(
@@ -2078,8 +2080,14 @@ def test_palette_timeout_then_tone_rewrite_shows_text_unlocks_accept_and_resizes
         # only cover tones the menu lists; the styles cut from the menu on
         # 2026-08-13 and 2026-08-16 are still reachable as commands and are
         # covered by tests/test_full_page_tone_quality_probe.py.
-        # "Clear" is deliberately absent: it maps to the "Rewrite" command
-        # rather than to itself, which the tone probe asserts separately.
+        # "Clear" was deliberately absent until 2026-08-23, because it mapped
+        # to the "Rewrite" command rather than to itself. polish_quality
+        # defines a Clear contract and no Rewrite contract, so that mapping
+        # made the Clear contract unreachable: picking Clear sent a command
+        # with no tone contract and the writer got a plain rewrite. Measured
+        # that day - Clear selected 5 times, the app logged
+        # {Proofread: 25, Rewrite: 3}, no Clear request in it.
+        "Clear",
         "Improve",
         "Rephrase",
         "Shorten",
@@ -2098,6 +2106,33 @@ def test_palette_maps_every_requested_tone_to_its_local_writing_command(app, opt
     palette.rewrite_sentence_button.click()
     assert requests[-1][3] == option
     palette.finish_choice()
+    palette.close()
+    palette.deleteLater()
+    app.processEvents()
+
+
+def test_automatic_pass_proofreads_whatever_tone_is_selected(app):
+    """The automatic pass tones only when a tone was actually chosen.
+
+    Giving Clear its own command removed the accident this used to rest on:
+    automatic asked for _selected_tone_command(automatic=True), Clear
+    collapsed to "Rewrite", and "Rewrite" became "Proofread". With Clear
+    mapping to itself that chain no longer runs, so the rule is asserted
+    directly - otherwise every automatic section would silently be toned
+    Clear, which is the worse of the two defects.
+    """
+    palette = RewritePalette(suggestion_engine=_SuggestionEngine())
+    # No tone chosen: the automatic pass proofreads and does not tone.
+    palette.tone_combo.setCurrentText("Clear")
+    assert palette._selected_tone_command(automatic=True) == "Proofread"
+    # A tone chosen: the automatic pass carries it, which is existing
+    # behaviour and is what lets a writer set a tone once for a document.
+    for option in ("Improve", "Friendly"):
+        palette.tone_combo.setCurrentText(option)
+        assert palette._selected_tone_command(automatic=True) == option
+    # Manual Clear reaches its own contract instead of a plain rewrite.
+    palette.tone_combo.setCurrentText("Clear")
+    assert palette._selected_tone_command() == "Clear"
     palette.close()
     palette.deleteLater()
     app.processEvents()
@@ -2481,7 +2516,9 @@ def test_palette_rewrites_one_clean_sentence_then_moves_next(app):
     # It had been failing since commit cef5978 and was not noticed, because
     # that commit was verified with targeted tests instead of the full suite.
     assert source == "Clean sentence.\n\nAnother sentence."
-    assert command == "Rewrite"
+    # Clear is the combo default and now carries its own command rather than
+    # collapsing to "Rewrite" - see the tone mapping test.
+    assert command == "Clear"
     # One paragraph back for each one sent. An answer whose paragraph count
     # does not match is refused outright, which is what stops a batch from
     # writing several paragraphs over one.
