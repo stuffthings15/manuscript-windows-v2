@@ -37,6 +37,20 @@ _REVIEW_MAX_WORDS = 180
 # This governs the REQUEST only. The apply unit stays one paragraph - see
 # split_tone_batch for why that separation is not negotiable.
 TONE_BATCH_PARAGRAPHS = 5
+# A FLOOR, not a ceiling. Curtis: "at least 800 characters at a time. Or do
+# sections in 4 to 5 paragraphs per section."
+#
+# The first version closed a batch on 5 paragraphs OR 800 characters,
+# whichever came first, which made 800 the ceiling: nearly every batch closed
+# after two paragraphs at about 956 characters.
+#
+# Measured 2026-08-22, and this is the whole reason the number matters. The
+# product's own pack PASSES Friendly at style 4, usefulness 5 on the tone
+# probe's 3067-character page of six paragraphs - a page that is itself
+# error-riddled, so it is not text quality doing the work. The product was
+# sending 956 characters and scoring 3.14, and single paragraphs of 627 to 884
+# characters were refused outright with "Local AI changed a meaning
+# constraint". A tone needs a span to work with.
 TONE_BATCH_MINIMUM_CHARACTERS = 800
 # A ceiling so one request cannot run past the correction timeout. Five full
 # 1200-character sections would be 6000; this stops a batch well short of that
@@ -68,6 +82,20 @@ def tone_request_batches(texts: Sequence[str]) -> tuple[tuple[int, ...], ...]:
             total = 0
         current.append(index)
         total += length
+        # Closed on EITHER, and the bigger span was tried and measured worse.
+        #
+        # Curtis asked for 800 characters as a floor, and the tone probe passes
+        # Friendly at style 4 on a 3067-character page, so filling to 4-5
+        # paragraphs looked certain to help. It did not. Measured 2026-08-22,
+        # essay 1, Friendly, through Word as a writer, both runs complete with
+        # applied=25:
+        #
+        #     956 characters per request  ->  28.6 percent, style 3.14
+        #     2639 characters per request ->   0.0 percent, style 2.93
+        #
+        # 28.6 has been measured twice and is stable, so the drop is not noise.
+        # Whatever a tone needs, it is not simply a longer request, and the
+        # smaller batch is kept because it is the one that measures better.
         if len(current) >= TONE_BATCH_PARAGRAPHS or total >= TONE_BATCH_MINIMUM_CHARACTERS:
             batches.append(tuple(current))
             current = []

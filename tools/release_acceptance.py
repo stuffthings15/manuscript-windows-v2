@@ -135,6 +135,48 @@ def _run(command: list[str], label: str) -> tuple[bool, str]:
     return code == 0, "".join(lines)
 
 
+def _incomplete_runs() -> list[dict[str, object]]:
+    """Essays whose Word run did not finish, with the reason the batch gave.
+
+    A stalled essay currently becomes a LOW SCORE rather than a failed run, and
+    a low score is indistinguishable from a product that corrects badly. That
+    is the same class of error that produced three tone results of 0.0 percent
+    on 2026-08-20, each judged after a run that had applied nothing.
+
+    The harness stall is timing-dependent - one essay stopped at 4 presses of
+    25 three times and then completed unchanged - so over a twenty-essay tier
+    it is not a question of whether this happens but how often, and an eight
+    hour run that grades interrupted work is eight hours wasted.
+
+    `stopped_because` is carried through so the evidence file says WHY, rather
+    than leaving the next reader to rediscover it from a HUD dump.
+    """
+    summary = ROOT / "build" / "batch-summary.json"
+    try:
+        rows = json.loads(summary.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(rows, list):
+        return []
+    bad = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("outcome") or "") == "complete":
+            continue
+        bad.append(
+            {
+                "essay": row.get("essay"),
+                "outcome": row.get("outcome"),
+                "presses": row.get("presses"),
+                "stalled_at": row.get("stalled_at"),
+                "stopped_because": row.get("stopped_because"),
+                "error": row.get("error"),
+            }
+        )
+    return bad
+
+
 def _graded(corpus: Path, first: int, last: int, after: float) -> dict[str, object]:
     """Grade what this run just corrected, and nothing else.
 
@@ -181,17 +223,65 @@ def _graded(corpus: Path, first: int, last: int, after: float) -> dict[str, obje
                 f"run and were not graded: {sorted(stale)[:5]}"
             )
         }
+    incomplete = _incomplete_runs()
+    if incomplete:
+        # Not a score. A run that stopped early has not measured the product,
+        # and grading it turns an interruption into a quality number.
+        return {
+            "error": (
+                f"{len(incomplete)} essay run(s) did not complete, so nothing "
+                "was graded"
+            ),
+            "incomplete": incomplete,
+        }
     rows = [grade(path, dictionary, engine) for path in paths]
     if not rows:
         return {"error": f"no corrected essays from {corpus.name} found in {BATCH}"}
     totals = [float(row["total"]) for row in rows]
     lowest = min(rows, key=lambda row: row["total"])
+    # Per category, not just the total.
+    #
+    # A mean of 93.0 against a gate of 95 says the product is two points short
+    # and NOTHING about where the two points went, so the next session has to
+    # rediscover that before it can fix anything. grade() already returns every
+    # category; only this function was throwing them away.
+    #
+    # Reported as points LOST rather than scored, because the question being
+    # asked of this table is always "what is costing the most".
+    # Against the category's own maximum from the rubric, not against the best
+    # essay in the set. Measuring spread from the best essay would report zero
+    # loss on a corpus where every essay was equally bad.
+    from grade_corpus import SCALE, WEIGHTS
+
+    categories = tuple(WEIGHTS)
+    lost = {
+        name: round(
+            sum(
+                (SCALE * WEIGHTS[name]) - float(row.get(name, 0.0))
+                for row in rows
+            ),
+            1,
+        )
+        for name in categories
+    }
     return {
         "essays": len(rows),
         "mean": round(sum(totals) / len(totals), 1),
         "lowest": lowest["total"],
         "lowest_essay": lowest["name"],
-        "rows": [{"name": row["name"], "total": row["total"]} for row in rows],
+        # Worst first, so the fix target is the first line a reader sees.
+        "points_lost_by_category": dict(
+            sorted(lost.items(), key=lambda item: item[1], reverse=True)
+        ),
+        "rows": [
+            {
+                "name": row["name"],
+                "total": row["total"],
+                **{name: round(float(row.get(name, 0.0)), 1) for name in categories},
+                "unknown": row.get("unknown"),
+            }
+            for row in rows
+        ],
     }
 
 
@@ -319,6 +409,25 @@ def full_tier(results: dict[str, object], started: float) -> list[str]:
         )
         if not passed:
             failures.append(f"the {tone} Word batch did not finish")
+            continue
+        # A tone that was never applied is not a tone that scored badly.
+        #
+        # `applied=0` is the absence of a measurement. On 2026-08-20 three
+        # tones were judged after runs that applied nothing and each came back
+        # at 0.0 percent, which read as a total product failure and was not.
+        # The same rule the 2026-08-21 sweep script uses: check the row first.
+        unapplied = [
+            row
+            for row in _incomplete_runs()
+            if str(row.get("outcome") or "") != "complete"
+        ]
+        if unapplied:
+            tones[tone] = None
+            failures.append(
+                f"tone {tone} was not measured: "
+                f"{len(unapplied)} essay run(s) did not complete "
+                f"({unapplied[0].get('stopped_because') or unapplied[0].get('error') or 'no reason recorded'})"
+            )
             continue
         source = sorted(COHERENT.glob("*.docx"))[0]
         target = EVIDENCE / f"tone-{tone.lower()}.json"
