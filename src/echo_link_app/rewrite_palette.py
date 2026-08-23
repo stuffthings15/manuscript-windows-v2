@@ -1499,6 +1499,24 @@ class RewritePalette(QDialog):
                     self._ai_batch_blocked.add(member)
                 self._restore_visible_suggestion(suggestion_id)
                 self._set_status("Preparing this section on its own.")
+                # Put the card back. Asking for a tone switches the HUD to the
+                # loading view, and this branch used to return without leaving
+                # it: _restore_visible_suggestion restores the TEXT and never
+                # touches the view, and the restore below is on the success
+                # path this return skips. A refused batch therefore stranded
+                # the HUD in "loading" for good - to a writer, picking a tone
+                # hung the app.
+                #
+                # Measured 2026-08-23, from the app's own event log:
+                #   view_changed        card
+                #   request_cancelled   sections=25 completed=25
+                #   view_changed        loading
+                #   tone_requested      Clear, 2 members, 956 chars
+                #   tone_batch_refused  members=2
+                # and nothing after it. The harness reporting "no Replace
+                # button at press 1" while the state said ready=25 and
+                # replace_enabled=True was reporting this accurately.
+                self._restore_card_view(suggestion_id)
                 QTimer.singleShot(0, self._request_next_ai_prefetch)
                 return
             for member, part in zip(members[1:], parts[1:]):
@@ -3190,6 +3208,19 @@ class RewritePalette(QDialog):
             added_selections.append(selection)
         self.before_text.setExtraSelections(removed_selections)
         self.after_text.setExtraSelections(added_selections)
+
+    def _restore_card_view(self, suggestion_id: str = "") -> None:
+        """Leave the loading view and show the card again.
+
+        Every path that gives up on an in-flight request has to do this, or
+        the HUD keeps the loading view it was put into when the request was
+        sent and the writer is left with an app that looks hung.
+        """
+        if self._view != "loading":
+            return
+        session_state.record_event("card_restored", section=suggestion_id[:8])
+        self._set_view("card", activate=True)
+        self.apply_suggestion_button.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _restore_visible_suggestion(self, suggestion_id: str = "") -> None:
         suggestion = next(

@@ -796,7 +796,24 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
             report["provenance_counts"][provenance] = (
                 report["provenance_counts"].get(provenance, 0) + 1
             )
-        button = replace_button(hud)
+        # Wait for the card before looking for its button. The HUD passes
+        # through a "loading" view while it swaps sections, and the Replace
+        # button is not in the UI tree during it - so a look taken at that
+        # instant finds nothing and the run ends.
+        #
+        # Measured 2026-08-23 on a clean uncontested run: stopped at press 1
+        # of 25 with "no Replace button", while the published state said
+        # ready 25, refused 0, replace_enabled=True, view=loading. Every
+        # section was finished and applicable; the harness was simply looking
+        # a moment too early. The state file has carried `view` all along and
+        # can_press_replace has always required "card" - the press loop was
+        # the one place not consulting it.
+        settled = harness_state.wait_for(
+            lambda state: state.get("view") != "loading",
+            timeout=30.0,
+            what="the HUD to leave the loading view",
+        )
+        button = replace_button(hud_window(8.0) or hud) if settled else None
         if button is None:
             report["stopped_because"] = (
                 f"no Replace button at press {press}; "

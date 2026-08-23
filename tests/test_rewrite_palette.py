@@ -4710,3 +4710,31 @@ def test_the_published_state_never_carries_the_writers_text(app, tmp_path, monke
     body = session_state.state_path().read_text(encoding="utf-8")
     assert "distinctive sentence" not in body
     palette.finish_choice()
+
+
+def test_refused_tone_batch_puts_the_card_back(app):
+    """A refused tone batch must not strand the HUD in the loading view.
+
+    Asking for a tone switches the HUD to "loading". When the model returns
+    the wrong paragraph count the batch is thrown away and each member is
+    re-requested on its own - and that branch used to return without ever
+    leaving the loading view, because _restore_visible_suggestion restores
+    the text and not the view. To a writer, picking a tone hung the app.
+
+    Measured 2026-08-23 from the app's own event log: tone_requested Clear,
+    tone_batch_refused, and no card_restored after it. The HUD stayed in
+    loading with all 25 sections ready and replace_enabled true.
+    """
+    palette = RewritePalette(suggestion_engine=_SuggestionEngine())
+    palette.show_capture("Please review this sentence.")
+    app.processEvents()
+    palette.badge_button.click()
+    palette._set_view("loading", activate=False)
+    assert palette._view == "loading"
+
+    palette._restore_card_view("abcd1234")
+
+    assert palette._view == "card"
+    palette.close()
+    palette.deleteLater()
+    app.processEvents()
