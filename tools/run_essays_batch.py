@@ -485,6 +485,45 @@ def log_lines() -> int:
         return 0
 
 
+def tone_row_error(
+    tone: str, tone_selected: int, commands: dict[str, int]
+) -> str | None:
+    """Why this tone row is not a measurement, or None when it is one.
+
+    Two different failures, and the harness could only see the second one
+    until 2026-08-23.
+
+    A tone that was never SELECTED is the older failure. The message it used
+    to print - "the HUD tone control is not reachable through UI Automation" -
+    was false often enough to mislead three separate investigations, so it now
+    states what was observed and leaves the cause to the reader.
+
+    A tone that was selected and then never REQUESTED is the newer one, and it
+    is the dangerous one, because the run completes and produces a number.
+    Measured that day: --tone Clear, selected 5 times and confirmed by the
+    published state every time, while the app's own log read
+    {Proofread: 25, Rewrite: 3} with no Clear request in it - the palette was
+    mapping Clear onto the Rewrite command, so the Clear contract was never
+    applied. A tone that silently proofreads is scored by the judge exactly
+    like a tone that failed to land, which is how a one-line mapping bug spent
+    days looking like a prompt-quality problem.
+    """
+    if not tone:
+        return None
+    if not tone_selected:
+        return (
+            f"--tone {tone} was never applied to any section; "
+            f"the app ran {commands}."
+        )
+    if not commands.get(tone):
+        return (
+            f"--tone {tone} was selected {tone_selected} time(s) but the app "
+            f"never ran it; the app ran {commands}. The tone reaching the "
+            "writer is not the tone that was asked for."
+        )
+    return None
+
+
 def commands_since(since: int = 0) -> dict[str, int]:
     """Which Polish commands the app actually ran, from its own log.
 
@@ -1037,18 +1076,9 @@ def main() -> int:
                 "rules_fallbacks": rules_fallbacks_since(result.get("_log_start", 0)),
                 **judged,
             }
-            if args.tone and not row["tone_selected"]:
-                # A tone run that proofread everything is not a tone result,
-                # and must never be reported as one. The first run of this
-                # flag pressed nothing and the app logged eleven Proofread
-                # requests while the harness believed it had asked for
-                # Friendly; only the log read-back caught it. Now it is an
-                # error on the row rather than a number somebody might quote.
-                row["error"] = (
-                    f"--tone {args.tone} was never applied to any section; "
-                    f"the app ran {row['commands']}. The HUD tone control is "
-                    "not reachable through UI Automation."
-                )
+            row["error"] = row["error"] or tone_row_error(
+                args.tone, row["tone_selected"], row["commands"]
+            )
             row["outcome"] = outcome(row)
             outcomes.append(row["outcome"])
             summary.append(row)

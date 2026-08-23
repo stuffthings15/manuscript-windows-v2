@@ -102,3 +102,47 @@ def test_a_missing_log_is_not_an_exception(monkeypatch, tmp_path):
     monkeypatch.setattr(run_essays_batch, "LOG", tmp_path / "absent.log")
     assert run_essays_batch.commands_since(0) == {}
     assert run_essays_batch.rules_fallbacks_since(0) == 0
+
+
+def test_a_tone_selected_but_never_requested_is_not_a_measurement():
+    """The failure that completes a run and produces a number anyway.
+
+    Measured 2026-08-23 with --tone Clear: selected five times, confirmed by
+    the published HUD state on every one, and the app logged
+    {Proofread: 25, Rewrite: 3} with no Clear request in it. The palette was
+    mapping Clear onto the Rewrite command, so the Clear contract never
+    reached the writer. The old guard checked only that tone_selected was
+    non-zero - and tone_selected is a count, not a tone name - so this row
+    passed it and would have been judged and quoted as a Clear score.
+    """
+    import run_essays_batch
+
+    error = run_essays_batch.tone_row_error(
+        "Clear", 5, {"Proofread": 25, "Rewrite": 3}
+    )
+    assert error is not None
+    assert "selected 5 time(s)" in error
+    assert "not the tone that was asked for" in error
+
+
+def test_a_tone_the_app_actually_ran_is_a_measurement():
+    import run_essays_batch
+
+    assert (
+        run_essays_batch.tone_row_error("Clear", 5, {"Proofread": 25, "Clear": 3})
+        is None
+    )
+
+
+def test_a_tone_never_selected_is_still_reported():
+    import run_essays_batch
+
+    error = run_essays_batch.tone_row_error("Friendly", 0, {"Proofread": 11})
+    assert error is not None
+    assert "never applied" in error
+
+
+def test_a_run_without_a_tone_flag_is_never_faulted():
+    import run_essays_batch
+
+    assert run_essays_batch.tone_row_error("", 0, {"Proofread": 11}) is None
