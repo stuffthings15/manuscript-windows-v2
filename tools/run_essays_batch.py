@@ -1065,6 +1065,14 @@ def main() -> int:
                 "presses": result.get("presses", 0),
                 "dismissed": result.get("dismissed", 0),
                 "stalled_at": result.get("stalled_at"),
+                # Why the press loop stopped. This was recorded from
+                # 2026-08-21 and then dropped on the floor: it never reached
+                # the row and was never printed, so every partial run showed
+                # "stalled=None err=None" beside a press count well short of
+                # the section count, and the reason it had already worked out
+                # was thrown away. Days of "the harness stalls again" had an
+                # answer written down at the moment it happened.
+                "stopped_because": result.get("stopped_because"),
                 "error": result.get("error"),
                 "timed_out": bool(result.get("timed_out")),
                 "tone": args.tone,
@@ -1090,6 +1098,11 @@ def main() -> int:
                 f"unknown={len(row['unknown_words']):>3} "
                 f"artefacts={len(row['artefacts']):>2} "
                 f"stalled={row['stalled_at']} err={row['error']}"
+                + (
+                    f" stopped={row['stopped_because']}"
+                    if row["stopped_because"]
+                    else ""
+                )
                 + (
                     f" tone={args.tone} applied={row['tone_selected']}"
                     f" ran={row['commands']} rules={row['rules_fallbacks']}"
