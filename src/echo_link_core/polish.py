@@ -6282,10 +6282,56 @@ def _negation_signature(text: str) -> tuple[bool, ...]:
     return tuple(bool(_NEGATION.search(value)) for value in sentences)
 
 
+def _synonym_replaced_negations(source: str, candidate: str) -> int:
+    """Source "un-" words the candidate replaced with a word, not an opposite.
+
+    _expand_morphological_negation writes "unclear" as "not clear" so both
+    spellings count alike. Its docstring reasons that this "cannot widen what
+    is accepted", which is true and is not the risk: it NARROWS what is
+    accepted, and nobody checked that direction.
+
+    A correction that swaps a negative-prefix word for an ordinary synonym
+    keeps the meaning exactly, and the count says otherwise - the source has a
+    negation and the candidate has none. Measured 2026-08-24, all four refused
+    and all four accepted before the expansion landed:
+
+        unclear     -> confusing
+        unnecessary -> pointless
+        unhappy     -> miserable
+        untrue      -> false
+
+    Every refusal falls back to the deterministic rules, which return thin,
+    largely unchanged text, so this reads as a corrector that stopped working.
+
+    The guard is defending against INVERSION - "unclear" becoming "clear" -
+    and counting cannot tell that apart from a synonym. The stem can: an
+    inversion leaves the bare stem behind, and a synonym does not. So a source
+    negation is discounted only when its stem is nowhere in the candidate.
+    """
+    low = candidate.casefold()
+    found = 0
+    for match in re.finditer(r"\bun([a-z]+)\b", source, flags=re.IGNORECASE):
+        whole = match.group(0)
+        stem = match.group(1)
+        if whole.casefold() in _NOT_MORPHOLOGICAL_NEGATIONS:
+            continue
+        if len(stem) < 4 or not _is_ordinary_english_word(stem):
+            continue
+        if whole.casefold() in low:
+            continue
+        if re.search(rf"\b{re.escape(stem)}\b", low):
+            # The stem survived on its own. That may be a real inversion, so
+            # it keeps counting and the guard keeps refusing it.
+            continue
+        found += 1
+    return found
+
+
 def _negation_preserved(source: str, candidate: str) -> bool:
     """Keep polarity while permitting run-on splits and double-negative repair."""
     source_count = _negation_count(source)
     candidate_count = _negation_count(candidate)
+    source_count -= _synonym_replaced_negations(source, candidate)
     source_count -= _equivalent_absence_count(source, candidate)
     candidate_count -= _equivalent_absence_count(candidate, source)
     repair_allowance = sum(1 for _ in _DOUBLE_NEGATIVE.finditer(source))

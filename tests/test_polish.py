@@ -705,3 +705,58 @@ def test_a_tone_is_judged_by_the_tone_similarity_floor(validator):
         f"tone={tone_refusals} rewrite={rewrite_refusals}"
     )
     assert not tone_refusals, tone_refusals
+
+
+
+def test_replacing_a_negative_prefix_word_with_a_synonym_is_not_a_meaning_change():
+    """The regression that made the corrector look broken.
+
+    _expand_morphological_negation counts "unclear" as a negation so that
+    "not clear" and "unclear" agree. The side it did not consider is a
+    correction that replaces the word outright: the source then carries a
+    negation the candidate does not, and a meaning-preserving fix is refused.
+
+    Measured 2026-08-24 - all four passed before the expansion landed and all
+    four were refused after it. A refusal falls back to the deterministic
+    rules, which return thin unchanged text, so the product reads as a
+    corrector that stopped correcting.
+    """
+    from echo_link_core.polish import _negation_preserved
+
+    assert _negation_preserved(
+        "The instructions were unclear to the reader.",
+        "The instructions were confusing to the reader.",
+    )
+    assert _negation_preserved(
+        "The delay was unnecessary and costly.",
+        "The delay was pointless and costly.",
+    )
+    assert _negation_preserved("She felt unhappy about it.", "She felt miserable about it.")
+    assert _negation_preserved("The claim is untrue.", "The claim is false.")
+
+
+def test_turning_a_negative_prefix_word_into_its_opposite_is_still_refused():
+    """The protection the guard exists for, kept intact.
+
+    An inversion leaves the bare stem behind - "unclear" becomes "clear" - and
+    a synonym does not. That is what separates the two, and it is why the
+    allowance above is safe.
+    """
+    from echo_link_core.polish import _negation_preserved
+
+    assert not _negation_preserved(
+        "The instructions were unclear.", "The instructions were clear."
+    )
+    assert not _negation_preserved("The claim is untrue.", "The claim is true.")
+    assert not _negation_preserved(
+        "The delay was unnecessary.", "The delay was necessary."
+    )
+
+
+def test_unpacking_a_negative_prefix_still_agrees_with_itself():
+    """The case the expansion was added for, unaffected by the allowance."""
+    from echo_link_core.polish import _negation_preserved
+
+    assert _negation_preserved(
+        "The instructions were unclear.", "The instructions were not clear."
+    )
