@@ -223,17 +223,22 @@ def _graded(corpus: Path, first: int, last: int, after: float) -> dict[str, obje
                 f"run and were not graded: {sorted(stale)[:5]}"
             )
         }
+    # An incomplete essay is excluded from the score and reported, rather than
+    # discarding the whole corpus.
+    #
+    # The first version refused to grade ANYTHING if any essay was incomplete,
+    # which is too strict to be useful: measured on the first full tier, essay
+    # 4 of 20 came back partial, and that would have thrown away nineteen good
+    # results and left the corrections step with no number at all. The point of
+    # the rule is that an interrupted run must not become a quality number, not
+    # that one bad essay erases the other nineteen.
+    #
+    # The gate still fails, because "19 of 20 measured" is not the same as
+    # passing, and the reason travels with the evidence.
     incomplete = _incomplete_runs()
-    if incomplete:
-        # Not a score. A run that stopped early has not measured the product,
-        # and grading it turns an interruption into a quality number.
-        return {
-            "error": (
-                f"{len(incomplete)} essay run(s) did not complete, so nothing "
-                "was graded"
-            ),
-            "incomplete": incomplete,
-        }
+    excluded = {str(row.get("essay") or "") for row in incomplete}
+    if excluded:
+        paths = [path for path in paths if path.stem not in excluded]
     rows = [grade(path, dictionary, engine) for path in paths]
     if not rows:
         return {"error": f"no corrected essays from {corpus.name} found in {BATCH}"}
@@ -266,6 +271,9 @@ def _graded(corpus: Path, first: int, last: int, after: float) -> dict[str, obje
     }
     return {
         "essays": len(rows),
+        # Named so a reader is never told a mean without being told what it
+        # left out.
+        "excluded_incomplete": incomplete,
         "mean": round(sum(totals) / len(totals), 1),
         "lowest": lowest["total"],
         "lowest_essay": lowest["name"],
@@ -382,6 +390,14 @@ def full_tier(results: dict[str, object], started: float) -> list[str]:
         if "error" in report:
             failures.append(str(report["error"]))
             continue
+        excluded = report.get("excluded_incomplete") or []
+        if excluded:
+            # 19 of 20 measured is not passing, whatever the mean says.
+            failures.append(
+                f"{label}: {len(excluded)} essay run(s) did not complete and were "
+                f"not graded ({excluded[0].get('essay')}: "
+                f"{excluded[0].get('stopped_because') or excluded[0].get('outcome')})"
+            )
         if not gated:
             # Reported, never gated. Said out loud on every run so a reader
             # does not mistake a low number here for a release blocker.
@@ -416,10 +432,19 @@ def full_tier(results: dict[str, object], started: float) -> list[str]:
         # tones were judged after runs that applied nothing and each came back
         # at 0.0 percent, which read as a total product failure and was not.
         # The same rule the 2026-08-21 sweep script uses: check the row first.
+        # Only the essay that is actually JUDGED has to have completed.
+        #
+        # The judge reads one document - the first essay of the corpus - so a
+        # stall in essay 2 or 3 says nothing about the number being taken. The
+        # first version skipped the tone if ANY of the three runs was
+        # incomplete, and with roughly half of all essay runs stalling that
+        # skipped every tone and produced no tone numbers at all from a
+        # six-hour tier. Same all-or-nothing mistake as the corpus rule.
+        judged_essay = sorted(COHERENT.glob("*.docx"))[0].stem
         unapplied = [
             row
             for row in _incomplete_runs()
-            if str(row.get("outcome") or "") != "complete"
+            if str(row.get("essay") or "") == judged_essay
         ]
         if unapplied:
             tones[tone] = None
