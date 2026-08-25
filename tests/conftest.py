@@ -35,3 +35,20 @@ tempfile.tempdir = str(TEST_TEMP)
 # test that renders the palette publishes it.
 _STATE_SANDBOX = Path(tempfile.gettempdir()) / "manuscript-test-state"
 os.environ.setdefault("MANUSCRIPT_STATE_DIR", str(_STATE_SANDBOX))
+
+# Measurement pins must never reach the suite.
+#
+# MANUSCRIPT_PREFERRED_PACK and MANUSCRIPT_PREFERRED_MODE exist so one run can
+# compare two models. The acceptance tier runs the suite as its first step, in
+# the same environment, so a pinned tier ran the whole suite with a pack and a
+# tier forced - and every test that asserts the DEFAULT choice failed.
+#
+# Measured 2026-08-25: pinned tiers reported "the test suite reported 10
+# failed" while the same tree passed 2429 standalone, including with the app
+# running. Ten failures looked like a product regression and were the
+# measurement telling the tests what to think.
+#
+# Cleared for the whole session rather than per test, because the tests that
+# need protecting are the ones with no idea this environment exists.
+for _pin in ("MANUSCRIPT_PREFERRED_PACK", "MANUSCRIPT_PREFERRED_MODE"):
+    os.environ.pop(_pin, None)
