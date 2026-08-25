@@ -6847,7 +6847,40 @@ def _scope_for_plan(plan: ExecutionPlan):
     return ContextScope.SENTENCE
 
 
+_LAST_LOGGED_PLAN: tuple[str, str, str, bool] = ("", "", "", False)
+
+
 def _notify_plan(request: CorrectionRequest, plan: ExecutionPlan) -> None:
+    # Say which pack is answering, and why it is not the one that was asked
+    # for. The app never recorded this anywhere, so "which model produced this
+    # number" could only be answered from ollama's own server log, and only
+    # after the fact.
+    #
+    # That gap cost two full acceptance tiers on 2026-08-24. Both were pinned
+    # to qwen3:14b, both reported a corrections mean, and ollama's log showed
+    # the app had started on qwen3:14b and quietly degraded to gemma4-e4b and
+    # then gemma4-e2b. The numbers were Gemma's, reported as Qwen's, and the
+    # only reason it was caught was reading a different program's log.
+    #
+    # Logged on change rather than per request: a document is dozens of
+    # sections and this would otherwise repeat identically for every one.
+    global _LAST_LOGGED_PLAN
+    current = (
+        str(plan.pack_id or ""),
+        str(plan.model or ""),
+        str(plan.downgrade_reason or ""),
+        bool(plan.use_llm),
+    )
+    if current != _LAST_LOGGED_PLAN:
+        _LAST_LOGGED_PLAN = current
+        logger.info(
+            "Polish plan pack=%s model=%s backend=%s use_llm=%s reason=%s",
+            plan.pack_id or "-",
+            plan.model or "-",
+            getattr(plan.backend, "value", plan.backend),
+            plan.use_llm,
+            plan.downgrade_reason or "-",
+        )
     callback = request.plan_callback
     if callback is None:
         return
