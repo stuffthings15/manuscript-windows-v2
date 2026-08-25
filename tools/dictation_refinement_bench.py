@@ -48,6 +48,10 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from echo_link_core.correction import OllamaRefiner  # noqa: E402
+from echo_link_core.local_transport import (  # noqa: E402
+    MAX_TIMEOUT_SECONDS,
+    MIN_TIMEOUT_SECONDS,
+)
 
 # Raw dictation, as faster-whisper hands it over: no punctuation, spoken
 # commands already expanded by the deterministic stage, and the kind of
@@ -83,10 +87,27 @@ def bench(model: str, endpoint: str, timeout: float) -> dict:
             )
             elapsed = time.monotonic() - started
             text = str(getattr(result, "text", "") or "")
+            # refine() NEVER raises for a dead backend. It catches
+            # LocalTransportError and returns the ORIGINAL text with
+            # source="deterministic" and a warning, so a model that could not
+            # be reached at all comes back instantly with the input unchanged.
+            #
+            # Measured 2026-08-24: right after an Ollama upgrade the service
+            # was still restarting, and this bench reported all three packs at
+            # 0.0s mean and called the run a comparison. A failing model was
+            # being presented as the fastest one. The source field is the only
+            # thing that separates those two outcomes, so it is read here and
+            # anything that is not "ollama" is a failure, not a fast result.
+            source = str(getattr(result, "source", "") or "")
+            warning = str(getattr(result, "warning", "") or "")
+            if source != "ollama":
+                failures.append(f"{source or 'no source'}: {warning or 'no warning'}")
         except Exception as exc:  # noqa: BLE001 - a pack that cannot run is a result
             elapsed = time.monotonic() - started
             failures.append(f"{type(exc).__name__}: {exc}")
             text = ""
+            source = "raised"
+            warning = str(exc)
         timings.append(elapsed)
         outputs.append(
             {
@@ -100,6 +121,8 @@ def bench(model: str, endpoint: str, timeout: float) -> dict:
                 # against a real response rather than trusted.
                 "leaked_thinking": "<think>" in text.casefold(),
                 "empty": not text.strip(),
+                "source": source,
+                "warning": warning,
             }
         )
 
@@ -120,9 +143,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--model", action="append", default=[], required=True)
     parser.add_argument("--endpoint", default="http://127.0.0.1:11434")
+    # The transport refuses anything outside 0.2 to 300 seconds
+    # (local_transport.py MIN/MAX_TIMEOUT_SECONDS) and refuses it as a
+    # LocalTransportError, which refine() turns into an unchanged result. A
+    # --timeout of 600 therefore produced a full three-model run where every
+    # clip reported 0.0 seconds and nothing had run. Clamped here so the
+    # mistake cannot be made from the command line.
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--json", type=Path, default=None)
     arguments = parser.parse_args(argv)
+    arguments.timeout = max(MIN_TIMEOUT_SECONDS, min(arguments.timeout, MAX_TIMEOUT_SECONDS))
 
     reports = []
     for model in arguments.model:
