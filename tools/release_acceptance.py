@@ -293,6 +293,49 @@ def _graded(corpus: Path, first: int, last: int, after: float) -> dict[str, obje
     }
 
 
+def _stale_app_reason() -> str:
+    """Why the running app must not be measured, or "" when it may be.
+
+    The app publishes the build it STARTED with; this compares that against
+    the checkout being tested. A missing state file means no app is publishing
+    at all, which is also a reason not to measure.
+    """
+    import harness_state
+
+    state = harness_state.read_state()
+    if not state:
+        return (
+            "no app is publishing its state, so there is nothing to measure, "
+            "or the running app predates state publishing. Restart it with "
+            "tools/restart_app_and_wait.py"
+        )
+    running = str(state.get("build") or "").strip()
+    checkout = _checkout_build()
+    if not running or not checkout:
+        return ""
+    if running != checkout:
+        return (
+            f"the running app is build {running} and this checkout is "
+            f"{checkout}; restart the app with tools/restart_app_and_wait.py "
+            "before measuring"
+        )
+    return ""
+
+
+def _checkout_build() -> str:
+    head = ROOT / ".git" / "HEAD"
+    try:
+        ref = head.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    if ref.startswith("ref: "):
+        try:
+            return (head.parent / ref[5:]).read_text(encoding="utf-8").strip()[:12]
+        except OSError:
+            return ""
+    return ref[:12]
+
+
 def fast_tier(results: dict[str, object], started: float) -> list[str]:
     """Everything that does not need Word, plus a five-essay Word smoke."""
     failures: list[str] = []
@@ -348,6 +391,24 @@ def fast_tier(results: dict[str, object], started: float) -> list[str]:
     results["controls"] = passed
     if not passed:
         failures.append("a control on screen cannot do anything")
+
+    # Refuse to measure an app that is not this checkout.
+    #
+    # This tier never restarted the app - it measured whatever happened to be
+    # running - and session_state.build_identifier read .git/HEAD on every
+    # call, so the app always reported the CHECKOUT's commit rather than its
+    # own. The staleness check the harness was supposed to perform compared
+    # HEAD against HEAD and could never fail.
+    #
+    # Measured 2026-08-25: an app process started on 2026-08-23 served SIX
+    # acceptance tiers while reporting a commit made minutes earlier. Every
+    # number came from two-day-old code, and two were quoted as evidence
+    # about a model that code had never heard of.
+    stale = _stale_app_reason()
+    if stale:
+        failures.append(stale)
+        _say("\n=== NOT MEASURING: " + stale)
+        return failures
 
     _say("\n=== five essays through Word (takes the screen, about 10 minutes)")
     passed, _ = _run(

@@ -130,16 +130,36 @@ def record_event(event: str, **fields: object) -> None:
 
 
 def build_identifier() -> str:
-    """Which build is running, so a measurement cannot be taken against another.
+    """Which build is RUNNING, so a measurement cannot be taken against another.
 
     Three separate times in two days a run measured a process that was not the
     build under test, and one of those cost six hours. The harness compares
     this against the checkout it is testing and refuses to start when they
     differ.
+
+    That comparison was inert until 2026-08-25, because this read .git/HEAD on
+    every call and therefore always returned the CHECKOUT's head rather than
+    the running process's. It compared HEAD against HEAD and always matched. A
+    staleness check that cannot detect staleness is worse than none, because
+    the harness reports it as a passed check.
+
+    Measured that night: an app process started on 2026-08-23 served six
+    acceptance tiers while reporting its build as a commit made minutes
+    earlier. Every number in those runs came from two-day-old code, including
+    two that were quoted as evidence about a model that code had never heard
+    of.
+
+    The value is now read once, when this module is first imported - which for
+    the app is process start - so it describes the code that is loaded and
+    stops matching when the checkout moves on.
     """
     override = os.environ.get("MANUSCRIPT_BUILD", "").strip()
     if override:
         return override
+    return _PROCESS_BUILD
+
+
+def _read_head() -> str:
     head = Path(__file__).resolve().parents[2] / ".git" / "HEAD"
     try:
         ref = head.read_text(encoding="utf-8").strip()
@@ -152,3 +172,7 @@ def build_identifier() -> str:
         except OSError:
             return "unknown"
     return ref[:12]
+
+
+# Read once, at import. See build_identifier for why this must not be lazy.
+_PROCESS_BUILD = _read_head()

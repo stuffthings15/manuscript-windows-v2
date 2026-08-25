@@ -111,3 +111,48 @@ def test_the_build_is_published_so_a_run_cannot_measure_the_wrong_one(monkeypatc
     monkeypatch.setenv("MANUSCRIPT_BUILD", "abc123def456")
 
     assert session_state.build_identifier() == "abc123def456"
+
+
+def test_the_build_identifier_describes_the_running_process_not_the_checkout(
+    monkeypatch, tmp_path
+):
+    """A staleness check that cannot detect staleness is worse than none.
+
+    build_identifier read .git/HEAD on every call until 2026-08-25, so it
+    always returned the CHECKOUT's head rather than the running process's. The
+    harness compared HEAD against HEAD, always matched, and reported it as a
+    passed check.
+
+    Measured that night: an app process started on 2026-08-23 served six
+    acceptance tiers while reporting its build as a commit made minutes
+    earlier. Every number came from two-day-old code, and two of them were
+    quoted as evidence about a model that code had never heard of.
+
+    This pins the property that matters: once a process has started, moving
+    the checkout must NOT change what that process reports.
+    """
+    from echo_link_core import session_state
+
+    monkeypatch.delenv("MANUSCRIPT_BUILD", raising=False)
+    started_as = session_state.build_identifier()
+
+    # The checkout moves on underneath a long-running process.
+    monkeypatch.setattr(session_state, "_read_head", lambda: "0000newhead0")
+
+    assert session_state.build_identifier() == started_as, (
+        "build_identifier followed the checkout instead of describing the "
+        "running process"
+    )
+
+
+def test_an_explicit_build_override_still_wins():
+    """Packaged builds have no .git, so the override has to keep working."""
+    import os
+
+    from echo_link_core import session_state
+
+    os.environ["MANUSCRIPT_BUILD"] = "packaged12345"
+    try:
+        assert session_state.build_identifier() == "packaged12345"
+    finally:
+        del os.environ["MANUSCRIPT_BUILD"]
