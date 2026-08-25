@@ -28,6 +28,38 @@ from .polish_types import (
 )
 
 
+def _pinned_pack() -> str:
+    """The pack a measurement pinned, or "" when nothing is pinned."""
+    return os.environ.get("MANUSCRIPT_PREFERRED_PACK", "").strip()
+
+
+def _measurement_mode(mode: PolishMode) -> PolishMode:
+    """Let a measurement choose the tier, without changing saved settings.
+
+    The warm-latency limit is per mode - 2s for Instant, 5s for Auto and
+    Balanced, 15s for Professional - and it decides which packs survive their
+    acceptance probe. Measured 2026-08-25: qwen3:14b takes 5.23s and is
+    refused by the 5s interactive limit, so two pinned acceptance tiers
+    silently measured Gemma and reported the result as Qwen's.
+
+    Comparing packs therefore needs the tier as well as the pack. This sets it
+    for one process, so the comparison does not have to write to the writer's
+    saved settings and remember to put them back. An unrecognised value is
+    ignored rather than raising, for the same reason the pack pin ignores a
+    typo: a bad measurement argument must not become "the product refused to
+    start".
+
+        $env:MANUSCRIPT_PREFERRED_MODE = "professional"
+    """
+    wanted = os.environ.get("MANUSCRIPT_PREFERRED_MODE", "").strip()
+    if not wanted:
+        return mode
+    try:
+        return PolishMode(wanted.casefold())
+    except ValueError:
+        return mode
+
+
 def _measurement_pack_order(order: tuple[str, ...]) -> tuple[str, ...]:
     """Let a measurement pin one pack, without shipping it as the default.
 
@@ -46,7 +78,7 @@ def _measurement_pack_order(order: tuple[str, ...]) -> tuple[str, ...]:
 
         $env:MANUSCRIPT_PREFERRED_PACK = "qwen3-14b-q4-k-m-v1"
     """
-    pinned = os.environ.get("MANUSCRIPT_PREFERRED_PACK", "").strip()
+    pinned = _pinned_pack()
     if not pinned or pinned not in order:
         return order
     return (pinned,) + tuple(item for item in order if item != pinned)
@@ -260,7 +292,7 @@ class HardwarePolicyManager:
         benchmark_records: Mapping[str, BenchmarkRecord] | None = None,
         manual: bool = False,
     ) -> ExecutionPlan:
-        mode = PolishMode.coerce(mode)
+        mode = _measurement_mode(PolishMode.coerce(mode))
         classifier = classifier or ClassifierDecision(
             needs_llm=task is not PolishTask.PROOFREAD,
             error_categories=(),
