@@ -336,6 +336,24 @@ class DictationEngine:
                 )
                 self._accepted_ai_plan = plan if accepted_model else None
                 self.settings = accepted_settings
+            # Say which model the app is actually going to use.
+            #
+            # This is the app's real decision point. The app does not call
+            # analyze() per request - it takes a lease on ONE accepted plan -
+            # so logging inside analyze() records nothing here, which was
+            # learned the hard way: a plan line was added there on 2026-08-25
+            # and did not appear in a single app run.
+            #
+            # Three acceptance tiers were reported with a corrections mean
+            # before anyone could say which model produced it. Two were pinned
+            # to qwen3:14b and had actually run Gemma. The only way to tell was
+            # to diff ollama's own server log against a mark taken beforehand.
+            logger.info(
+                "Accepted AI plan pack=%s model=%s policy=%s",
+                accepted_pack or "-",
+                accepted_model or "(none - deterministic rules)",
+                accepted_settings.polish_policy_version,
+            )
 
     def set_ai_coordinator(
         self,
