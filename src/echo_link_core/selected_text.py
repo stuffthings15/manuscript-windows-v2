@@ -63,6 +63,32 @@ COMMANDS = {
     "Translate": "Translate the text into the requested language. Preserve names, numbers, paths, URLs, and email addresses.",
 }
 
+# Palette names that mean an existing command, resolved before validation.
+#
+# The palette mapped its "Clear" button onto "Rewrite" until 2026-08-24.
+# Commit 4fe0125 gave Clear its own command, because polish_quality defines a
+# Clear contract and no Rewrite contract, so the old mapping left that
+# contract unreachable on the document path. That path now works - a tier ran
+# 25 Clear requests - but this layer had never heard the word, so a Clear
+# request here raised "Unknown writing command.", cascaded through every
+# installed pack and ended on deterministic rules. It was found while
+# measuring a pinned model, where the cascade looked exactly like the pinned
+# pack failing its own acceptance probe.
+#
+# Clear is resolved here rather than added to COMMANDS on purpose. COMMANDS is
+# the shared cross-platform vocabulary - shared/contract/v1 pins it for the
+# windows, swift and android clients and says an incompatible change needs a
+# new major directory - and "Clear" and "Rewrite" are the same instruction
+# under two names, which is a UI label, not a new capability. Aliasing keeps
+# the contract still and fixes the defect.
+_COMMAND_ALIASES = {"Clear": "Rewrite"}
+
+
+def resolve_command(command: str) -> str:
+    """The canonical command for a palette label."""
+    return _COMMAND_ALIASES.get(str(command or "").strip(), str(command or "").strip())
+
+
 TONE_COMMANDS = frozenset(
     {
         "Improve",
@@ -414,6 +440,10 @@ class LocalWritingAssistant:
         require_gpu: bool = False,
         defer_meaning_validation: bool = False,
     ) -> WritingResult:
+        # Resolve the palette label before anything reads the command - the
+        # surface-guard and Shorten checks below both branch on it, so
+        # resolving at the COMMANDS check would leave them seeing "Clear".
+        command = resolve_command(command)
         bounded_timeout = _validated_timeout(timeout)
         bounded_keep_alive = _validated_keep_alive(keep_alive)
         bounded_context = _validated_context_window(context_window)

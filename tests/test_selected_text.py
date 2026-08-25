@@ -3702,3 +3702,48 @@ def test_the_allowlist_admits_the_qwen_packs_and_still_refuses_everything_else()
     assert select_local_tone_model("Friendly", "deepseek-r1:8b", installed) == ""
     # Allowlisted but not installed.
     assert select_local_tone_model("Friendly", "qwen3:14b", ("gemma4:e4b-it-qat",)) == ""
+
+
+def test_every_palette_tone_resolves_to_a_command_the_writing_layer_knows():
+    """A tone the UI offers must not be a word this layer has never heard.
+
+    The palette mapped its "Clear" button onto the "Rewrite" command until
+    2026-08-24. Commit 4fe0125 gave Clear its own command, because
+    polish_quality defines a Clear contract and no Rewrite contract, so the
+    old mapping left that contract unreachable. Clear was then the only
+    palette tone missing from COMMANDS, and a Clear request through this path
+    raised "Unknown writing command.", cascaded through every installed pack,
+    and finished on deterministic rules.
+
+    It was found while measuring a pinned model, where the cascade looked
+    exactly like the pinned pack failing its own acceptance probe. Tying the
+    two vocabularies together here means the next tone added to the palette
+    fails a test rather than a user's document.
+    """
+    from echo_link_core.polish_quality import TONE_CONTRACTS
+    from echo_link_core.selected_text import COMMANDS, resolve_command
+
+    missing = sorted(
+        name for name in TONE_CONTRACTS if resolve_command(name) not in COMMANDS
+    )
+    assert not missing, f"tones with a contract but no command: {missing}"
+
+
+def test_clear_resolves_to_rewrite_without_entering_the_shared_vocabulary():
+    """Clear is a UI label for an existing command, not a new capability.
+
+    COMMANDS is the shared cross-platform vocabulary: shared/contract/v1 pins
+    it for the windows, swift and android clients and says an incompatible
+    change needs a new major directory. "Clear" and "Rewrite" carry the same
+    instruction, so aliasing fixes the defect and leaves the contract still.
+    Adding Clear to COMMANDS instead broke two shared-contract tests, which is
+    the contract doing its job.
+    """
+    from echo_link_core.selected_text import COMMANDS, resolve_command
+
+    assert resolve_command("Clear") == "Rewrite"
+    assert resolve_command("Clear") in COMMANDS
+    assert "Clear" not in COMMANDS
+    # An unaliased name is returned untouched, so this cannot quietly rewrite
+    # a command it does not know about.
+    assert resolve_command("Friendly") == "Friendly"
