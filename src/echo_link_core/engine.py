@@ -349,10 +349,16 @@ class DictationEngine:
             # to qwen3:14b and had actually run Gemma. The only way to tell was
             # to diff ollama's own server log against a mark taken beforehand.
             logger.info(
-                "Accepted AI plan pack=%s model=%s policy=%s",
+                "Accepted AI plan pack=%s model=%s policy=%s reason=%s",
                 accepted_pack or "-",
                 accepted_model or "(none - deterministic rules)",
                 accepted_settings.polish_policy_version,
+                # Why this pack and not a larger one. Without it the log says
+                # the app settled on the smallest pack and not what pushed it
+                # there, which on 2026-08-25 left a pinned run reporting
+                # gemma4-e2b with no way to tell whether the pin was ignored,
+                # the probe failed, or the hardware refused it.
+                getattr(plan, "downgrade_reason", "") or "-",
             )
 
     def set_ai_coordinator(
