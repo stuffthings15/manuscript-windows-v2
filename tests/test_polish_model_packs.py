@@ -82,19 +82,36 @@ def test_bundled_manifest_signature_and_catalog_are_valid(tmp_path):
         "gemma4-e2b-qat-v1",
         "gemma4-e4b-qat-v1",
         "gemma4-12b-q4-k-m-v1",
+        # Added 2026-08-24 on Curtis's instruction to move the product to
+        # Qwen3.8. Both are in the signed manifest and neither is any tier's
+        # default; they are here so they can be measured against the Gemma
+        # packs on the same corpus before anything is promoted.
+        "qwen3-14b-q4-k-m-v1",
+        "qwen3dot8-27b-q4-k-m-v1",
     ]
     assert [value.model for value in packs] == [
         "gemma4:e2b-it-qat",
         "gemma4:e4b-it-qat",
         "gemma4:12b-it-q4_K_M",
+        "qwen3:14b",
+        "qwen3.8:27b",
     ]
     assert [value.size_bytes for value in packs] == [
         4_336_358_185,
         6_146_501_801,
         7_556_508_396,
+        9_276_198_565,
+        17_741_872_154,
     ]
-    assert all(value.family == "Gemma 4" for value in packs)
-    assert all("qwen" not in value.model.casefold() for value in packs)
+    # This used to assert every pack was "Gemma 4" and that no model name
+    # contained "qwen". Both were standing in for the real rule, which is that
+    # the manifest may only carry models the tone path is allowed to run.
+    # Tying it to the allowlist says that directly and keeps saying it when
+    # the families change again - a family name and a substring would not have
+    # noticed an unapproved model from a fourth vendor.
+    from echo_link_core.selected_text import _OFFICIAL_MODELS
+
+    assert all(value.model.casefold() in _OFFICIAL_MODELS for value in packs)
     gemma12 = next(
         value for value in packs if value.pack_id == "gemma4-12b-q4-k-m-v1"
     )

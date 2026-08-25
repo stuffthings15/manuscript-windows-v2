@@ -19,14 +19,23 @@
       "min_ram_bytes": 8589934592,
       "min_vram_bytes": 0,
       "max_context_tokens": 4096,
-      "backends": ["cpu", "cuda", "vulkan", "hip", "sycl"],
+      "backends": [
+        "cpu",
+        "cuda",
+        "vulkan",
+        "hip",
+        "sycl"
+      ],
       "license": "Apache-2.0",
       "source_url": "https://ai.google.dev/gemma/docs/core/model_card_4",
       "download_ref": "ollama://gemma4:e2b-it-qat",
       "version": "1",
       "available": true,
       "validated": true,
-      "replaces": ["qwen3-1.7b-q4-k-m-v1", "qwen3-4b-q4-k-m-v1"]
+      "replaces": [
+        "qwen3-1.7b-q4-k-m-v1",
+        "qwen3-4b-q4-k-m-v1"
+      ]
     },
     {
       "id": "gemma4-e4b-qat-v1",
@@ -43,14 +52,22 @@
       "min_ram_bytes": 17179869184,
       "min_vram_bytes": 8589934592,
       "max_context_tokens": 4096,
-      "backends": ["cpu", "cuda", "vulkan", "hip", "sycl"],
+      "backends": [
+        "cpu",
+        "cuda",
+        "vulkan",
+        "hip",
+        "sycl"
+      ],
       "license": "Apache-2.0",
       "source_url": "https://ai.google.dev/gemma/docs/core/model_card_4",
       "download_ref": "ollama://gemma4:e4b-it-qat",
       "version": "1",
       "available": true,
       "validated": true,
-      "replaces": ["qwen3-8b-q4-k-m-v1"]
+      "replaces": [
+        "qwen3-8b-q4-k-m-v1"
+      ]
     },
     {
       "id": "gemma4-12b-q4-k-m-v1",
@@ -67,14 +84,79 @@
       "min_ram_bytes": 34359738368,
       "min_vram_bytes": 12884901888,
       "max_context_tokens": 4096,
-      "backends": ["cuda", "vulkan", "hip", "sycl"],
+      "backends": [
+        "cuda",
+        "vulkan",
+        "hip",
+        "sycl"
+      ],
       "license": "Apache-2.0",
       "source_url": "https://ai.google.dev/gemma/docs/core/model_card_4",
       "download_ref": "ollama://gemma4:12b-it-q4_K_M",
       "version": "1",
       "available": true,
       "validated": true,
-      "replaces": ["qwen3-14b-q4-k-m-v1"]
+      "replaces": [
+        "qwen3-14b-q4-k-m-v1"
+      ]
+    },
+    {
+      "id": "qwen3-14b-q4-k-m-v1",
+      "display_name": "Qwen3 14B Q4_K_M",
+      "model": "qwen3:14b",
+      "family": "Qwen3",
+      "parameters": "14.8B",
+      "quantization": "Q4_K_M",
+      "runtime": "ollama",
+      "manifest_digest": "bdbd181c33f2ed1b31c972991882db3cf4d192569092138a7d29e973cd9debe8",
+      "size_bytes": 9276198565,
+      "model_blob_digest": "a8cc1361f3145dc01f6d77c6c82c9116b9ffe3c97b34716fe20418455876c40e",
+      "model_blob_size": 9276184896,
+      "min_ram_bytes": 17179869184,
+      "min_vram_bytes": 12884901888,
+      "max_context_tokens": 4096,
+      "backends": [
+        "cpu",
+        "cuda",
+        "vulkan",
+        "hip",
+        "sycl"
+      ],
+      "license": "Apache-2.0",
+      "source_url": "https://huggingface.co/Qwen/Qwen3-14B",
+      "download_ref": "ollama://qwen3:14b",
+      "version": "1",
+      "available": true,
+      "validated": true
+    },
+    {
+      "id": "qwen3dot8-27b-q4-k-m-v1",
+      "display_name": "Qwen3.8 27B Q4_K_M",
+      "model": "qwen3.8:27b",
+      "family": "qwen35",
+      "parameters": "27B",
+      "quantization": "Q4_K_M",
+      "runtime": "ollama",
+      "manifest_digest": "22130167c4c20e20c7b71454612966ca8e8171e9b3cc8ab6ce8aa6cbfec79643",
+      "size_bytes": 17741872154,
+      "model_blob_digest": "f5f1dd8920d417aac2718b0bda3403da274301efdd6760b4f0f4b864ff2ad57d",
+      "model_blob_size": 16810714464,
+      "min_ram_bytes": 34359738368,
+      "min_vram_bytes": 19327352832,
+      "max_context_tokens": 4096,
+      "backends": [
+        "cpu",
+        "cuda",
+        "vulkan",
+        "hip",
+        "sycl"
+      ],
+      "license": "Apache-2.0",
+      "source_url": "https://huggingface.co/Qwen/Qwen3.8-27B",
+      "download_ref": "ollama://qwen3.8:27b",
+      "version": "1",
+      "available": true,
+      "validated": true
     }
   ]
 }

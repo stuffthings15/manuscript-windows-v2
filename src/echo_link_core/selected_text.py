@@ -91,11 +91,23 @@ TONE_COMMANDS = frozenset(
 )
 
 
-_OFFICIAL_GEMMA4_MODELS = frozenset(
+# The tags the tone path is allowed to run, enforced by
+# _require_exact_response_model against the identity the RESPONSE reports.
+# This is a security boundary, not a convenience list: it is what guarantees
+# the product ran the model it says it ran. Widen it deliberately, with the
+# tag added to the signed manifest in the same change - never by relaxing the
+# check that reads it.
+#
+# Renamed from the Gemma-specific name on 2026-08-24 when the Qwen packs were
+# added; it described its contents rather than its purpose, and the contents
+# are no longer one family.
+_OFFICIAL_MODELS = frozenset(
     {
         "gemma4:e2b-it-qat",
         "gemma4:e4b-it-qat",
         "gemma4:12b-it-q4_k_m",
+        "qwen3:14b",
+        "qwen3.8:27b",
     }
 )
 
@@ -114,10 +126,10 @@ def select_local_tone_model(
     configured_model: str,
     installed_models: tuple[str, ...] | set[str],
 ) -> str:
-    """Use only the installed Gemma 4 pack selected by hardware policy."""
+    """Use only an allowlisted installed pack selected by hardware policy."""
     available = {str(name).strip().casefold(): str(name).strip() for name in installed_models}
     selected = str(configured_model or "").strip().casefold()
-    if command not in COMMANDS or selected not in _OFFICIAL_GEMMA4_MODELS:
+    if command not in COMMANDS or selected not in _OFFICIAL_MODELS:
         return ""
     return available.get(selected, "")
 

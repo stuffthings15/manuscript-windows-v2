@@ -1160,11 +1160,26 @@ def test_tone_model_routing_uses_the_hardware_selected_official_gemma4_candidate
         assert select_local_tone_model(command, configured, installed) == configured
 
 
-@pytest.mark.parametrize("configured", ("qwen3:8b", "qwen3:14b", "custom:latest", ""))
-def test_tone_model_routing_never_selects_qwen_or_an_unapproved_model(configured):
+# qwen3:14b left this list on 2026-08-24: it was approved, added to the signed
+# manifest and added to _OFFICIAL_MODELS on Curtis's instruction, so asserting
+# it can never be selected would now be asserting the opposite of the product.
+# qwen3:8b stays, and is the better example anyway - it is a real model, on
+# real machines, one character away from an approved tag, and still refused.
+@pytest.mark.parametrize("configured", ("qwen3:8b", "custom:latest", ""))
+def test_tone_model_routing_never_selects_an_unapproved_model(configured):
     installed = {"qwen3:8b", "qwen3:14b", "custom:latest"}
 
     assert select_local_tone_model("Proofread", configured, installed) == ""
+
+
+def test_an_approved_model_is_still_refused_when_it_is_not_installed():
+    """Approval is not availability, and the two failures look identical.
+
+    Widening the allowlist is the moment this could quietly become "return the
+    configured name and hope", so it is pinned separately from the routing
+    test above.
+    """
+    assert select_local_tone_model("Proofread", "qwen3:14b", {"custom:latest"}) == ""
 
 
 def test_tone_model_routing_does_not_guess_when_hardware_choice_is_automatic():
@@ -3661,3 +3676,29 @@ def test_a_multi_word_value_is_left_alone():
     from echo_link_core.selected_text import _nearest_protected_spelling
 
     assert _nearest_protected_spelling("somewhere in Cusco Peru", "Cusco Peru") is None
+
+
+def test_the_allowlist_admits_the_qwen_packs_and_still_refuses_everything_else():
+    """Widening the allowlist must not turn it into a pass-through.
+
+    _OFFICIAL_MODELS is enforced by _require_exact_response_model against the
+    identity the RESPONSE reports, which is what guarantees the product ran
+    the model it claims. The Qwen packs were added to it on 2026-08-24 when
+    they were added to the signed manifest; the check itself was not relaxed,
+    and this pins both halves of that.
+    """
+    from echo_link_core.selected_text import select_local_tone_model
+
+    installed = ("qwen3:14b", "qwen3.8:27b", "gemma4:e4b-it-qat", "deepseek-r1:8b")
+
+    assert select_local_tone_model("Friendly", "qwen3:14b", installed) == "qwen3:14b"
+    assert select_local_tone_model("Friendly", "qwen3.8:27b", installed) == "qwen3.8:27b"
+    assert (
+        select_local_tone_model("Friendly", "gemma4:e4b-it-qat", installed)
+        == "gemma4:e4b-it-qat"
+    )
+    # Installed, but never allowlisted - being on the machine is not consent
+    # to run it as the product's writing model.
+    assert select_local_tone_model("Friendly", "deepseek-r1:8b", installed) == ""
+    # Allowlisted but not installed.
+    assert select_local_tone_model("Friendly", "qwen3:14b", ("gemma4:e4b-it-qat",)) == ""

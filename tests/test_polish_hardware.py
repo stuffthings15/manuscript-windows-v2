@@ -792,3 +792,37 @@ def test_the_retry_floor_does_not_apply_to_instant():
     )
 
     assert plan.retry_limit == 0
+
+
+def test_a_measurement_can_pin_a_pack_without_changing_the_default(monkeypatch):
+    """Two models can only be compared if both can be made to run.
+
+    The app cannot be told which pack to use - engine.py clears
+    polish_model_pack_id on every start on purpose - so the pack comes from
+    this policy. Without an override the only way to measure a candidate is to
+    promote it, which makes the comparison and the shipping decision the same
+    act and moves the default before any number justifies it.
+
+    Being in the mode order makes a pack selectable. Being FIRST makes it the
+    default. This pins both halves.
+    """
+    from echo_link_core.polish_hardware import _MODE_PACK_ORDER, _measurement_pack_order
+    from echo_link_core.polish_types import PolishMode
+
+    order = _MODE_PACK_ORDER[PolishMode.BALANCED]
+    assert "qwen3-14b-q4-k-m-v1" in order
+
+    monkeypatch.delenv("MANUSCRIPT_PREFERRED_PACK", raising=False)
+    assert _measurement_pack_order(order)[0] == "gemma4-e4b-qat-v1"
+
+    monkeypatch.setenv("MANUSCRIPT_PREFERRED_PACK", "qwen3-14b-q4-k-m-v1")
+    pinned = _measurement_pack_order(order)
+    assert pinned[0] == "qwen3-14b-q4-k-m-v1"
+    # Pinning reorders; it must never drop a pack, or a pinned run would lose
+    # the fallbacks the unpinned run had.
+    assert sorted(pinned) == sorted(order)
+
+    # A typo in a measurement command must not become "the product refused to
+    # start" - it falls back to the real default.
+    monkeypatch.setenv("MANUSCRIPT_PREFERRED_PACK", "no-such-pack-v9")
+    assert _measurement_pack_order(order)[0] == "gemma4-e4b-qat-v1"

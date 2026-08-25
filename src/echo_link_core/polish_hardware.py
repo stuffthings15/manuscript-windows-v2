@@ -28,25 +28,77 @@ from .polish_types import (
 )
 
 
+def _measurement_pack_order(order: tuple[str, ...]) -> tuple[str, ...]:
+    """Let a measurement pin one pack, without shipping it as the default.
+
+    Two models can only be compared if both can be made to run on the same
+    corpus, and the app cannot be told which to use: `engine.py` clears
+    `polish_model_pack_id` on every start on purpose, so that each start
+    re-accepts a model for the current hardware. The pack therefore comes from
+    this policy, and the only way to measure a candidate used to be to promote
+    it - which means the comparison and the shipping decision become the same
+    act, and the default moves before there is a number to justify it.
+
+    MANUSCRIPT_PREFERRED_PACK moves one pack to the front for this process
+    only. It changes no default and no file. An unknown id is ignored rather
+    than raising, because a typo in a measurement command must not silently
+    become "the product refused to start".
+
+        $env:MANUSCRIPT_PREFERRED_PACK = "qwen3-14b-q4-k-m-v1"
+    """
+    pinned = os.environ.get("MANUSCRIPT_PREFERRED_PACK", "").strip()
+    if not pinned or pinned not in order:
+        return order
+    return (pinned,) + tuple(item for item in order if item != pinned)
+
+
 POLISH_POLICY_VERSION = 6
 _GIB = 1024**3
+# Preference order, and PROFESSIONAL takes it whole. The Qwen packs are here
+# so they can be selected and pinned, but they are placed BELOW the packs that
+# have correction numbers, so no tier changes what it chooses today.
+#
+# Qwen3.8 is 27B with a 15.65 GiB blob and needs 18 GiB of VRAM, so it reaches
+# only machines larger than this one; qwen3:14b is the largest pack that stays
+# fully resident on a 16 GiB card. Both are measured on documents before
+# either moves up. qwen3:14b already wins the dictation path, and that is a
+# latency result rather than a correction one - promoting a pack on the
+# strength of the wrong measurement is how a product gets faster and worse at
+# the same time.
 _PACK_ORDER = (
     "gemma4-12b-q4-k-m-v1",
     "gemma4-e4b-qat-v1",
     "gemma4-e2b-qat-v1",
+    "qwen3dot8-27b-q4-k-m-v1",
+    "qwen3-14b-q4-k-m-v1",
 )
 _PACK_IDS = frozenset(_PACK_ORDER)
 _MODE_PACK_ORDER = {
     PolishMode.INSTANT: ("gemma4-e2b-qat-v1",),
+    # The Qwen packs are in the catalog and can be pinned for measurement,
+    # but the interactive default is UNCHANGED until document correction
+    # quality has been measured on them. qwen3:14b already wins the dictation
+    # path (0.93s mean against gemma4-e4b's 3.50s), and that is a latency
+    # result, not a correction result - promoting a pack on the strength of
+    # the wrong measurement is how a product gets faster and worse at once.
+    # The Qwen packs are LAST here on purpose. Being in the list makes a pack
+    # selectable and pinnable for a measurement; being first makes it the
+    # default. Only the second of those needs a correction number behind it,
+    # and there is not one yet - qwen3:14b wins the dictation path, which is
+    # latency and not correction quality.
     PolishMode.AUTO: (
         "gemma4-e4b-qat-v1",
         "gemma4-e2b-qat-v1",
         "gemma4-12b-q4-k-m-v1",
+        "qwen3-14b-q4-k-m-v1",
+        "qwen3dot8-27b-q4-k-m-v1",
     ),
     PolishMode.BALANCED: (
         "gemma4-e4b-qat-v1",
         "gemma4-e2b-qat-v1",
         "gemma4-12b-q4-k-m-v1",
+        "qwen3-14b-q4-k-m-v1",
+        "qwen3dot8-27b-q4-k-m-v1",
     ),
     PolishMode.PROFESSIONAL: _PACK_ORDER,
 }
@@ -54,11 +106,21 @@ _PACK_MIN_RAM = {
     "gemma4-e2b-qat-v1": 8 * _GIB,
     "gemma4-e4b-qat-v1": 16 * _GIB,
     "gemma4-12b-q4-k-m-v1": 32 * _GIB,
+    "qwen3-14b-q4-k-m-v1": 16 * _GIB,
+    "qwen3dot8-27b-q4-k-m-v1": 32 * _GIB,
 }
 _PACK_MIN_VRAM = {
     "gemma4-e2b-qat-v1": 6 * _GIB,
     "gemma4-e4b-qat-v1": 8 * _GIB,
     "gemma4-12b-q4-k-m-v1": 12 * _GIB,
+    "qwen3-14b-q4-k-m-v1": 12 * _GIB,
+    # 18 GiB, stated honestly rather than optimistically. The model blob is
+    # 15.65 GiB and a 16 GiB card has 15.99 GiB, so it does not fit once
+    # context is added and it spills to CPU. Measured 2026-08-24: 1.47s per
+    # warm dictation refinement against 0.33s for qwen3:14b on the same
+    # machine. A policy that claimed this fits would hand a writer the slow
+    # path and call it the best one.
+    "qwen3dot8-27b-q4-k-m-v1": 18 * _GIB,
 }
 # The 12B pack is intentionally GPU-only. Letting it spill to the CPU makes
 # interactive correction unusably slow. E2B and E4B remain the CPU tiers.
@@ -393,7 +455,7 @@ class HardwarePolicyManager:
             # staged. Under pressure, choose the next smaller Gemma pack.
             and snapshot.available_ram_bytes >= pack.size_bytes
         ]
-        mode_order = _MODE_PACK_ORDER[mode]
+        mode_order = _measurement_pack_order(_MODE_PACK_ORDER[mode])
         rank = {pack_id: index for index, pack_id in enumerate(mode_order)}
         pack_values = [pack for pack in pack_values if pack.pack_id in rank]
         gpu_backends = {
