@@ -486,13 +486,22 @@ class AcceptedInferenceCoordinator:
             pack_id = self._model_pack_ids.get(model, "")
         if not pack_id:
             raise RuntimeError("The accepted standby model pack is unknown.")
-        return replace(
-            plan,
-            pack_id=pack_id,
-            model=model,
-            backend=backend,
-            standby_model="",
-        )
+        # The standby served THIS request. The accepted plan stays the primary.
+        #
+        # polish_runtime already treats a standby answer as valid for the
+        # request it served - it sets expected_model to plan.standby_model
+        # when used_standby is set, so the generation is not a mismatch. The
+        # only thing that made a standby answer permanent was this function
+        # returning it as the whole plan with standby_model cleared, which
+        # left nothing to fall back FROM next time.
+        #
+        # Measured 2026-08-25: a run pinned to qwen3:14b prewarmed and
+        # accepted it, the standby answered while the 9.3 GB primary was cold,
+        # and all 23 later acceptances were gemma4-e2b. The bigger the
+        # primary, the more likely it loses that first race, and losing it
+        # once was final - which is why nothing above gemma4-e4b could be
+        # measured through the app.
+        return plan
 
     def _adopt_actual_model_for_current_lease(
         self,

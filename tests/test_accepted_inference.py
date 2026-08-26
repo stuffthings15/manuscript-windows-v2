@@ -136,7 +136,24 @@ def test_stale_result_cannot_replace_or_clear_a_newer_accepted_plan():
     assert lease.plan == newer_plan
 
 
-def test_actual_standby_model_becomes_the_full_accepted_plan():
+def test_a_standby_answer_serves_one_request_and_does_not_become_the_plan():
+    """The standby answers the request that stalled. It does not take over.
+
+    This asserted the opposite until 2026-08-25. The standby exists so a
+    stalled primary costs one paragraph rather than a section -
+    polish_hardware._standby_model calls it "a small model answering late
+    beats no answer". Adopting it permanently turned that into: answering
+    late ONCE costs the whole document, and once the smallest pack held the
+    lease there was nothing left to fall back FROM.
+
+    Measured that day: a run pinned to qwen3:14b prewarmed and accepted it,
+    the standby answered while the 9.3 GB primary was cold, and all 23 later
+    acceptances were gemma4-e2b. Nothing above gemma4-e4b could be measured
+    through the app because of it.
+
+    polish_runtime already treats a standby answer as valid for the request
+    it served, so only the coordinator needed changing.
+    """
     runtime = _Runtime()
     runtime.actual_model = "gemma4:e2b-it-qat"
     coordinator = AcceptedInferenceCoordinator(runtime)
@@ -161,9 +178,12 @@ def test_actual_standby_model_becomes_the_full_accepted_plan():
 
     lease = coordinator.lease()
     assert lease is not None
-    assert lease.plan.model == "gemma4:e2b-it-qat"
-    assert lease.plan.pack_id == "gemma4-e2b-qat-v1"
-    assert lease.plan.standby_model == ""
+    # The primary keeps the lease, so the next request names it again.
+    assert lease.plan.model == "gemma4:e4b-it-qat"
+    assert lease.plan.pack_id == "gemma4-e4b-qat-v1"
+    # And the standby stays available for the next stall, rather than being
+    # consumed by the first one.
+    assert lease.plan.standby_model == "gemma4:e2b-it-qat"
 
 
 def test_actual_cpu_spill_cannot_replace_a_full_gpu_lease():
