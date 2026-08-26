@@ -334,7 +334,9 @@ class HardwarePolicyManager:
                     f"{record.reason or 'local probe failed'}"
                 )
                 continue
-            backend = self._select_backend(snapshot, pack)
+            backend = self._select_backend(
+                snapshot, pack, held=pack.pack_id == preferred_pack_id
+            )
             if record is not None and record.backend.casefold() == backend.value:
                 passing.append(
                     (max(0.0, record.elapsed_seconds), len(passing), pack)
@@ -359,7 +361,13 @@ class HardwarePolicyManager:
             reason = failed_reasons[0] if failed_reasons else "Every local model probe failed."
             return self._rules_plan(mode, task, reason)
 
-        backend = self._select_backend(snapshot, selected)
+        # Same held exemption as eligibility used. Without it the held pack is
+        # admitted by _eligible_packs and then rejected here with "no supported
+        # runtime", which is how the first version of this change turned a busy
+        # card into a rules-only plan.
+        backend = self._select_backend(
+            snapshot, selected, held=selected.pack_id == preferred_pack_id
+        )
         if backend is RuntimeBackend.RULES:
             return self._rules_plan(mode, task, "No supported runtime can run the selected pack.")
 
@@ -499,7 +507,10 @@ class HardwarePolicyManager:
         pack_values.sort(
             key=lambda pack: (
                 0
-                if self._select_backend(snapshot, pack) in gpu_backends
+                if self._select_backend(
+                    snapshot, pack, held=pack.pack_id == preferred_pack_id
+                )
+                in gpu_backends
                 else 1,
                 rank.get(pack.pack_id, len(rank)),
                 0 if pack.pack_id == preferred_pack_id else 1,
@@ -507,7 +518,8 @@ class HardwarePolicyManager:
         )
         eligible: list[PolishModelPack] = []
         for pack in pack_values:
-            if self._select_backend(snapshot, pack) is RuntimeBackend.RULES:
+            held = bool(preferred_pack_id) and pack.pack_id == preferred_pack_id
+            if self._select_backend(snapshot, pack, held=held) is RuntimeBackend.RULES:
                 continue
             eligible.append(pack)
         return eligible
@@ -516,6 +528,8 @@ class HardwarePolicyManager:
     def _select_backend(
         snapshot: HardwareSnapshot,
         pack: PolishModelPack,
+        *,
+        held: bool = False,
     ) -> RuntimeBackend:
         available = set(snapshot.supported_backends) & set(pack.supported_backends)
         reserve = _vram_reserve(snapshot.dedicated_vram_bytes)
@@ -541,15 +555,31 @@ class HardwarePolicyManager:
         # is the thing worth knowing.
         if _pinned_pack() == pack.pack_id:
             hard_min_vram = 0
+        # A pack this session already accepted keeps its GPU place while the
+        # card is momentarily busy.
+        #
+        # The card's SIZE still decides - a 6 GiB laptop never reaches a 12B,
+        # because that is a fact about the machine. What is exempted is the
+        # instantaneous free-VRAM term, the one that moves second to second
+        # while the product is working.
+        #
+        # Measured 2026-08-26: a full tier prewarmed gemma4-12b-qat and then
+        # planned gemma4-e2b 216 times with reason=- - the policy choosing the
+        # smallest pack outright, not a downgrade and not a standby adoption.
+        # The 12B asks for 10 GiB and idle usable VRAM was 11.92-12.67 GiB, so
+        # one busy moment erased the margin and it never climbed back. Every
+        # tier on this machine collapsed the same way, which is why the same
+        # three numbers came back run after run - they were always the 2B.
+        #
+        # Ollama unloads what it holds before loading the next model, so free
+        # VRAM understates what is reclaimable. _reclaimable_vram exists for
+        # that reason and is still not enough on its own under sustained work.
         gpu_fits = (
             snapshot.driver_healthy
+            and snapshot.dedicated_vram_bytes
+            >= max(pack.min_vram_bytes, hard_min_vram)
             and (
-                _pinned_pack() == pack.pack_id
-                or snapshot.dedicated_vram_bytes
-                >= max(pack.min_vram_bytes, hard_min_vram)
-            )
-            and (
-                _pinned_pack() == pack.pack_id
+                held
                 or max(0, effective_available_vram - reserve) >= pack.size_bytes
             )
         )
