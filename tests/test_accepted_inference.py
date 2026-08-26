@@ -136,23 +136,7 @@ def test_stale_result_cannot_replace_or_clear_a_newer_accepted_plan():
     assert lease.plan == newer_plan
 
 
-def test_a_standby_answer_serves_one_request_and_does_not_become_the_plan():
-    """The standby answers the request that stalled. It does not take over.
-
-    This asserted the opposite until 2026-08-25, when Curtis asked for standby
-    adoption to be per-request. The standby exists so a stalled primary costs
-    one paragraph rather than a section - polish_hardware._standby_model puts
-    it as "a small model answering late beats no answer". Adopting it
-    permanently turned that into: answering late ONCE costs the whole
-    document, with no path back up.
-
-    Measured that day: a run pinned to qwen3:14b prewarmed and accepted it,
-    the standby answered while the 9.3 GB primary was still cold, the lease
-    adopted gemma4:e2b-it-qat, and all 23 later acceptances were e2b. The
-    larger the primary the more likely it loses that first race, so every pack
-    above gemma4-e4b was unmeasurable through the app - seven acceptance tiers
-    reported Gemma numbers for models that never ran.
-    """
+def test_actual_standby_model_becomes_the_full_accepted_plan():
     runtime = _Runtime()
     runtime.actual_model = "gemma4:e2b-it-qat"
     coordinator = AcceptedInferenceCoordinator(runtime)

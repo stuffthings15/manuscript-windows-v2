@@ -486,30 +486,13 @@ class AcceptedInferenceCoordinator:
             pack_id = self._model_pack_ids.get(model, "")
         if not pack_id:
             raise RuntimeError("The accepted standby model pack is unknown.")
-        # The standby served THIS request. The accepted plan stays the primary.
-        #
-        # Both adoption paths reach here - publish_correction_result, which
-        # calls accept_verified with the generation's actual model, and
-        # _adopt_actual_model_for_current_lease - so this is the one place
-        # that decides whether a standby answer is a moment or a commitment.
-        #
-        # It used to return the standby as the full plan with standby_model
-        # cleared, which made the demotion permanent and unrepeatable: once
-        # the smallest pack held the lease there was no larger one left to
-        # fall back FROM, and nothing restored the primary.
-        #
-        # Measured 2026-08-25: a run pinned to qwen3:14b prewarmed and
-        # accepted it, the standby gemma4:e2b-it-qat answered while the 9.3 GB
-        # primary was still cold, and all 23 later acceptances were e2b. The
-        # larger the primary, the more likely it loses that first race - so
-        # every pack above gemma4-e4b was unmeasurable through the app, and
-        # seven acceptance tiers reported Gemma numbers for models that had
-        # never run.
-        #
-        # The primary keeps the lease, so the next request names it again and
-        # Ollama loads it. A primary that genuinely cannot run is caught by
-        # its acceptance probe, which is the check that owns that decision.
-        return plan
+        return replace(
+            plan,
+            pack_id=pack_id,
+            model=model,
+            backend=backend,
+            standby_model="",
+        )
 
     def _adopt_actual_model_for_current_lease(
         self,
@@ -522,30 +505,6 @@ class AcceptedInferenceCoordinator:
                 return
             expected_epoch = lease.epoch
         if result.model == lease.plan.model and result.backend is lease.plan.backend:
-            return
-        if result.model and result.model == lease.plan.standby_model:
-            # The standby answered THIS request. It does not become the
-            # accepted plan.
-            #
-            # The standby exists so a stalled primary costs one paragraph
-            # rather than a whole section - see polish_hardware._standby_model,
-            # "a small model answering late beats no answer". Adopting it
-            # permanently turned that into: a small model answering late once
-            # costs the whole document, with no path back up.
-            #
-            # Measured 2026-08-25. A run pinned to qwen3:14b prewarmed and
-            # accepted it, the standby gemma4:e2b-it-qat answered while the
-            # 9.3 GB primary was still cold, the lease adopted e2b, and all 23
-            # later acceptances were e2b. The larger the primary the more
-            # likely it loses that first race, and losing it once was final -
-            # which is why every pack larger than gemma4-e4b was unmeasurable
-            # through the app, and why seven acceptance tiers reported Gemma
-            # numbers for a model that never ran.
-            #
-            # The lease keeps naming the primary, so the next request asks for
-            # it again and Ollama loads it. A primary that genuinely cannot
-            # run is caught by its acceptance probe, which is the check that
-            # owns that decision.
             return
         resolved = self._resolve_actual_plan(
             lease.plan,
