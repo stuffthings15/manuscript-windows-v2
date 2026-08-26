@@ -86,73 +86,73 @@ def _measurement_pack_order(order: tuple[str, ...]) -> tuple[str, ...]:
 
 POLISH_POLICY_VERSION = 6
 _GIB = 1024**3
-# Preference order, and PROFESSIONAL takes it whole. The Qwen packs are here
-# so they can be selected and pinned, but they are placed BELOW the packs that
-# have correction numbers, so no tier changes what it chooses today.
+# Biggest model first, then the highest precision that still fits.
 #
-# Qwen3.8 is 27B with a 15.65 GiB blob and needs 18 GiB of VRAM, so it reaches
-# only machines larger than this one; qwen3:14b is the largest pack that stays
-# fully resident on a 16 GiB card. Both are measured on documents before
-# either moves up. qwen3:14b already wins the dictation path, and that is a
-# latency result rather than a correction one - promoting a pack on the
-# strength of the wrong measurement is how a product gets faster and worse at
-# the same time.
+# Curtis chose that ranking on 2026-08-25: parameter count moves correction
+# quality more than quantization does, so a 12B at 4 bits outranks a 4B at 8
+# bits, and among packs of the same parameter count the better quantization
+# wins. QAT sits above Q4_K_M because it is quantized during training rather
+# than after it; both report Q4_0 to the runtime, so only the tag tells them
+# apart.
+#
+# Eligibility decides what a machine actually gets - a pack whose min_vram
+# exceeds the card is never reached, so this list can name packs no laptop
+# will ever load. Measured on this 16 GiB card: usable VRAM held 11.92-12.67
+# GiB through a live Word run, so it lands on gemma4-12b-qat-v1 and runs a
+# 12B where it ran a 4B before.
+#
+# The Qwen packs were removed on 2026-08-25 when Curtis chose to stay with
+# Gemma. They remain in the signed manifest; nothing selects them.
 _PACK_ORDER = (
+    "gemma4-12b-qat-v1",
     "gemma4-12b-q4-k-m-v1",
     "gemma4-e4b-qat-v1",
     "gemma4-e2b-qat-v1",
-    "qwen3dot8-27b-q4-k-m-v1",
-    "qwen3-14b-q4-k-m-v1",
 )
 _PACK_IDS = frozenset(_PACK_ORDER)
 _MODE_PACK_ORDER = {
     PolishMode.INSTANT: ("gemma4-e2b-qat-v1",),
-    # The Qwen packs are in the catalog and can be pinned for measurement,
-    # but the interactive default is UNCHANGED until document correction
-    # quality has been measured on them. qwen3:14b already wins the dictation
-    # path (0.93s mean against gemma4-e4b's 3.50s), and that is a latency
-    # result, not a correction result - promoting a pack on the strength of
-    # the wrong measurement is how a product gets faster and worse at once.
-    # The Qwen packs are LAST here on purpose. Being in the list makes a pack
-    # selectable and pinnable for a measurement; being first makes it the
-    # default. Only the second of those needs a correction number behind it,
-    # and there is not one yet - qwen3:14b wins the dictation path, which is
-    # latency and not correction quality.
+    # Auto and Balanced share their pack with dictation refinement, so they
+    # take the same ladder: biggest model first, then best precision, with
+    # eligibility deciding what each machine actually reaches.
     PolishMode.AUTO: (
+        "gemma4-12b-qat-v1",
+        "gemma4-12b-q4-k-m-v1",
         "gemma4-e4b-qat-v1",
         "gemma4-e2b-qat-v1",
-        "gemma4-12b-q4-k-m-v1",
-        "qwen3-14b-q4-k-m-v1",
-        "qwen3dot8-27b-q4-k-m-v1",
     ),
     PolishMode.BALANCED: (
+        "gemma4-12b-qat-v1",
+        "gemma4-12b-q4-k-m-v1",
         "gemma4-e4b-qat-v1",
         "gemma4-e2b-qat-v1",
-        "gemma4-12b-q4-k-m-v1",
-        "qwen3-14b-q4-k-m-v1",
-        "qwen3dot8-27b-q4-k-m-v1",
     ),
     PolishMode.PROFESSIONAL: _PACK_ORDER,
 }
 _PACK_MIN_RAM = {
     "gemma4-e2b-qat-v1": 8 * _GIB,
     "gemma4-e4b-qat-v1": 16 * _GIB,
+    # 16 GiB rather than the 32 the q4_K_M build asks for: this pack is
+    # SMALLER on disk (6.66 GiB against 7.04) despite being the same 12B
+    # model, so the larger host-memory floor would exclude machines that can
+    # comfortably stage it.
+    "gemma4-12b-qat-v1": 16 * _GIB,
     "gemma4-12b-q4-k-m-v1": 32 * _GIB,
-    "qwen3-14b-q4-k-m-v1": 16 * _GIB,
-    "qwen3dot8-27b-q4-k-m-v1": 32 * _GIB,
 }
 _PACK_MIN_VRAM = {
     "gemma4-e2b-qat-v1": 6 * _GIB,
     "gemma4-e4b-qat-v1": 8 * _GIB,
+    # 10 GiB: the blob is 6.66 GiB and the rest is context and runtime
+    # overhead. A pack with no headroom loses the cold-load race and gets
+    # demoted mid-document, so the floor is set above the bare blob size.
+    "gemma4-12b-qat-v1": 10 * _GIB,
     "gemma4-12b-q4-k-m-v1": 12 * _GIB,
-    "qwen3-14b-q4-k-m-v1": 12 * _GIB,
     # 18 GiB, stated honestly rather than optimistically. The model blob is
     # 15.65 GiB and a 16 GiB card has 15.99 GiB, so it does not fit once
     # context is added and it spills to CPU. Measured 2026-08-24: 1.47s per
     # warm dictation refinement against 0.33s for qwen3:14b on the same
     # machine. A policy that claimed this fits would hand a writer the slow
     # path and call it the best one.
-    "qwen3dot8-27b-q4-k-m-v1": 18 * _GIB,
 }
 # The 12B pack is intentionally GPU-only. Letting it spill to the CPU makes
 # interactive correction unusably slow. E2B and E4B remain the CPU tiers.
@@ -524,11 +524,34 @@ class HardwarePolicyManager:
         # model cannot falsely force the policy down to CPU or a smaller pack.
         effective_available_vram = _reclaimable_vram(snapshot)
         hard_min_vram = _PACK_MIN_VRAM.get(pack.pack_id, pack.min_vram_bytes)
+        # A pinned pack is being measured, and a pack that cannot be selected
+        # cannot be measured. Curtis asked for the 27B numbers on hardware that
+        # cannot hold it: qwen3.8:27b needs 18 GiB and this card has 15.99, so
+        # the policy refused it and fell back to Gemma - correctly, and
+        # unhelpfully for a comparison.
+        #
+        # The alternative was to lower the requirement in the signed manifest,
+        # which would ship a claim that a 16.5 GB model fits a 14 GiB card and
+        # hand every customer with a mid-size GPU a silently spilling model.
+        # This bypass lives in the pin instead: one process, no default moved,
+        # no false claim shipped, and the shipped requirement stays honest.
+        #
+        # What is measured this way is a REAL spill, not a simulation - Ollama
+        # offloads what will not fit and the numbers include that cost, which
+        # is the thing worth knowing.
+        if _pinned_pack() == pack.pack_id:
+            hard_min_vram = 0
         gpu_fits = (
             snapshot.driver_healthy
-            and snapshot.dedicated_vram_bytes
-            >= max(pack.min_vram_bytes, hard_min_vram)
-            and max(0, effective_available_vram - reserve) >= pack.size_bytes
+            and (
+                _pinned_pack() == pack.pack_id
+                or snapshot.dedicated_vram_bytes
+                >= max(pack.min_vram_bytes, hard_min_vram)
+            )
+            and (
+                _pinned_pack() == pack.pack_id
+                or max(0, effective_available_vram - reserve) >= pack.size_bytes
+            )
         )
         for backend in (
             RuntimeBackend.CUDA,

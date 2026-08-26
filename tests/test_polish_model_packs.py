@@ -88,6 +88,11 @@ def test_bundled_manifest_signature_and_catalog_are_valid(tmp_path):
         # packs on the same corpus before anything is promoted.
         "qwen3-14b-q4-k-m-v1",
         "qwen3dot8-27b-q4-k-m-v1",
+        # Added 2026-08-25 when Curtis chose to stay with Gemma and run the
+        # highest-precision pack a machine can hold. Same 12B model as the
+        # q4_K_M entry and smaller on disk, because it is quantized during
+        # training rather than after it.
+        "gemma4-12b-qat-v1",
     ]
     assert [value.model for value in packs] == [
         "gemma4:e2b-it-qat",
@@ -95,6 +100,7 @@ def test_bundled_manifest_signature_and_catalog_are_valid(tmp_path):
         "gemma4:12b-it-q4_K_M",
         "qwen3:14b",
         "qwen3.8:27b",
+        "gemma4:12b-it-qat",
     ]
     assert [value.size_bytes for value in packs] == [
         4_336_358_185,
@@ -102,6 +108,7 @@ def test_bundled_manifest_signature_and_catalog_are_valid(tmp_path):
         7_556_508_396,
         9_276_198_565,
         17_741_872_154,
+        7_151_003_754,
     ]
     # This used to assert every pack was "Gemma 4" and that no model name
     # contained "qwen". Both were standing in for the real rule, which is that

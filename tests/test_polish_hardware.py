@@ -171,14 +171,20 @@ def decision(*, severity: float = 0.9, needs_llm: bool = True) -> ClassifierDeci
             "gemma4-e4b-qat-v1",
             RuntimeBackend.CUDA,
         ),
+        # From 2026-08-25 a card with room for a 12B gets one. Curtis chose
+        # biggest model first, then highest precision, so these two moved off
+        # the 4B pack they used to take. The 6 GiB and 8 GiB cards above did
+        # NOT move, which is the half of this that matters: the ladder still
+        # adjusts to the machine rather than handing every system the largest
+        # pack that exists.
         (
             snapshot(ram=32, vram=12, available_vram=12, backend=RuntimeBackend.CUDA),
-            "gemma4-e4b-qat-v1",
+            "gemma4-12b-q4-k-m-v1",
             RuntimeBackend.CUDA,
         ),
         (
             snapshot(ram=64, vram=16, available_vram=16, backend=RuntimeBackend.CUDA),
-            "gemma4-e4b-qat-v1",
+            "gemma4-12b-q4-k-m-v1",
             RuntimeBackend.CUDA,
         ),
     ),
@@ -253,7 +259,10 @@ def test_balanced_and_professional_have_one_retry_and_bounded_context():
         packs=PACKS,
     )
     assert balanced.retry_limit == 1
-    assert balanced.pack_id == "gemma4-e4b-qat-v1"
+    # BALANCED takes the 12B from 2026-08-25 - biggest model first. The
+    # subject of this test is the retry limit and the context bound, which
+    # did not change.
+    assert balanced.pack_id == "gemma4-12b-q4-k-m-v1"
     assert "gemma" not in balanced.reason.casefold()
     assert balanced.context_window <= 4096
     assert balanced.warm_latency_limit_seconds == 5.0
@@ -276,7 +285,7 @@ def test_policy_ignores_non_gemma_pack_even_when_it_is_ranked_first_by_size():
         packs=(other_family, *PACKS),
     )
 
-    assert plan.pack_id == "gemma4-e4b-qat-v1"
+    assert plan.pack_id == "gemma4-12b-q4-k-m-v1"
 
 
 def test_policy_ignores_unapproved_gemma_pack_id():
@@ -449,7 +458,7 @@ def test_policy_does_not_reuse_a_measurement_from_another_backend():
         manual=True,
     )
 
-    assert plan.pack_id == "gemma4-e4b-qat-v1"
+    assert plan.pack_id == "gemma4-12b-q4-k-m-v1"
     assert plan.requires_probe
 
 
@@ -810,14 +819,16 @@ def test_a_measurement_can_pin_a_pack_without_changing_the_default(monkeypatch):
     from echo_link_core.polish_types import PolishMode
 
     order = _MODE_PACK_ORDER[PolishMode.BALANCED]
-    assert "qwen3-14b-q4-k-m-v1" in order
+    default_first = order[0]
+    pinned_id = "gemma4-e2b-qat-v1"
+    assert pinned_id in order and pinned_id != default_first
 
     monkeypatch.delenv("MANUSCRIPT_PREFERRED_PACK", raising=False)
-    assert _measurement_pack_order(order)[0] == "gemma4-e4b-qat-v1"
+    assert _measurement_pack_order(order)[0] == default_first
 
-    monkeypatch.setenv("MANUSCRIPT_PREFERRED_PACK", "qwen3-14b-q4-k-m-v1")
+    monkeypatch.setenv("MANUSCRIPT_PREFERRED_PACK", pinned_id)
     pinned = _measurement_pack_order(order)
-    assert pinned[0] == "qwen3-14b-q4-k-m-v1"
+    assert pinned[0] == pinned_id
     # Pinning reorders; it must never drop a pack, or a pinned run would lose
     # the fallbacks the unpinned run had.
     assert sorted(pinned) == sorted(order)
@@ -825,4 +836,30 @@ def test_a_measurement_can_pin_a_pack_without_changing_the_default(monkeypatch):
     # A typo in a measurement command must not become "the product refused to
     # start" - it falls back to the real default.
     monkeypatch.setenv("MANUSCRIPT_PREFERRED_PACK", "no-such-pack-v9")
-    assert _measurement_pack_order(order)[0] == "gemma4-e4b-qat-v1"
+    assert _measurement_pack_order(order)[0] == default_first
+
+
+def test_a_measurement_can_pin_the_tier_as_well_as_the_pack(monkeypatch):
+    """Comparing packs needs the tier, because the tier sets the speed limit.
+
+    The warm-latency limit is per mode - 2s Instant, 5s Auto and Balanced, 15s
+    Professional - and it decides which packs survive their acceptance probe.
+    Measured 2026-08-25: qwen3:14b takes 5.23s, is refused by the 5s
+    interactive limit, and two pinned acceptance tiers therefore measured
+    Gemma while reporting the result as Qwen's.
+
+    Setting it per process means a comparison never has to write to the
+    writer's saved settings and remember to put them back.
+    """
+    from echo_link_core.polish_hardware import _measurement_mode
+    from echo_link_core.polish_types import PolishMode
+
+    monkeypatch.delenv("MANUSCRIPT_PREFERRED_MODE", raising=False)
+    assert _measurement_mode(PolishMode.BALANCED) is PolishMode.BALANCED
+
+    monkeypatch.setenv("MANUSCRIPT_PREFERRED_MODE", "professional")
+    assert _measurement_mode(PolishMode.BALANCED) is PolishMode.PROFESSIONAL
+
+    # A typo must not become "the product refused to start".
+    monkeypatch.setenv("MANUSCRIPT_PREFERRED_MODE", "not-a-mode")
+    assert _measurement_mode(PolishMode.BALANCED) is PolishMode.BALANCED

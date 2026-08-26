@@ -157,6 +157,35 @@
       "version": "1",
       "available": true,
       "validated": true
+    },
+    {
+      "id": "gemma4-12b-qat-v1",
+      "display_name": "Gemma 4 12B QAT",
+      "model": "gemma4:12b-it-qat",
+      "family": "Gemma 4",
+      "parameters": "12B",
+      "quantization": "Q4_0",
+      "runtime": "ollama",
+      "manifest_digest": "38044be4f923e5a55264ed7df4eaac2676651a905f735197c504045140c02bd3",
+      "size_bytes": 7151003754,
+      "model_blob_digest": "faff1a63667fac17ac5e777f47114688fcefea96e220e211aaa8d62c2c4561f1",
+      "model_blob_size": 6975877728,
+      "min_ram_bytes": 17179869184,
+      "min_vram_bytes": 10737418240,
+      "max_context_tokens": 4096,
+      "backends": [
+        "cpu",
+        "cuda",
+        "vulkan",
+        "hip",
+        "sycl"
+      ],
+      "license": "Apache-2.0",
+      "source_url": "https://ai.google.dev/gemma/docs/core/model_card_4",
+      "download_ref": "ollama://gemma4:12b-it-qat",
+      "version": "1",
+      "available": true,
+      "validated": true
     }
   ]
 }

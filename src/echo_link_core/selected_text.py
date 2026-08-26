@@ -132,6 +132,7 @@ _OFFICIAL_MODELS = frozenset(
         "gemma4:e2b-it-qat",
         "gemma4:e4b-it-qat",
         "gemma4:12b-it-q4_k_m",
+        "gemma4:12b-it-qat",
         "qwen3:14b",
         "qwen3.8:27b",
     }
