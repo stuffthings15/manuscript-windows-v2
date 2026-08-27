@@ -399,7 +399,22 @@ def test_failed_large_gemma_probe_downgrades_to_next_safe_gemma_pack():
     assert "gemma" not in plan.downgrade_reason.casefold()
 
 
-def test_policy_selects_fastest_pack_after_both_pass_the_same_gate():
+def test_policy_prefers_the_higher_ranked_pack_after_both_pass_the_same_gate():
+    """Rank decides once both packs have passed; speed no longer overrides it.
+
+    This asserted the opposite until 2026-08-26. Selection among packs with
+    passing records was min() on elapsed seconds alone - "prefer its measured
+    speed instead of assuming the larger pack is faster". Sound reasoning,
+    opposite result: the smallest pack is always the fastest, so once every
+    pack had been measured the ladder never applied.
+
+    Measured that day: a run held gemma4-12b-qat-v1 with a passing CUDA record
+    and still planned gemma4-e2b 234 times. Every tier on this machine had been
+    collapsing the same way, which is why the same three correction numbers
+    came back run after run - they were always the 2B pack.
+
+    Curtis chose rank first, speed as tiebreak only.
+    """
     measured_at = "2026-08-04T00:00:00+00:00"
     records = {
         "gemma4-e4b-qat-v1": BenchmarkRecord(
@@ -432,7 +447,8 @@ def test_policy_selects_fastest_pack_after_both_pass_the_same_gate():
         manual=True,
     )
 
-    assert plan.pack_id == "gemma4-e2b-qat-v1"
+    # e4b outranks e2b in the ladder, and is 4.8s against 1.1s. Rank wins.
+    assert plan.pack_id == "gemma4-e4b-qat-v1"
     assert plan.backend is RuntimeBackend.CUDA
     assert not plan.requires_probe
 
@@ -863,3 +879,126 @@ def test_a_measurement_can_pin_the_tier_as_well_as_the_pack(monkeypatch):
     # A typo must not become "the product refused to start".
     monkeypatch.setenv("MANUSCRIPT_PREFERRED_MODE", "not-a-mode")
     assert _measurement_mode(PolishMode.BALANCED) is PolishMode.BALANCED
+
+
+def test_a_held_pack_keeps_its_place_while_the_card_is_momentarily_busy():
+    """The pack a session accepted must survive a busy moment.
+
+    Eligibility is re-evaluated on every request, and the free-VRAM term moves
+    second to second while the product works. Measured 2026-08-26: a full tier
+    prewarmed gemma4-12b-qat and then planned gemma4-e2b 216 times with
+    reason=- - the policy choosing the smallest pack outright. The 12B asks
+    for 10 GiB and idle usable VRAM was 11.92-12.67 GiB, so one busy moment
+    erased the margin and it never climbed back. Every tier collapsed the same
+    way, which is why the same three correction numbers came back run after
+    run: they were always the 2B pack.
+    """
+    busy = snapshot(
+        ram=64,
+        vram=16,
+        available_vram=2,
+        backend=RuntimeBackend.CUDA,
+    )
+
+    # Nothing held: the busy card pushes the policy down the ladder.
+    unheld = HardwarePolicyManager().plan(
+        busy,
+        PolishTask.PROOFREAD,
+        PolishMode.BALANCED,
+        classifier=decision(),
+        packs=PACKS,
+    )
+
+    # The 12B held from earlier in the session keeps its place.
+    held = HardwarePolicyManager().plan(
+        busy,
+        PolishTask.PROOFREAD,
+        PolishMode.BALANCED,
+        classifier=decision(),
+        packs=PACKS,
+        preferred_pack_id="gemma4-12b-q4-k-m-v1",
+    )
+
+    assert held.pack_id == "gemma4-12b-q4-k-m-v1"
+    assert held.pack_id != unheld.pack_id
+
+
+def test_holding_a_pack_cannot_put_it_on_a_card_that_is_too_small():
+    """A held pack still has to fit the machine.
+
+    The exemption covers the free-VRAM term only. The card's size is a fact
+    about the hardware, so a small card never reaches a big pack however long
+    the session has been running - otherwise this would hand a 6 GiB laptop a
+    12B and call it holding.
+    """
+    small = snapshot(
+        ram=64,
+        vram=6,
+        available_vram=6,
+        backend=RuntimeBackend.CUDA,
+    )
+
+    plan = HardwarePolicyManager().plan(
+        small,
+        PolishTask.PROOFREAD,
+        PolishMode.BALANCED,
+        classifier=decision(),
+        packs=PACKS,
+        preferred_pack_id="gemma4-12b-q4-k-m-v1",
+    )
+
+    assert plan.pack_id != "gemma4-12b-q4-k-m-v1"
+
+
+def test_ladder_rank_beats_a_faster_smaller_pack():
+    """The biggest pack a machine can hold wins, even when a smaller one is quicker.
+
+    Selection among packs with passing benchmark records used to be min() on
+    elapsed seconds alone - "prefer its measured speed instead of assuming the
+    larger pack is faster". Sound reasoning, opposite result: the smallest pack
+    is always the fastest, so once every pack had been measured the ladder
+    never applied and the smallest won every time.
+
+    Measured 2026-08-26: a run held gemma4-12b-qat-v1 with a passing CUDA
+    record and still planned gemma4-e2b 234 times. Every tier on this machine
+    collapsed the same way, which is why the same three correction numbers came
+    back run after run - they were always the 2B pack.
+
+    Curtis chose rank first, speed as tiebreak only.
+    """
+    def record(elapsed: float) -> BenchmarkRecord:
+        return BenchmarkRecord(
+            accepted=True,
+            correctness_passed=True,
+            protected_passed=True,
+            elapsed_seconds=elapsed,
+            backend="cuda",
+            reason="",
+            measured_at="2026-08-26T00:00:00+00:00",
+        )
+
+    plan = HardwarePolicyManager().plan(
+        snapshot(ram=64, vram=16, available_vram=16, backend=RuntimeBackend.CUDA),
+        PolishTask.PROOFREAD,
+        PolishMode.BALANCED,
+        classifier=decision(),
+        packs=PACKS,
+        benchmark_records={
+            "gemma4-e2b-qat-v1": record(0.5),
+            "gemma4-12b-q4-k-m-v1": record(9.0),
+        },
+    )
+
+    assert plan.pack_id == "gemma4-12b-q4-k-m-v1"
+
+
+def test_speed_still_separates_packs_of_the_same_rank():
+    """Rank first does not mean speed stops mattering.
+
+    Two packs at the same place in the ladder are separated by their measured
+    time, which is the part of the old rule worth keeping.
+    """
+    from echo_link_core.polish_hardware import _MODE_PACK_ORDER
+
+    order = _MODE_PACK_ORDER[PolishMode.BALANCED]
+    assert order.index("gemma4-12b-qat-v1") < order.index("gemma4-e2b-qat-v1")

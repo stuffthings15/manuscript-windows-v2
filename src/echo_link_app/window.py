@@ -277,7 +277,7 @@ class EchoLinkWindow(QMainWindow):
         self.private_paste_inserter = WindowsTextInserter(InsertionMode.DIRECT)
         self.polish_engine = create_default_polish_engine(
             store=self.store,
-            preferred_pack_provider=lambda: self.engine.settings.polish_model_pack_id,
+            preferred_pack_provider=self._held_pack_id,
         )
         self.ai_coordinator = AcceptedInferenceCoordinator(self.polish_engine.runtime)
         self.polish_engine.runtime = self.ai_coordinator
@@ -2304,6 +2304,32 @@ class EchoLinkWindow(QMainWindow):
         names = {item.name for item in discovered if item.name}
         if names:
             self._installed_writing_models = names
+
+    def _held_pack_id(self) -> str:
+        """The pack this session is running, so a busy moment cannot replace it.
+
+        The lease decides, and the stored setting is only the fallback. This is
+        the same argument _accepted_writing_model makes below for the model
+        name: the lease is the only record of what was really loaded.
+
+        It matters because the two disagree at exactly the wrong moment. The
+        prewarm publishes its pack to the coordinator, but nothing writes it
+        into engine.settings, so reading the setting returned "" for the first
+        request of every session. With no held pack the policy re-decided
+        against instantaneous free VRAM, took the smallest pack under load, and
+        THAT got accepted - after which holding kept the wrong one.
+
+        Measured 2026-08-26: a tier prewarmed gemma4-12b-qat and then planned
+        gemma4-e2b 234 times, with 112 acceptances of e2b. Reading the setting
+        made the hold anchor to whatever won the first race; reading the lease
+        anchors it to what the session actually started on.
+        """
+        lease = getattr(self, "ai_coordinator", None)
+        lease = lease.lease() if lease is not None else None
+        held = str(getattr(getattr(lease, "plan", None), "pack_id", "") or "").strip()
+        if held:
+            return held
+        return str(self.engine.settings.polish_model_pack_id or "").strip()
 
     def _accepted_writing_model(self) -> str:
         """The model that is actually loaded, not the one settings remember.

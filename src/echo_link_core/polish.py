@@ -1453,6 +1453,26 @@ class PolishEngine:
             classifier=classifier,
             manual=request.manual,
         )
+        # Say what the session is holding, beside what got planned.
+        #
+        # Three separate attempts to stop the ladder collapsing to the smallest
+        # pack were debugged without this, and each guessed wrong about whether
+        # the held pack was reaching the policy at all. The plan line says what
+        # was CHOSEN; this says what it was chosen against.
+        held_record = (records or {}).get(preferred) if preferred else None
+        logger.info(
+            "Polish planning held=%s record=%s catalog=%d task=%s mode=%s",
+            preferred or "-",
+            (
+                "none"
+                if held_record is None
+                else f"accepted={held_record.accepted} backend={held_record.backend} "
+                f"reason={held_record.reason or '-'}"
+            ),
+            len(planning_catalog),
+            getattr(request.task, "value", request.task),
+            getattr(request.mode, "value", request.mode),
+        )
         plan = self.policy.plan(
             snapshot,
             request.task,

@@ -326,7 +326,7 @@ class HardwarePolicyManager:
         failed_reasons: list[str] = []
         passing: list[tuple[float, int, PolishModelPack]] = []
         unmeasured: list[PolishModelPack] = []
-        for pack in candidates:
+        for position, pack in enumerate(candidates):
             record = records.get(pack.pack_id)
             if record is not None and not record.accepted:
                 failed_reasons.append(
@@ -338,17 +338,35 @@ class HardwarePolicyManager:
                 snapshot, pack, held=pack.pack_id == preferred_pack_id
             )
             if record is not None and record.backend.casefold() == backend.value:
-                passing.append(
-                    (max(0.0, record.elapsed_seconds), len(passing), pack)
-                )
+                # `position` is the pack's place in the ladder: _eligible_packs
+                # returns candidates already sorted by GPU fit, then mode rank,
+                # then the held pack. Carrying it here is what lets rank decide
+                # and speed only separate equals.
+                passing.append((position, max(0.0, record.elapsed_seconds), pack))
             else:
                 unmeasured.append(pack)
         selected: PolishModelPack | None
         selected_probe: bool
         if passing:
-            # Every accepted record passed the same mode-specific correctness,
-            # preservation, residency, and latency gates. Prefer its measured
-            # speed instead of assuming the larger pack is faster.
+            # Ladder rank decides; measured speed only separates packs of the
+            # same rank.
+            #
+            # This used to be min() on elapsed seconds alone, with the comment
+            # "prefer its measured speed instead of assuming the larger pack is
+            # faster". That reasoning is sound and it produced the opposite of
+            # what the ladder says, because the smallest pack is always the
+            # fastest - so once every pack had a passing record, rank never
+            # applied and the smallest one won every time.
+            #
+            # Measured 2026-08-26: a run held gemma4-12b-qat-v1 with a passing
+            # CUDA record and still planned gemma4-e2b 234 times. Every tier on
+            # this machine had been collapsing the same way, which is why the
+            # same three correction numbers came back run after run - they were
+            # always the 2B pack, whatever had been selected at startup.
+            #
+            # Curtis chose rank first on 2026-08-26: the product should run the
+            # biggest model a machine can hold, then the best precision, and
+            # accept the extra seconds that buys.
             selected = min(passing, key=lambda value: (value[0], value[1]))[2]
             selected_probe = False
         elif unmeasured:
