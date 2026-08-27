@@ -61,6 +61,51 @@ TONE_BATCH_MAXIMUM_CHARACTERS = 4_000
 TONE_BATCH_SEPARATOR = chr(10) * 2
 
 
+def _span_closes(paragraphs: int, characters: int) -> bool:
+    """Whether this batch is full.
+
+    Default: close on the paragraph count OR the character floor, whichever
+    comes first - which makes 800 a ceiling in practice, since two paragraphs
+    of a real essay clear it.
+
+    MANUSCRIPT_TONE_SPAN=full closes on the paragraph count ALONE, filling the
+    batch to TONE_BATCH_PARAGRAPHS and raising a live request from about 956
+    characters to about 2639.
+
+    That variant was measured on 2026-08-22 and lost badly: Friendly 28.6%
+    style 3.14 at 956 characters against 0.0% (0 of 14) style 2.93 at 2639,
+    both runs complete with 25 of 25 applied. It was taken back out.
+
+    It was measured again on 2026-08-26, on the 12B, because the 2022-08-22
+    comparison ran on the 2B pack and every measurement before 2026-08-26 did:
+    the ladder reported a larger pack while a speed tiebreak silently selected
+    the smallest one. The theory was that a 2B degrades on a 2639-character
+    span and a 12B might not.
+
+    It does. Friendly, essay 1, 12B, judge gemma3:27b, both arms complete at
+    25 of 25 presses with 1 unknown word:
+
+        974 chars   35.7% (5 of 14)  style 3.29  usefulness 4.29  544.6s
+        2641 chars  13.3% (2 of 15)  style 3.00  usefulness 4.07  464.2s
+
+    The bigger span is 15% faster and about a third as good, and the judge's
+    reasons are the same sentence fifteen times over: "readable and natural,
+    but lacks warmth", "competent but not friendly", "neutral and
+    observational". A model given more text applies the same amount of rewrite
+    effort to it and the tone thins out. That is a property of the request, not
+    of the pack, which is why it reproduced across a 6x difference in model
+    size.
+
+    The switch stays so the question can be re-asked without editing constants,
+    and the default stays the version that measured better.
+    """
+    import os
+
+    if os.environ.get("MANUSCRIPT_TONE_SPAN", "").strip().casefold() == "full":
+        return paragraphs >= TONE_BATCH_PARAGRAPHS
+    return paragraphs >= TONE_BATCH_PARAGRAPHS or characters >= TONE_BATCH_MINIMUM_CHARACTERS
+
+
 def tone_request_batches(texts: Sequence[str]) -> tuple[tuple[int, ...], ...]:
     """Group consecutive sections into single tone requests.
 
@@ -96,7 +141,7 @@ def tone_request_batches(texts: Sequence[str]) -> tuple[tuple[int, ...], ...]:
         # 28.6 has been measured twice and is stable, so the drop is not noise.
         # Whatever a tone needs, it is not simply a longer request, and the
         # smaller batch is kept because it is the one that measures better.
-        if len(current) >= TONE_BATCH_PARAGRAPHS or total >= TONE_BATCH_MINIMUM_CHARACTERS:
+        if _span_closes(len(current), total):
             batches.append(tuple(current))
             current = []
             total = 0

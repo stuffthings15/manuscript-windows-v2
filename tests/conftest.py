@@ -50,5 +50,9 @@ os.environ.setdefault("MANUSCRIPT_STATE_DIR", str(_STATE_SANDBOX))
 #
 # Cleared for the whole session rather than per test, because the tests that
 # need protecting are the ones with no idea this environment exists.
-for _pin in ("MANUSCRIPT_PREFERRED_PACK", "MANUSCRIPT_PREFERRED_MODE"):
+for _pin in (
+    "MANUSCRIPT_PREFERRED_PACK",
+    "MANUSCRIPT_PREFERRED_MODE",
+    "MANUSCRIPT_TONE_SPAN",
+):
     os.environ.pop(_pin, None)
