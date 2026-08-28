@@ -111,3 +111,40 @@ def test_recovery_does_not_restart_the_review(monkeypatch):
     run_essays_batch.recover_hud("07_x", {})
 
     assert pressed == []
+
+
+def test_focus_is_reasserted_before_a_press_when_another_window_has_it(monkeypatch):
+    """The failure recover_hud cannot see: the HUD is there, pointing elsewhere.
+
+    The first AutoResearch experiment died this way - "no Replace button at
+    press 1; section 1/4, ready 0, view=badge" with `focus detected
+    title='Claude'` in the app log four times. hud_window returned a HUD, so no
+    recovery fired, and the essay came back with unknown=54 and unchanged=11.
+    """
+    import run_essays_batch as batch
+
+    refocused: list[str] = []
+    monkeypatch.setattr(batch, "focus_named_word_window", refocused.append)
+    monkeypatch.setattr(batch, "_foreground_title", lambda: "Claude", raising=False)
+
+    batch._hold_focus("01_urban_beekeeping")
+
+    assert refocused == ["01_urban_beekeeping"]
+
+
+def test_focus_is_left_alone_when_the_document_already_has_it(monkeypatch):
+    """Re-focusing on every press regardless would be its own disruption."""
+    import run_essays_batch as batch
+
+    refocused: list[str] = []
+    monkeypatch.setattr(batch, "focus_named_word_window", refocused.append)
+    monkeypatch.setattr(
+        batch,
+        "_foreground_title",
+        lambda: "01_urban_beekeeping  -  Compatibility Mode - Word",
+        raising=False,
+    )
+
+    batch._hold_focus("01_urban_beekeeping")
+
+    assert refocused == []

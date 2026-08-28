@@ -579,6 +579,39 @@ def captured_document_title(since: int = 0) -> str | None:
     return None
 
 
+def _foreground_title() -> str:
+    """The title of whatever window currently has the foreground, or "".
+
+    Separate from _hold_focus so the decision it feeds can be tested without a
+    live desktop.
+    """
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        handle = user32.GetForegroundWindow()
+        length = user32.GetWindowTextLengthW(handle)
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(handle, buffer, length + 1)
+        return buffer.value or ""
+    except Exception:  # noqa: BLE001 - ctypes raises broadly on a locked desktop
+        # An unreadable foreground means re-focusing is the safe guess: the cost
+        # is a redundant call, the alternative is correcting the wrong document.
+        return ""
+
+
+def _hold_focus(stem: str) -> None:
+    """Put the essay's Word window back in front if something took it.
+
+    Cheap on the common path: it only calls into UI automation when the
+    foreground window is not already the document being corrected.
+    """
+    title = _foreground_title()
+    if stem.lower() in title.lower() and title.endswith("- Word"):
+        return
+    focus_named_word_window(stem)
+
+
 def recover_hud(stem: str, report: dict):
     """Take focus back after the HUD followed it somewhere else, mid-run.
 
@@ -796,6 +829,24 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
     report["_log_start"] = log_start
 
     for press in range(1, max_presses + 1):
+        # Take the foreground back before EVERY press, not only when something
+        # has already gone wrong.
+        #
+        # recover_hud handles the HUD being absent. This handles the commoner
+        # and quieter case: the HUD is right there, but pointing somewhere else.
+        # The first AutoResearch experiment died exactly that way - "no Replace
+        # button at press 1; section 1/4, ready 0, view=badge" - with the app
+        # log showing `focus detected title='Claude'` four times. The HUD was
+        # found, so no recovery fired, and it was showing a badge for the wrong
+        # window. unknown=54 and unchanged=11: the essay was never corrected.
+        #
+        # The app is doing the right thing. It follows the writer's focus, which
+        # is the dictation feature. A batch run is the unusual case - nobody is
+        # watching, and any editable window that steals focus silently redirects
+        # the review - so the harness re-asserts between presses. This costs
+        # milliseconds when focus is already correct, because it verifies before
+        # it acts.
+        _hold_focus(path.stem)
         hud = hud_window(10.0)
         if hud is None:
             hud = recover_hud(path.stem, report)
