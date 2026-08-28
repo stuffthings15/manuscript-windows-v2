@@ -45,6 +45,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,6 +71,63 @@ TIMEOUT_PER_ESSAY_SECONDS = 600
 _DEAD = "dead"
 _PARTIAL = "partial"
 _CAPTURE_MISMATCH = "captured from"
+
+
+def _stale_reason() -> str:
+    """Why the running app must not be measured, or "" when it may be."""
+    try:
+        from release_acceptance import _stale_app_reason
+
+        return _stale_app_reason()
+    except Exception as exc:  # noqa: BLE001 - imports drag in the whole harness
+        # A staleness check that cannot run must not be silently treated as a
+        # pass. That is precisely the shape of the defect it exists to catch.
+        return f"the staleness check could not run: {exc}"
+
+
+def _vram_used_mb() -> float:
+    """Megabytes of VRAM in use right now, or 0.0 when there is no GPU."""
+    try:
+        sys.path.insert(0, str(ROOT / "src"))
+        from echo_link_core.polish_hardware import _nvidia_status
+
+        status = _nvidia_status()
+        if not status:
+            return 0.0
+        # Keys and units taken from the source, not guessed: this returns
+        # dedicated_vram_bytes and available_vram_bytes, in BYTES.
+        total = float(status.get("dedicated_vram_bytes") or 0)
+        free = float(status.get("available_vram_bytes") or 0)
+        return max(0.0, (total - free) / (1024.0 * 1024.0))
+    except Exception:  # noqa: BLE001 - nvidia-smi answers in several shapes
+        return 0.0
+
+
+class _VramWatch:
+    """Peak VRAM across the run, sampled on a thread.
+
+    A single reading afterwards would miss the peak, and the peak is the point:
+    the spec keeps VRAM as a soft constraint so a change that quietly doubles
+    residency is visible rather than discovered when the pack stops fitting.
+    """
+
+    def __init__(self) -> None:
+        self.peak = 0.0
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            self.peak = max(self.peak, _vram_used_mb())
+            self._stop.wait(15.0)
+
+    def __enter__(self) -> "_VramWatch":
+        self.peak = _vram_used_mb()
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self._stop.set()
 
 
 def _git_head() -> str:
@@ -153,14 +211,33 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help="fail rather than score if this pack did not actually serve the run",
     )
-    parser.add_argument("--restart-app", action="store_true")
+    # Restart by DEFAULT, and opting out is the flag.
+    #
+    # This was the other way round when the file was written, and it would have
+    # wasted the whole first night. The app is a long-running process, so an
+    # experiment that edits polish*.py and does not restart measures the code
+    # that was already loaded: every result comes back as the baseline plus
+    # noise, every keep and discard is decided by chance, and results.tsv fills
+    # up looking entirely reasonable.
+    #
+    # session_state.build_identifier carries this scar already - "three
+    # separate times in two days a run measured a process that was not the
+    # build under test, and one of those cost six hours" - and an app started
+    # on 2026-08-23 went on to serve six acceptance tiers while reporting a
+    # build made minutes earlier.
+    parser.add_argument(
+        "--no-restart",
+        action="store_true",
+        help="measure the app already running. Only for debugging the harness: "
+        "it cannot see a code change you just made.",
+    )
     arguments = parser.parse_args(argv)
 
     last = arguments.first + arguments.count - 1
     mark = _log_length()
     build = _git_head()
 
-    if arguments.restart_app:
+    if not arguments.no_restart:
         subprocess.run(
             [sys.executable, "-u", str(ROOT / "tools/restart_app_and_wait.py")],
             cwd=ROOT,
@@ -170,7 +247,21 @@ def main(argv: list[str] | None = None) -> int:
         )
         mark = _log_length()
 
+    # Then CHECK, because restarting and assuming is how this went wrong before.
+    # The app publishes the build it started with and this compares it against
+    # the checkout. Reused from release_acceptance rather than reimplemented:
+    # a second copy of a staleness check is a second thing that can rot, and
+    # this one was already inert for weeks once because it compared HEAD with
+    # HEAD.
+    stale = _stale_reason()
+    if stale:
+        print("---")  # noqa: T201
+        print(f"crash:            stale app, {stale}")  # noqa: T201
+        return 1
+
     started = time.monotonic()
+    watch = _VramWatch()
+    watch.__enter__()
     try:
         batch = subprocess.run(
             [
@@ -196,11 +287,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         batch_output = batch.stdout + batch.stderr
     except subprocess.TimeoutExpired:
+        watch.__exit__()
         print("---")  # noqa: T201
         print("crash:            timeout")  # noqa: T201
         print(f"elapsed_seconds:  {time.monotonic() - started:.1f}")  # noqa: T201
         return 1
     elapsed = time.monotonic() - started
+    watch.__exit__()
     print(batch_output)  # noqa: T201
 
     rows = [line for line in batch_output.splitlines() if " run1 " in line]
@@ -254,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"model:            {model}")  # noqa: T201
     print(f"backend:          {backend}")  # noqa: T201
     print(f"build:            {build}")  # noqa: T201
+    print(f"peak_vram_mb:     {watch.peak:.1f}")  # noqa: T201
     print(f"unknown:          {sum(r['unknown'] for r in graded)}")  # noqa: T201
     return 0
 
