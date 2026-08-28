@@ -195,6 +195,41 @@ def _row_status(row: str) -> str:
     return "unknown"
 
 
+def _run_batches(essays: list[int], corpus: str) -> str:
+    """Correct each essay and return the combined harness output.
+
+    One invocation per essay rather than one contiguous range, so a slice can
+    name the essays worth measuring instead of whichever ones happen to sit
+    next to each other. Each invocation is its own Word session, which is the
+    harness default; the gate uses --as-a-writer to catch defects that only
+    appear on a second document, and that is a different question from the one
+    this loop asks. What matters here is that every experiment is measured the
+    same way.
+    """
+    collected = []
+    for number in essays:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-u",
+                str(ROOT / "tools/run_essays_batch.py"),
+                "--from",
+                str(number),
+                "--to",
+                str(number),
+                "--corpus",
+                corpus,
+                "--as-a-writer",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_PER_ESSAY_SECONDS,
+        )
+        collected.append(completed.stdout + completed.stderr)
+    return "\n".join(collected)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--first", type=int, default=1, help="first essay")
@@ -204,6 +239,13 @@ def main(argv: list[str] | None = None) -> int:
         default=1,
         help="essays in one experiment. One is the upstream-sized budget; raise "
         "it only once the measured spread says one is too noisy.",
+    )
+    parser.add_argument(
+        "--essays",
+        default="",
+        help="explicit essay numbers, comma separated, e.g. 8,10. Overrides "
+        "--first/--count. The slice must not be chosen for being easy: essay 1 "
+        "scores 100 and would measure every change as zero.",
     )
     parser.add_argument("--corpus", default=DEFAULT_CORPUS)
     parser.add_argument(
@@ -233,7 +275,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     arguments = parser.parse_args(argv)
 
-    last = arguments.first + arguments.count - 1
+    # An explicit list, because the two weakest essays are 08 and 10 and the
+    # batch takes a contiguous range. Spanning 8 to 10 to reach both would drag
+    # in 09, which has stopped part way twice today, and a flaky essay in the
+    # slice turns experiments into crashes.
+    #
+    # A slice with no headroom is the quieter mistake. Essay 1 scores 100 out of
+    # 100 after today's fixes, so a night spent optimising it would measure
+    # every single change as zero and teach nothing.
+    wanted = [
+        int(part) for part in arguments.essays.replace(" ", "").split(",") if part
+    ] or list(range(arguments.first, arguments.first + arguments.count))
     mark = _log_length()
     build = _git_head()
 
@@ -263,29 +315,8 @@ def main(argv: list[str] | None = None) -> int:
     watch = _VramWatch()
     watch.__enter__()
     try:
-        batch = subprocess.run(
-            [
-                sys.executable,
-                "-u",
-                str(ROOT / "tools/run_essays_batch.py"),
-                "--from",
-                str(arguments.first),
-                "--to",
-                str(last),
-                "--corpus",
-                arguments.corpus,
-                # One Word session and one app for the whole slice, which is how
-                # a writer actually works. The default restarts between essays,
-                # and a gate that only ever measures the first document of a
-                # freshly started app measures a situation almost no user is in.
-                "--as-a-writer",
-            ],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            timeout=TIMEOUT_PER_ESSAY_SECONDS * arguments.count,
-        )
-        batch_output = batch.stdout + batch.stderr
+        batch = _run_batches(wanted, arguments.corpus)
+        batch_output = batch
     except subprocess.TimeoutExpired:
         watch.__exit__()
         print("---")  # noqa: T201
