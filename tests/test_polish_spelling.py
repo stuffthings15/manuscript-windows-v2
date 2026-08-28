@@ -526,3 +526,97 @@ def test_a_word_with_several_equal_repairs_is_still_left_alone():
 
     assert "loids" in result
     assert "lords" not in result
+
+
+def test_derived_english_is_recognised_without_being_listed():
+    """Compounds and prefixed words are English, and are not corrections.
+
+    Measured on 2026-08-27 over the twenty-essay corpus: `tradeoffs` was
+    charged on nine of the ten worst essays, and the one essay that failed the
+    release gate outright was charged five times, for `cyber`,
+    `cyberinsurance`, `cybersecurity`, `multifactor` and `tradeoffs` - all real
+    English that neither bundled list carries.
+
+    Every word here is derived, none is listed anywhere in the source. That is
+    the point: hand-adding them would memorise this corpus, which is the rule
+    that governs the 149 frozen sentences in polish_proofread.py.
+    """
+    from echo_link_core.polish_spelling import EnglishDictionary
+
+    dictionary = EnglishDictionary()
+    dictionary.warm()
+
+    for word in (
+        "cybersecurity",
+        "cyberinsurance",
+        "microplastic",
+        "multifactor",
+        "paratransit",
+        "greenwashing",
+        "snowpack",
+        "stormwater",
+        "tradeoffs",
+        "repairability",
+    ):
+        assert dictionary.recognises_compound(word), word
+
+
+def test_a_missing_space_is_not_mistaken_for_a_compound():
+    """The guard that keeps the compound rule from hiding real defects.
+
+    `vendorsmay` and `canappear` are missing-space defects in the corpus, and
+    both split cleanly into two dictionary words. Without the function-word
+    guard they are accepted as English, which would hide two real errors and
+    stop the run-together repair from separating them.
+    """
+    from echo_link_core.polish_spelling import EnglishDictionary
+
+    dictionary = EnglishDictionary()
+    dictionary.warm()
+
+    for word in ("vendorsmay", "canappear", "closelyat"):
+        assert not dictionary.recognises_compound(word), word
+
+
+def test_a_misspelling_close_to_a_real_word_is_never_derived():
+    """A typo is near the word it should have been; a compound is not.
+
+    `absorbant` splits into absorb + ant and `accessable` into access + able,
+    and both are one edit from a real word. Requiring that separation took the
+    rule from 10.72 percent of the bundled misspellings to 3.16 before the
+    frequency floor was applied at all.
+    """
+    from echo_link_core.polish_spelling import EnglishDictionary
+
+    dictionary = EnglishDictionary()
+    dictionary.warm()
+
+    for word in ("absorbant", "accessable", "aberation", "absorbsion"):
+        assert not dictionary.recognises_compound(word), word
+
+
+def test_a_derivable_word_is_not_torn_in_half_by_the_run_together_repair():
+    """The user-visible defect the corrector-side check actually fixes.
+
+    Not the one first assumed. The speller offers no repair for "stormwater" or
+    "cybersecurity" with or without this check - measured, all thirteen corpus
+    compounds came back with no suggestion - so nobody was ever told those were
+    misspelled and that claim was withdrawn.
+
+    What does happen is the fall-through: when `suggestion` returns None the
+    run-together repair gets the word, and it splits anything whose halves are
+    both real. Scanning 120,000 words found eleven it would tear in half, and
+    they are mostly names - "kneeland" became "kneel and", "groveland" became
+    "grovel and", "blackmore" became "black more". That is a writer's word
+    replaced by two wrong ones, which is worse than leaving it alone.
+
+    Both sentences below are corrupted with the check removed, which is the
+    only reason it ships.
+    """
+    from echo_link_core.polish_spelling import PolishRuleEngine
+
+    engine = PolishRuleEngine()
+    engine.warm()
+
+    assert "kneeland" in engine.correct("We met at the kneeland site last week.").text
+    assert "groveland" in engine.correct("The groveland office handles it.").text

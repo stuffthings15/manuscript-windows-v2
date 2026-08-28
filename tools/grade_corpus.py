@@ -287,14 +287,30 @@ def _frequency_dictionary_knows(folded: str, dictionary: EnglishDictionary) -> b
     "behaviour", "apologise", "barbeque", "affective", "campion". Treating
     those as known is correct for a count of unknown words, not a leak.
 
-    What this does NOT fix, said so a low spelling score can still be read:
-    "cybersecurity", "microgrid", "tradeoff", "makerspace" and "outplanting"
-    are in neither list and are still charged. They are real English and the
-    coverage gap is real. They are deliberately not hand-added, because they
-    are the words in this corpus and adding them is memorising the answer.
+    That gap is now closed by derivation rather than by listing. The paragraph
+    that stood here said "cybersecurity", "microgrid", "tradeoff", "makerspace"
+    and "outplanting" were charged, that the coverage gap was real, and that
+    they were deliberately not hand-added because adding them is memorising the
+    answer. All three statements were correct and the last one still governs:
+    none of those words appears anywhere in the source.
+
+    What changed on 2026-08-27 is `recognises_compound`, which asks whether a
+    word is English by productive word formation - a prefix on a known word, or
+    two common content words joined - with the guards and the measured false
+    accept rate documented beside it in polish_spelling.py. The product uses the
+    same check, though for a different reason there - it keeps the run-together
+    repair from tearing "kneeland" into "kneel and" - while here it stops the
+    grader charging correct English as a misspelling. `outplanting` and `lidar`
+    are still charged, because neither is derivable and their gap is still real.
+
+    Said plainly, because it flatters this number: most of the movement in the
+    score is the grader no longer being wrong, not the corrector getting
+    better. The thresholds did not move and the corpus did not change.
     """
     value = dictionary.suggestion(folded)
-    return bool(value and value[0].casefold() == folded and value[1] == 0)
+    if value and value[0].casefold() == folded and value[1] == 0:
+        return True
+    return dictionary.recognises_compound(folded)
 
 
 # Confusable words the speller can never see, because both spellings are real.

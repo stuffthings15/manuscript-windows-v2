@@ -166,6 +166,60 @@ class DeterministicPolishResult:
     elapsed_ms: float
 
 
+# Productive English word formation, so that ordinary compounds and prefixed
+# words are recognised as English instead of charged as misspellings.
+#
+# The gap this closes was measured on 2026-08-27 over the twenty-essay corpus:
+# `tradeoffs` was charged on nine of the ten worst essays, and the essay that
+# failed the release gate outright was charged five times for `cyber`,
+# `cyberinsurance`, `cybersecurity`, `multifactor` and `tradeoffs`, every one
+# of them real English. Neither bundled list has them, and neither does any
+# list that could replace them: the SymSpell 500,000-word list turns 15.89% of
+# our own 24,691 bundled misspellings into "correct" words, against 0.69% for
+# the list we ship, because it is a Google Books frequency dump carrying OCR
+# typos rather than a curated lexicon; and LibreOffice's en_US is byte for byte
+# the file already in this repository.
+#
+# So this derives the words instead of listing them. Listing them would be
+# memorising the corpus, which is the rule that governs the 149 frozen
+# sentences in polish_proofread.py, and grade_corpus.py already records an
+# earlier session refusing exactly that.
+_COMPOUND_PREFIXES = (
+    "cyber", "micro", "multi", "para", "bio", "geo", "eco", "nano", "tele",
+    "pre", "post", "anti", "non", "semi", "sub", "super", "inter", "ultra",
+)
+
+# A compound joins content words. These are the words that never form one, and
+# without this guard the corpus's own missing-space defects are accepted as
+# English: `vendorsmay` is vendors + may and `canappear` is can + appear, so
+# two real errors would be hidden to gain nothing.
+_COMPOUND_FUNCTION_WORDS = frozenset(
+    """may can will shall must might could would should do does did is are was
+    were be been being am has have had at in on of to for by with from as and
+    or but if so the a an this that these those it its he she they we you i him
+    her them us me my your his their our not no yes up out who whom which what
+    when where why how all any some such than then there here too very also
+    just only""".split()
+)
+
+# Both halves must be common. Measured, not chosen: at no floor the rule turns
+# 3.16% of the bundled misspellings into words, at 100,000 it is 1.33%, at
+# 1,000,000 it is 0.86%, and at 5,000,000 it is 0.33% but stops recognising
+# `tradeoffs` and `tiltmeters`. One million is the knee, and it lands beside
+# the 0.69% the shipped list already produces.
+#
+# What the floor removes is the shape of a misspelling rather than a compound:
+# the accepted junk was `absorb` + `sion`, `anal` + `ices`, `alum` + `nigh`,
+# `eco` + `monica` - one common word joined to something rare or to a name.
+_COMPOUND_MINIMUM_FREQUENCY = 1_000_000
+
+# A misspelling is close to the word it should have been; a compound is not.
+# `absorbant` is one edit from "absorbent" and `accessable` one from
+# "accessible", and requiring two edits of separation took the rule from 10.72%
+# to 3.16% before the frequency floor was applied at all.
+_COMPOUND_MINIMUM_EDIT_SEPARATION = 2
+
+
 class EnglishDictionary:
     """Bundled Hunspell word validity plus SymSpell candidate ranking."""
 
@@ -210,6 +264,56 @@ class EnglishDictionary:
         self._ensure_loaded()
         folded = _dictionary_form(word)
         return bool(folded and self._words is not None and folded in self._words)
+
+    def recognises_compound(self, word: str) -> bool:
+        """Whether a word the lists lack is still English by word formation.
+
+        Answers the narrow question "is this a real word", not "what should it
+        become", which is why it is separate from `suggestion`. A word already
+        in the lists never reaches here; callers ask this only after `contains`
+        has said no.
+
+        Three guards, each measured against the 24,691 bundled misspellings
+        rather than reasoned about, because every one of them was added after
+        watching the rule accept something it should not have. See the
+        constants above for the numbers.
+        """
+        self._ensure_loaded()
+        if self._symspell is None or self._words is None:
+            return False
+        folded = _dictionary_form(word)
+        if not folded or len(folded) < 6:
+            return False
+
+        # Close to a real word means it is a typo of that word, whatever else
+        # it can be decomposed into.
+        if self.has_close_candidate(folded):
+            return False
+
+        counts = getattr(self._symspell, "words", None) or {}
+
+        def common(part: str) -> bool:
+            return counts.get(part, 0) >= _COMPOUND_MINIMUM_FREQUENCY
+
+        def real(part: str) -> bool:
+            return part in self._words
+
+        for prefix in _COMPOUND_PREFIXES:
+            if not folded.startswith(prefix):
+                continue
+            rest = folded[len(prefix) :]
+            if len(rest) > 2 and real(rest) and common(rest):
+                return True
+
+        # Both parts at least four characters: shorter splits are how "acid" +
+        # "dent" and "annal" + "isis" got in.
+        for cut in range(4, len(folded) - 3):
+            head, tail = folded[:cut], folded[cut:]
+            if head in _COMPOUND_FUNCTION_WORDS or tail in _COMPOUND_FUNCTION_WORDS:
+                continue
+            if real(head) and real(tail) and common(head) and common(tail):
+                return True
+        return False
 
     def has_close_candidate(self, word: str) -> bool:
         """Whether a single-word repair exists at one edit.
@@ -613,6 +717,26 @@ class PolishRuleEngine:
                 )
                 continue
             if self.dictionary.contains(word):
+                continue
+            # Real English the bundled lists happen not to carry: compounds and
+            # prefixed words like "cybersecurity", "stormwater", "tradeoffs".
+            #
+            # Not because the speller offers a wrong repair for them - measured
+            # on 2026-08-27, all thirteen corpus compounds came back with no
+            # suggestion at all. It is the fall-through that does the damage:
+            # `suggestion` returning None hands the word to the run-together
+            # repair, which splits anything whose halves are both real words.
+            # Eleven words in a 120,000-word scan were torn in half that way,
+            # mostly names - "kneeland" to "kneel and", "groveland" to "grovel
+            # and". Replacing a writer's word with two wrong ones is worse than
+            # leaving it alone.
+            #
+            # This sits after `contains` and before `suggestion` so it can only
+            # ever suppress a correction, never propose one. The run-together
+            # repair below still fires for "vendorsmay" and "canappear",
+            # because a compound may not contain a function word - that guard
+            # exists precisely so this check cannot swallow a missing space.
+            if self.dictionary.recognises_compound(word):
                 continue
             value = self.dictionary.suggestion(
                 word, tie_break=self._context_tie_break(text, match)
