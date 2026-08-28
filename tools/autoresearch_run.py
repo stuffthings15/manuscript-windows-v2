@@ -1,0 +1,278 @@
+"""One AutoResearch experiment: correct a fixed slice, grade it, print one block.
+
+This is the Manuscript equivalent of `uv run train.py` in
+https://github.com/karpathy/autoresearch (pinned at commit 228791f, mirrored
+read-only at `Vedit-AI/third_party/autoresearch_ref`). Upstream trains for a
+fixed five minutes and prints a summary block; the loop greps one line out of it
+and decides keep or discard. This does the same thing with a Word run.
+
+    .venv/Scripts/python.exe tools/autoresearch_run.py > run.log 2>&1
+    grep "^score:" run.log
+
+**Redirect it. Never pipe it into an agent's context.** Upstream is emphatic
+about this and the reason is arithmetic: a twenty-essay batch prints thousands
+of lines, and an agent running a hundred experiments overnight dies of context
+exhaustion long before morning. The whole point of the summary block is that one
+grep is all anyone needs to read.
+
+Why a Word run and not a headless score
+---------------------------------------
+`CLAUDE.md` forbids treating a headless number as the result, and the reason is
+recorded: on 2026-08-14 a headless run scored a corpus at 62 and it was reported
+to the owner as a product regression when the local AI had simply latched off.
+`tools/word_essay_session.py` refuses to start in that state. So the ground
+truth here costs about five minutes per essay, which is what makes the upstream
+five-minute budget fit this project almost exactly - essays measured 311s and
+322s on 2026-08-27.
+
+Why the block carries pack, model and build
+-------------------------------------------
+Because eight consecutive acceptance tiers were served by a 2 billion parameter
+pack while reporting a larger one. A speed tiebreak in the hardware ladder
+silently selected the smallest pack that passed, every tier looked normal, and
+six hypotheses were "eliminated" against a model nobody intended to test. A run
+that cannot say what actually served it is not a measurement, so this refuses to
+print a score when it cannot tell, and `--require-pack` turns a mismatch into a
+hard failure.
+
+This file is part of the evaluator. Per the AutoResearch contract it is
+read-only to the loop, in the same way `prepare.py` is upstream.
+"""
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
+if str(ROOT / "tools") not in sys.path:
+    sys.path.insert(0, str(ROOT / "tools"))
+
+APP_LOG = Path.home() / "AppData/Local/ManuscriptWindowsV2/echo-link.log"
+
+# The corpus the release gate uses. Coherent prose with seeded surface damage,
+# which is what a user's writing actually looks like.
+DEFAULT_CORPUS = "test-corpus/error-riddled-20-docx"
+
+# Upstream kills anything past double the budget and treats it as a failure. One
+# essay is about five minutes, so a slice of N essays gets 10 minutes each before
+# it is called dead rather than slow.
+TIMEOUT_PER_ESSAY_SECONDS = 600
+
+# The three ways a Word run fails without raising. Each one has cost a real
+# measurement, and every one of them used to be read as a low score rather than
+# as no score at all, which is far worse than a crash: a crash is obvious.
+_DEAD = "dead"
+_PARTIAL = "partial"
+_CAPTURE_MISMATCH = "captured from"
+
+
+def _git_head() -> str:
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return out.stdout.strip() or "unknown"
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+
+def _served_pack(since_line: int) -> tuple[str, str, str]:
+    """What the app actually loaded, read from its own log after a mark.
+
+    Read after a mark rather than from the whole file, because the log is
+    append-only across restarts and the pack from an earlier session looks
+    exactly like the pack from this one.
+    """
+    try:
+        lines = APP_LOG.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ("unknown", "unknown", "unknown")
+    pack = model = backend = "unknown"
+    for line in lines[since_line:]:
+        found = re.search(
+            r"Polish plan pack=(\S+) model=(\S+) backend=(\S+)", line
+        )
+        if found:
+            pack, model, backend = found.group(1), found.group(2), found.group(3)
+        elif pack == "unknown":
+            warm = re.search(r"prewarmed pack=(\S+)", line)
+            if warm:
+                pack = warm.group(1)
+    return (pack, model, backend)
+
+
+def _log_length() -> int:
+    try:
+        return len(APP_LOG.read_text(encoding="utf-8", errors="replace").splitlines())
+    except OSError:
+        return 0
+
+
+def _row_status(row: str) -> str:
+    """Read a batch row the way the harness meant it, not by its number.
+
+    A `partial` row carries a real-looking score for half an essay. Scoring it
+    is how 11 of 20 runs were once averaged into a mean of 84.5 and reported as
+    a product regression when the product had not regressed at all.
+    """
+    if _CAPTURE_MISMATCH in row:
+        return "capture-mismatch"
+    for marker in (_DEAD, _PARTIAL):
+        if f" {marker}" in row:
+            return marker
+    if " complete" in row:
+        return "complete"
+    if " error" in row:
+        return "error"
+    return "unknown"
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--first", type=int, default=1, help="first essay")
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=1,
+        help="essays in one experiment. One is the upstream-sized budget; raise "
+        "it only once the measured spread says one is too noisy.",
+    )
+    parser.add_argument("--corpus", default=DEFAULT_CORPUS)
+    parser.add_argument(
+        "--require-pack",
+        default="",
+        help="fail rather than score if this pack did not actually serve the run",
+    )
+    parser.add_argument("--restart-app", action="store_true")
+    arguments = parser.parse_args(argv)
+
+    last = arguments.first + arguments.count - 1
+    mark = _log_length()
+    build = _git_head()
+
+    if arguments.restart_app:
+        subprocess.run(
+            [sys.executable, "-u", str(ROOT / "tools/restart_app_and_wait.py")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        mark = _log_length()
+
+    started = time.monotonic()
+    try:
+        batch = subprocess.run(
+            [
+                sys.executable,
+                "-u",
+                str(ROOT / "tools/run_essays_batch.py"),
+                "--from",
+                str(arguments.first),
+                "--to",
+                str(last),
+                "--corpus",
+                arguments.corpus,
+                # One Word session and one app for the whole slice, which is how
+                # a writer actually works. The default restarts between essays,
+                # and a gate that only ever measures the first document of a
+                # freshly started app measures a situation almost no user is in.
+                "--as-a-writer",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_PER_ESSAY_SECONDS * arguments.count,
+        )
+        batch_output = batch.stdout + batch.stderr
+    except subprocess.TimeoutExpired:
+        print("---")  # noqa: T201
+        print("crash:            timeout")  # noqa: T201
+        print(f"elapsed_seconds:  {time.monotonic() - started:.1f}")  # noqa: T201
+        return 1
+    elapsed = time.monotonic() - started
+    print(batch_output)  # noqa: T201
+
+    rows = [line for line in batch_output.splitlines() if " run1 " in line]
+    statuses = [_row_status(row) for row in rows]
+    bad = [s for s in statuses if s != "complete"]
+    if not rows or bad:
+        # No score. Upstream's rule is that an empty grep means a crash, and
+        # this prints no `score:` line precisely so the loop reads it as one.
+        print("---")  # noqa: T201
+        print(f"crash:            {bad[0] if bad else 'no rows'}")  # noqa: T201
+        print(f"rows:             {len(rows)}")  # noqa: T201
+        print(f"elapsed_seconds:  {elapsed:.1f}")  # noqa: T201
+        return 1
+
+    pack, model, backend = _served_pack(mark)
+    if arguments.require_pack and pack != arguments.require_pack:
+        print("---")  # noqa: T201
+        print(f"crash:            pack mismatch, {pack} served")  # noqa: T201
+        print(f"requested:        {arguments.require_pack}")  # noqa: T201
+        return 1
+
+    from echo_link_core.polish_spelling import EnglishDictionary
+    from echo_link_core.writing_suggestions import WritingSuggestionEngine
+    from grade_corpus import essay_documents, grade
+
+    dictionary = EnglishDictionary()
+    dictionary.warm()
+    engine = WritingSuggestionEngine()
+    # Prefix matching, not equality: the batch prints essay names truncated to
+    # thirty characters, so "01_urban_beekeeping_and_the_ec" has to match
+    # "01_urban_beekeeping_and_the_ecology_of_cities". Comparing stems directly
+    # matches nothing and grades an empty list.
+    wanted = _slice_names(arguments, rows)
+    graded = [
+        grade(path, dictionary, engine)
+        for path in essay_documents(ROOT / "build/batch")
+        if any(path.stem.startswith(name) for name in wanted)
+    ]
+    if not graded:
+        print("---")  # noqa: T201
+        print("crash:            nothing graded")  # noqa: T201
+        return 1
+
+    score = sum(row["total"] for row in graded) / len(graded)
+    print("---")  # noqa: T201
+    print(f"score:            {score:.6f}")  # noqa: T201
+    print(f"essays:           {len(graded)}")  # noqa: T201
+    print(f"lowest:           {min(r['total'] for r in graded):.6f}")  # noqa: T201
+    print(f"elapsed_seconds:  {elapsed:.1f}")  # noqa: T201
+    print(f"pack:             {pack}")  # noqa: T201
+    print(f"model:            {model}")  # noqa: T201
+    print(f"backend:          {backend}")  # noqa: T201
+    print(f"build:            {build}")  # noqa: T201
+    print(f"unknown:          {sum(r['unknown'] for r in graded)}")  # noqa: T201
+    return 0
+
+
+def _slice_names(arguments, rows: list[str]) -> list[str]:
+    """The documents this experiment actually corrected.
+
+    Taken from the batch rows rather than by globbing `build/batch`, because
+    that directory accumulates results from every earlier run. Grading it
+    wholesale on 2026-08-27 mixed three corpora and several failed runs into one
+    number and produced a mean of 96.0 that belonged to nothing.
+    """
+    names = []
+    for row in rows:
+        found = re.search(r"^\s*\d+\s+(\S+)", row)
+        if found:
+            names.append(found.group(1))
+    return names
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

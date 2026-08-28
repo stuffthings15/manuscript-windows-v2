@@ -23,3 +23,9 @@ evidence/
 *.log
 models/**/*.bin
 ~$*.docx
+
+# AutoResearch. The experiment log is per-machine and per-run, and upstream
+# keeps it untracked for the same reason: it records a search, not the product.
+# run.log is already covered by *.log above.
+results.tsv
+progress.png
