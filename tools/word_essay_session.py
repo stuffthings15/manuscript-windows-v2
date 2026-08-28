@@ -246,14 +246,38 @@ def focus_named_word_window(stem: str) -> int:
     if not handle:
         return 0
     user32 = ctypes.windll.user32
-    user32.ShowWindow(handle, 9)  # SW_RESTORE
-    current = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)
-    target = user32.GetWindowThreadProcessId(handle, None)
-    user32.AttachThreadInput(current, target, True)
-    user32.BringWindowToTop(handle)
-    user32.SetForegroundWindow(handle)
-    user32.AttachThreadInput(current, target, False)
-    time.sleep(1.0)
+    # Ask, then CHECK, and ask again if it did not take.
+    #
+    # SetForegroundWindow is advisory. Windows refuses it outright when another
+    # process owns the foreground and has not yielded, and it reports that by
+    # returning false rather than by raising, so a harness that calls it once
+    # and moves on believes it has focus while another window still has it.
+    # The AttachThreadInput dance below is the standard way to earn the right,
+    # and it still loses races against a window that is actively being typed
+    # into.
+    #
+    # That mattered on 2026-08-27: a twenty-essay batch lost 4 of its first 10
+    # essays, every one of them to focus, and the app log named the winner nine
+    # times - `focus detected title='Claude'`. The recovery paths that call this
+    # were retrying an operation that was quietly doing nothing, so they burned
+    # their attempts without ever taking the foreground back.
+    for _attempt in range(3):
+        user32.ShowWindow(handle, 9)  # SW_RESTORE
+        current = user32.GetWindowThreadProcessId(
+            user32.GetForegroundWindow(), None
+        )
+        target = user32.GetWindowThreadProcessId(handle, None)
+        user32.AttachThreadInput(current, target, True)
+        user32.BringWindowToTop(handle)
+        user32.SetForegroundWindow(handle)
+        user32.AttachThreadInput(current, target, False)
+        time.sleep(1.0)
+        if int(user32.GetForegroundWindow() or 0) == handle:
+            return handle
+    # Returning the handle either way, because the caller's next move is to ask
+    # the app which document it captured, and that answer is better evidence
+    # than this one. Reporting failure here would trade a check that can be
+    # verified for one that cannot.
     return handle
 
 

@@ -40,6 +40,7 @@ from repro_zero_of_zero import (  # noqa: E402
     foreground_word,
     press_hotkey,
 )
+from word_essay_session import focus_named_word_window  # noqa: E402
 
 # A word may contain accented letters. [A-Za-z][A-Za-z']* split "cafe" written
 # with an accent and reported the fragment as an unknown word, so three of the
@@ -578,6 +579,59 @@ def captured_document_title(since: int = 0) -> str | None:
     return None
 
 
+def recover_hud(stem: str, report: dict):
+    """Take focus back after the HUD followed it somewhere else, mid-run.
+
+    Measured on 2026-08-27: a twenty-essay batch lost 4 of its first 10 essays,
+    and three of the four were the HUD simply not being there - "the HUD was
+    gone at press 1", "the HUD could not be found within 8s after press 15",
+    and one that sat at view=badge with provenance=waiting and nothing ever
+    ready. The app log named the cause at the exact second of the first
+    failure: `focus detected title='Claude'`, nine times across the run.
+
+    The app is not at fault and must not be "fixed" for this. Following focus
+    into whatever editable window the writer is using is the dictation feature
+    working correctly. It is this harness that has to hold Word in front.
+
+    Two things this deliberately does NOT do:
+
+    It does not press the hotkey. The recovery that runs before the first press
+    does, which is safe there because no progress exists yet. Mid-run a press
+    re-captures the document and restarts the review at section one, and the
+    presses that follow would land on a fresh review while the counters kept
+    climbing - a wrong number rather than a failure, which is the outcome this
+    harness exists to prevent. Re-focusing is enough, because the HUD tracks
+    focus on its own.
+
+    It does not return a HUD it cannot vouch for. If the app says the review on
+    screen came from another window, that is a failure and it is reported as
+    one.
+    """
+    for _attempt in range(3):
+        focus_named_word_window(stem)
+        time.sleep(2.0)
+        hud = hud_window(10.0)
+        if hud is None:
+            continue
+        # No `since` offset on purpose. That offset exists so the check before
+        # the first press cannot read a line left by the PREVIOUS essay, which
+        # once failed essay 2 in 7.3 seconds against a line written during
+        # essay 1. Here the most recent capture is exactly the question being
+        # asked - where is the HUD pointing right now - and this reads the log
+        # backwards, so the default returns it.
+        captured = captured_document_title()
+        if captured is not None and stem.lower() not in captured.lower():
+            # The HUD is back but it is showing somebody else's document.
+            # Taking focus again is the only honest move; accepting this is how
+            # a review of 26 characters of chat text once got clicked five
+            # times and reported as "sections=5 accepted=5".
+            continue
+        report.setdefault("hud_recoveries", 0)
+        report["hud_recoveries"] += 1
+        return hud
+    return None
+
+
 def open_in_word(path: Path):
     """Open one essay and leave exactly that essay open.
 
@@ -744,7 +798,12 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
     for press in range(1, max_presses + 1):
         hud = hud_window(10.0)
         if hud is None:
-            report["stopped_because"] = f"the HUD was gone at press {press}"
+            hud = recover_hud(path.stem, report)
+        if hud is None:
+            report["stopped_because"] = (
+                f"the HUD was gone at press {press} and three attempts to take "
+                "focus back from another window failed"
+            )
             break
         before = counter_text(hud)
         if tone:
@@ -857,6 +916,8 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
         report["presses"] = press
         time.sleep(6.0)
         hud = hud_window(8.0)
+        if hud is None:
+            hud = recover_hud(path.stem, report)
         if hud is None:
             # The last unnamed exit, and the one that was actually being taken.
             # A run stopped at four presses of twenty-five with no stall, no
