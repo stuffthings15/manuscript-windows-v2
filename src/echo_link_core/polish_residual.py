@@ -48,14 +48,56 @@ def is_known(word: str, dictionary: object) -> bool:
 
     The bundled dictionary holds "cafe" but not the accented spelling, and a
     correctly written word must never be treated as residue.
+
+    Two kinds of correct English used to land here as residue, and both were
+    measured on 2026-08-27 against one ordinary sentence. Twelve words were
+    reported misspelled and all twelve were correct:
+
+        long-term short-term hip-hop follow-through brass-band well-known
+        state-of-the-art self-driving        hyphenated, parts all known
+        tradeoffs cybersecurity tiltmeters stormwater   derivable compounds
+
+    That is not only a wrong answer. Every one of them sent the sentence back
+    to the model with the instruction "correct only the misspelled words:
+    long-term, cybersecurity", which is an invitation to damage correct text,
+    costs a whole generation per section, and was being caught only by
+    `accept_residual_repair` refusing the answer afterwards.
     """
     lowered = word.casefold()
     try:
         if dictionary.contains(lowered):
             return True
-        return dictionary.contains(_folded(word))
+        if dictionary.contains(_folded(word)):
+            return True
     except AttributeError:
         return True
+
+    # A hyphenated word is known when every part is. The writer typed the
+    # hyphens, so the split is theirs rather than a guess, which makes this far
+    # safer than splitting a run-together word: "teh-cat" still comes back
+    # unknown because "teh" does.
+    if "-" in lowered:
+        parts = [part for part in lowered.split("-") if part]
+        if len(parts) > 1:
+            try:
+                if all(
+                    dictionary.contains(part) or dictionary.contains(_folded(part))
+                    for part in parts
+                ):
+                    return True
+            except AttributeError:
+                return True
+
+    # Compounds and prefixed words the bundled lists happen not to carry.
+    # Same check the corrector and the grader use, so all three agree on what
+    # counts as English instead of each having its own opinion.
+    recognises = getattr(dictionary, "recognises_compound", None)
+    if callable(recognises):
+        try:
+            return bool(recognises(word))
+        except (AttributeError, TypeError, ValueError):
+            return False
+    return False
 
 
 def residual_unknown_words(text: str, dictionary: object) -> tuple[str, ...]:

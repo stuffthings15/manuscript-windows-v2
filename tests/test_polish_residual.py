@@ -95,3 +95,50 @@ def test_an_unchanged_answer_is_not_a_repair():
 
 def test_an_empty_answer_is_refused():
     assert accept_residual_repair("it just nees to fit", "   ", KNOWN) is None
+
+
+def test_correct_english_is_not_sent_back_as_residue():
+    """Hyphenated words and derivable compounds are not misspellings.
+
+    Measured on 2026-08-27 against one ordinary sentence: twelve words were
+    reported as residue and every one was correct English. Each of them sent the
+    sentence back to the model with "correct only the misspelled words:
+    long-term, cybersecurity", which costs a full generation per section and
+    invites damage to text that was already right. Nothing was corrupted only
+    because `accept_residual_repair` refused the answers afterwards.
+
+    The hyphen half of this was the larger defect: `_WORD` matches "long-term"
+    as a single token, so every hyphenated word in every document was residue.
+    """
+    from echo_link_core.polish_residual import residual_unknown_words
+    from echo_link_core.polish_spelling import EnglishDictionary
+
+    dictionary = EnglishDictionary()
+    dictionary.warm()
+
+    text = (
+        "The long-term and short-term tradeoffs of cybersecurity are clear. "
+        "We used hip-hop and follow-through with a brass-band, plus tiltmeters "
+        "and stormwater and a well-known state-of-the-art self-driving system."
+    )
+
+    assert residual_unknown_words(text, dictionary) == ()
+
+
+def test_a_hyphenated_word_with_a_bad_part_is_still_residue():
+    """The hyphen rule must not become a way to smuggle a typo through.
+
+    "teh-cat" splits into a known word and a misspelling, and it has to stay
+    residue. Without this the rule would accept any typo that happened to sit
+    beside a real word behind a hyphen.
+    """
+    from echo_link_core.polish_residual import residual_unknown_words
+    from echo_link_core.polish_spelling import EnglishDictionary
+
+    dictionary = EnglishDictionary()
+    dictionary.warm()
+
+    found = residual_unknown_words("the teh-cat ran quikly home", dictionary)
+
+    assert "teh-cat" in found
+    assert "quikly" in found
