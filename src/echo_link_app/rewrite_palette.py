@@ -389,6 +389,21 @@ class RewritePalette(QDialog):
         self._resize_grip.setAccessibleName("Resize suggestion window")
         self._resize_grip.hide()
         self._apply_view_size()
+        # Publish once at startup, so the state file describes THIS process from
+        # the moment it exists.
+        #
+        # session_state's own docstring calls hud-state.json "what is true NOW,
+        # rewritten on every change". It was not true after a restart: nothing
+        # published until the HUD did something, so the file went on describing
+        # the process that had just been killed - including its build.
+        #
+        # Measured on 2026-08-28. The app was restarted onto build 8100c70 and
+        # the state file still read 4ee766a, eighty-five minutes old. Every
+        # staleness check in the harness reads that field to decide whether the
+        # running app is the code under test, so the check that exists to catch
+        # a stale process was itself answering from a stale file, and it
+        # refused a perfectly good AutoResearch experiment.
+        self._publish_state("", "no sections")
 
     @property
     def result_text(self) -> str:
