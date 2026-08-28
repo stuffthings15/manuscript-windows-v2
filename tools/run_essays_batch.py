@@ -22,6 +22,7 @@ import re
 import shutil
 import sys
 import time
+import traceback
 
 ROOT = Path(__file__).resolve().parents[1]
 for entry in (ROOT / "src", ROOT / "tools"):
@@ -758,6 +759,20 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
     word = open_in_word(path)
     _handle, bounds = foreground_word()
     click_in_document(bounds)
+    # Hold the document before the FIRST capture too, not only between presses.
+    #
+    # _hold_focus was added for the press loop, which left the opening capture
+    # unguarded - and that is where essay 10 died on 2026-08-28, 6.7 seconds in,
+    # with "the review on screen was captured from 'Claude'". The hotkey press
+    # below is what tells the app to capture, so whatever holds focus at this
+    # instant is what gets reviewed.
+    #
+    # Worth recording because it changes the diagnosis: nobody was typing. An
+    # earlier failure the same night was caused by commands run mid-experiment,
+    # but this one happened while the machine was left alone, between two
+    # essays. Focus can move on its own, so "do not touch the machine" is
+    # necessary and not sufficient.
+    _hold_focus(path.stem)
     press_hotkey()
 
     report: dict = {"presses": 0, "stalled_at": None, "counters": []}
@@ -1182,7 +1197,24 @@ def main() -> int:
             try:
                 result = review_one(target, tone=args.tone)
             except Exception as exc:  # noqa: BLE001 - keep going through the corpus
-                result = {"error": f"{type(exc).__name__}: {exc}", "after": ""}
+                # Name the FRAME, not just the exception.
+                #
+                # "COMError: (-2146233083, None, (None, None, None, 0, None))"
+                # is what this reported for four separate lost measurements
+                # across two days, and it says nothing about which call failed.
+                # Word, UI Automation and the clipboard all raise COMError, and
+                # without a location the only way to tell them apart was to
+                # guess and re-run - which cost a wrong diagnosis on 2026-08-28,
+                # when the focus helper was blamed and a probe cleared it.
+                frame = traceback.extract_tb(exc.__traceback__)
+                where = ""
+                if frame:
+                    last = frame[-1]
+                    where = f" at {Path(last.filename).name}:{last.lineno} {last.name}"
+                result = {
+                    "error": f"{type(exc).__name__}: {exc}{where}",
+                    "after": "",
+                }
             elapsed = round(time.monotonic() - started, 1)
 
             judged = score(before_text, result.get("after", ""), dictionary)
