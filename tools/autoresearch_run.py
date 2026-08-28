@@ -73,6 +73,46 @@ _PARTIAL = "partial"
 _CAPTURE_MISMATCH = "captured from"
 
 
+def _restart_word() -> None:
+    """Kill Word before an experiment, so UI Automation has a small tree.
+
+    Measured on 2026-08-28, and it cost most of a morning. Every experiment for
+    two hours failed with `COMError (-2146233083)` at 250 seconds and zero
+    presses. The error is raised inside uiautomation while walking the control
+    tree - GetFirstChildControl, then GetNextSiblingControl - which is why
+    "COMError" was such a poor clue: Word, UI Automation and the clipboard all
+    raise it, and the bare string was equally consistent with three different
+    bugs. Two of my own changes were blamed and cleared by probe first.
+
+    What it actually was: WINWORD had been running eleven hours across dozens
+    of documents and app restarts. Killing it and running the same essay
+    unchanged scored 91.000000 with 19 presses. The 16-essay tier that mostly
+    succeeded had run on a fresh Word too.
+
+    Killing Word between runs is already this harness's default behaviour
+    outside --as-a-writer, so this is not a new liberty. It does mean an
+    experiment will close a Word document somebody left open, which is part of
+    why the loop runs on an idle machine.
+    """
+    subprocess.run(
+        ["taskkill", "/F", "/IM", "WINWORD.EXE"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    # Word leaves owner-lock files behind when it is killed, and it reopens the
+    # next document read-only if they are still there.
+    for lock in (ROOT / "build/batch").glob("~$*.docx"):
+        try:
+            lock.unlink()
+        except OSError:
+            # A lock the harness cannot remove is not worth losing the run over;
+            # Word will say so itself if it matters.
+            pass
+    time.sleep(2.0)
+
+
 def _stale_reason() -> str:
     """Why the running app must not be measured, or "" when it may be."""
     try:
@@ -208,6 +248,21 @@ def _run_batches(essays: list[int], corpus: str) -> str:
     """
     collected = []
     for number in essays:
+        # Fresh Word for EVERY essay, not just every experiment.
+        #
+        # Measured on 2026-08-28: with one restart per experiment, essay 8
+        # completed at 298s and 324s across two baselines and essay 10 then
+        # failed both times with COMError inside uiautomation's tree walk. The
+        # first document after a restart works and the second does not, so the
+        # tree Word leaves behind after a single essay is already enough to
+        # break traversal on this machine.
+        #
+        # A 16-essay tier once ran 20 documents in one Word session with only 4
+        # failures, so this is not universal and something about the current
+        # state makes Word fragile sooner. Restarting per essay costs a few
+        # seconds and removes the variable entirely, which matters more for a
+        # loop that has to run unattended than the seconds do.
+        _restart_word()
         completed = subprocess.run(
             [
                 sys.executable,
@@ -290,6 +345,7 @@ def main(argv: list[str] | None = None) -> int:
     build = _git_head()
 
     if not arguments.no_restart:
+        _restart_word()
         subprocess.run(
             [sys.executable, "-u", str(ROOT / "tools/restart_app_and_wait.py")],
             cwd=ROOT,
