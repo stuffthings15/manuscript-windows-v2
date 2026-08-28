@@ -1,0 +1,44 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python.exe tools/autoresearch_run.py:*)",
+      "Bash(.venv/Scripts/python.exe tools/autoresearch_analysis.py:*)",
+      "Bash(.venv/Scripts/python.exe tools/restart_app_and_wait.py:*)",
+      "Bash(.venv/Scripts/python.exe -m pytest:*)",
+      "Bash(.venv/Scripts/python.exe -m ruff:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git checkout -b:*)",
+      "Bash(git reset:*)",
+      "Bash(git stash list:*)",
+      "Bash(grep:*)",
+      "Bash(tail:*)",
+      "Bash(head:*)",
+      "Bash(wc:*)",
+      "Bash(ls:*)",
+      "Bash(cat results.tsv)",
+      "Bash(nvidia-smi:*)",
+      "Bash(ollama list)"
+    ],
+    "deny": [
+      "Bash(git push:*)",
+      "Bash(git checkout --:*)",
+      "Bash(git clean:*)",
+      "Bash(rm:*)",
+      "Bash(curl:*)",
+      "Bash(pip install:*)",
+      "Edit(./test-corpus/**)",
+      "Edit(./tools/grade_corpus.py)",
+      "Edit(./tools/tone_correctness.py)",
+      "Edit(./tools/autoresearch_run.py)",
+      "Edit(./docs/RELEASE_ACCEPTANCE.md)",
+      "Edit(./program.md)",
+      "Edit(./CLAUDE.md)",
+      "Write(./test-corpus/**)"
+    ]
+  }
+}

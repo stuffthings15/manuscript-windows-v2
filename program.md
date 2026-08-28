@@ -126,8 +126,15 @@ pack:             gemma4-12b-qat-v1
 model:            gemma4:12b-it-qat
 backend:          cuda
 build:            78d0883
+peak_vram_mb:     10240.0
 unknown:          1
 ```
+
+If there is no `score:` line there is a `crash:` line instead, and the run
+produced no measurement. That includes a stale app: the runner restarts the app
+before every experiment and then checks that the build it published matches this
+checkout, because an experiment measured against the previously loaded code
+returns the baseline plus noise and looks entirely reasonable.
 
 `pack`, `model` and `build` say what actually served the run. Eight acceptance
 tiers were once measured on a 2 billion parameter pack while reporting a larger
