@@ -63,13 +63,30 @@ def _git(*arguments: str) -> str:
     return done.stdout.strip()
 
 
-def current_baseline() -> float:
-    """The best score kept so far, which is what a new experiment must beat."""
+def slice_tag(essays: str) -> str:
+    """The prefix every description carries, naming the slice it was measured on.
+
+    A score means nothing without the essays it came from, and results.tsv is
+    fixed at the specification's five columns, so the slice goes in the one
+    free-text field there is.
+
+    Without this the loop silently breaks the moment the slice changes. Essay 8
+    finished at 98 and essay 10 baselines at 94, so a flat "best kept score"
+    baseline would have set an unreachable bar for every essay 10 experiment and
+    discarded correct improvements as failures - indistinguishable, in the log,
+    from having no ideas.
+    """
+    return f"essays {essays}:"
+
+
+def current_baseline(essays: str) -> float:
+    """The best score kept so far ON THIS SLICE, which an experiment must beat."""
+    tag = slice_tag(essays)
     best = 0.0
     try:
         for line in RESULTS.read_text(encoding="utf-8").splitlines()[1:]:
             parts = line.split("\t")
-            if len(parts) >= 4 and parts[3] == "keep":
+            if len(parts) >= 5 and parts[3] == "keep" and parts[4].startswith(tag):
                 try:
                     best = max(best, float(parts[1]))
                 except ValueError:
@@ -149,9 +166,15 @@ def main(argv: list[str] | None = None) -> int:
     vram = re.search(r"^peak_vram_mb: +([0-9.]+)", text, re.MULTILINE)
     memory_gb = (float(vram.group(1)) / 1024.0) if vram else 0.0
 
-    baseline = current_baseline()
+    baseline = current_baseline(arguments.essays)
     status = decide(baseline, score)
-    record(commit, score, memory_gb, status, arguments.describe)
+    record(
+        commit,
+        score,
+        memory_gb,
+        status,
+        f"{slice_tag(arguments.essays)} {arguments.describe}",
+    )
 
     if status != "keep":
         # The commit is already made, so this is recoverable by the hash in

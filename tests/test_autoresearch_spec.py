@@ -79,14 +79,21 @@ def test_the_baseline_is_the_best_kept_score(tmp_path, monkeypatch):
     results = tmp_path / "results.tsv"
     results.write_text(
         "commit\tscore\tmemory_gb\tstatus\tdescription\n"
-        "aaa\t91.500000\t15.1\tkeep\tbaseline\n"
-        "bbb\t99.000000\t15.1\tdiscard\tnot actually kept\n"
-        "ccc\t94.000000\t15.1\tkeep\tsomething that worked\n",
+        "aaa\t91.500000\t15.1\tkeep\tessays 8: baseline\n"
+        "bbb\t99.000000\t15.1\tdiscard\tessays 8: not actually kept\n"
+        "ccc\t94.000000\t15.1\tkeep\tessays 8: something that worked\n"
+        "ddd\t98.000000\t15.1\tkeep\tessays 10: a different slice entirely\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(autoresearch_cycle, "RESULTS", results)
 
-    assert autoresearch_cycle.current_baseline() == 94.0
+    assert autoresearch_cycle.current_baseline("8") == 94.0
+    # And the bar is PER SLICE. Essay 8 finished at 98 while essay 10 baselines
+    # at 94, so a flat best-kept-score would set an unreachable bar on the new
+    # slice and discard every real improvement there as a failure - which in the
+    # log is indistinguishable from the agent having run out of ideas.
+    assert autoresearch_cycle.current_baseline("10") == 98.0
+    assert autoresearch_cycle.current_baseline("8,10") == 0.0
 
 
 def test_one_experiment_is_one_essay_by_default():
