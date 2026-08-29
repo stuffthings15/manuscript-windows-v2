@@ -75,6 +75,9 @@ _PARTIAL = "partial"
 _CAPTURE_MISMATCH = "captured from"
 
 
+_MONITOR: subprocess.Popen | None = None
+
+
 def _start_monitor() -> None:
     """Show the on-screen panel, if it is not already up.
 
@@ -83,11 +86,19 @@ def _start_monitor() -> None:
     autoresearch_monitor - because a window that steals focus mid-experiment
     corrupts the very run it is reporting on.
     """
-    if autoresearch_status.read_status() is not None:
-        return  # a run is already up, and so is its panel
+    # The guard here used to be "a status file exists, so a panel is already
+    # up", and it was wrong twice over. The status file has to be written before
+    # the panel starts - the panel quits after four missing reads - so that test
+    # was always true by the time it ran, and it suppressed the launch every
+    # time. It also could not tell a live panel from one left behind by a killed
+    # run. A module-level handle answers the only question worth asking: has
+    # THIS runner already started one.
+    global _MONITOR
+    if _MONITOR is not None and _MONITOR.poll() is None:
+        return
     launcher = Path(sys.executable).with_name("pythonw.exe")
     try:
-        subprocess.Popen(  # noqa: S603 - a fixed path in this repository
+        _MONITOR = subprocess.Popen(  # noqa: S603 - a fixed path in this repository
             [
                 str(launcher if launcher.exists() else sys.executable),
                 str(ROOT / "tools/autoresearch_monitor.py"),
@@ -98,6 +109,38 @@ def _start_monitor() -> None:
     except OSError:
         # The display is a convenience. Never lose an experiment over it.
         pass
+
+
+def _tally() -> dict[str, object]:
+    """What results.tsv says so far, for the panel. Never fatal.
+
+    Read here rather than passed in, because the runner is launched fresh for
+    every experiment and the file is the only memory the loop has.
+    """
+    best = 0.0
+    counts = {"keep": 0, "discard": 0, "crash": 0}
+    try:
+        lines = (ROOT / "results.tsv").read_text(encoding="utf-8").splitlines()[1:]
+    except OSError:
+        lines = []
+    for line in lines:
+        parts = line.split("\t")
+        if len(parts) < 4:
+            continue
+        if parts[3] in counts:
+            counts[parts[3]] += 1
+        if parts[3] == "keep":
+            try:
+                best = max(best, float(parts[1]))
+            except ValueError:
+                pass
+    return {
+        "baseline": f"{best:.2f}" if best else "-",
+        "best": f"{best:.2f}" if best else "-",
+        "kept": counts["keep"],
+        "discarded": counts["discard"],
+        "crashed": counts["crash"],
+    }
 
 
 def _status(**values: object) -> None:
@@ -429,6 +472,23 @@ def _run(argv: list[str] | None = None) -> int:
     ] or list(range(arguments.first, arguments.first + arguments.count))
     mark = _log_length()
     build = _git_head()
+
+    # The status file FIRST, then the panel. The panel closes itself after four
+    # consecutive misses, so a monitor started before anything has been written
+    # would poll an absent file and quit within four seconds of launching.
+    #
+    # And this is the call that was missing. `_start_monitor` was written,
+    # tested and never invoked, so every run since it was added has produced no
+    # panel at all - which is exactly what Curtis saw. A feature whose only
+    # purpose is to be visible fails silently when it is not wired in.
+    _status(
+        phase="starting",
+        description=arguments.describe,
+        essays=arguments.essays,
+        experiment=build,
+        **_tally(),
+    )
+    _start_monitor()
 
     if not arguments.no_restart:
         _restart_word()
