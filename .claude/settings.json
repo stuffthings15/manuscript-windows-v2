@@ -22,7 +22,9 @@
       "Bash(ls:*)",
       "Bash(cat results.tsv)",
       "Bash(nvidia-smi:*)",
-      "Bash(ollama list)"
+      "Bash(ollama list)",
+      "Bash(.venv/Scripts/python.exe tools/autoresearch_cycle.py:*)",
+      "Bash(taskkill:*)"
     ],
     "deny": [
       "Bash(git push:*)",

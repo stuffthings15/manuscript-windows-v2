@@ -177,24 +177,27 @@ Do not commit `results.tsv`. It is gitignored.
 
 ## The experiment loop
 
-LOOP FOREVER:
+ONE TURN IS ONE EXPERIMENT. Everything after the code edit is a single command:
 
-1. Look at the git state: which branch and commit you are on.
-2. Change `src/echo_link_core/polish*.py` with an experimental idea.
-3. `git commit`
-4. Run: `tools/autoresearch_run.py --essays 8,10 --require-idle 300 > run.log 2>&1`
-5. Read it: `grep "^score:\|^crash:\|^skipped:" run.log`. A `skipped:` line means
-   the machine was in use - change nothing, record nothing, try again later.
-6. If there is no `score:` line the run failed. `tail -n 50 run.log`. Fix it if
-   it is something dumb like a typo; skip it and log `crash` if the idea is
-   fundamentally broken. Give up after a few attempts rather than burning the
-   night on one idea.
-7. Record the result in `results.tsv`.
-8. If the score improved by more than the measured baseline spread, keep the
-   commit and advance the branch.
-9. If it did not, `git reset --hard` back to where you started. Only ever on
-   this branch, never on master. The commit stays recoverable by the hash you
-   logged.
+```
+.venv/Scripts/python.exe tools/autoresearch_cycle.py --describe "what this tries"
+```
+
+It performs steps 3 and 5 through 9 of the upstream loop - commit, run, read one
+line, record in results.tsv, and keep or `git reset --hard` - and prints exactly
+one line: `KEEP 94.5`, `DISCARD 94.0`, `CRASH dead`.
+
+So a turn is: change `src/echo_link_core/polish*.py` with an idea, run the
+cycle, read the line, schedule the next. Two tool calls.
+
+This matters more than it looks. The loop used to be edit, twelve-minute test
+suite, fix, twelve-minute suite, commit, twelve-minute Word run, report - and
+every one of those was a turn where a human had to say "keep going". An
+autonomous loop that needs a prompt between its phases is not autonomous.
+
+DO NOT run the test suite between experiments. The specification's loop contains
+no tests, and the suite gates the merge to master. `ruff` runs inside the cycle
+because seconds are affordable and a syntax error wastes an experiment.
 
 **Crash shapes specific to Manuscript**, all of which mean no score rather than
 a low one:

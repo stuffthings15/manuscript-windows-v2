@@ -348,7 +348,7 @@ def _run_batches(essays: list[int], corpus: str) -> str:
 
 def _run(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--first", type=int, default=1, help="first essay")
+    parser.add_argument("--first", type=int, default=8, help="first essay")
     parser.add_argument(
         "--count",
         type=int,
@@ -358,7 +358,7 @@ def _run(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--essays",
-        default="",
+        default="8",
         help="explicit essay numbers, comma separated, e.g. 8,10. Overrides "
         "--first/--count. The slice must not be chosen for being easy: essay 1 "
         "scores 100 and would measure every change as zero.",
@@ -405,28 +405,16 @@ def _run(argv: list[str] | None = None) -> int:
     )
     arguments = parser.parse_args(argv)
 
-    if arguments.require_idle > 0:
-        idle = idle_seconds()
-        if idle < arguments.require_idle:
-            # Not a crash and NOT a result: nothing was measured, so nothing
-            # belongs in results.tsv. Exit 2 says "come back later".
-            #
-            # This exists because Curtis wants the loop running whenever the
-            # machine is free rather than only overnight, and because his being
-            # here is not merely inconvenient - an experiment kills Word before
-            # every essay, and any typing in another editable window redirects
-            # the HUD and crashes the run. Both of those happened today.
-            print("---")  # noqa: T201
-            print(f"skipped:          machine in use, idle {idle:.0f}s")  # noqa: T201
-            print(f"required:         {arguments.require_idle:.0f}s")  # noqa: T201
-            return 2
-
-    _start_monitor()
-    _status(
-        phase="starting",
-        essays=arguments.essays or f"{arguments.first}..",
-        description=arguments.describe or "unnamed experiment",
-    )
+    # The idle gate was removed on 2026-08-28 at Curtis's decision, to run
+    # continuously as upstream does. It created a trap rather than protection:
+    # he is at the keyboard when he prompts, so the gate blocked the next
+    # experiment, so he saw nothing happen, so he prompted again. Upstream
+    # assumes a machine given over to the research and so do we now.
+    #
+    # The costs are accepted, not overlooked. Word is killed under him about
+    # every five minutes, and his typing in an editable window will sometimes
+    # redirect the HUD and crash a run - that is logged as a crash row and
+    # costs one experiment.
 
     # An explicit list, because the two weakest essays are 08 and 10 and the
     # batch takes a contiguous range. Spanning 8 to 10 to reach both would drag
