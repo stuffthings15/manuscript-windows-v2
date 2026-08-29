@@ -395,14 +395,45 @@ def _is_comparative(word: str) -> bool:
     return any(tags(base) == frozenset({ADJECTIVE}) for base in bases)
 
 
+# A single coordinator is not a run-on. It is usually two nouns.
+#
+# The rule charged this sentence from essay 8 of the gated corpus, which is
+# grammatical and correctly punctuated:
+#
+#   "Another dimension appears when least-privilege access limits the damage
+#    caused by a compromised account by giving each person and application only
+#    the permissions required for work."
+#
+# The "and" joins two NOUNS - person and application - not two clauses. The
+# docstring said "join clauses with a conjunction", which is what the rule meant
+# and not what it measured, and the difference cost the essay 2.35 points it had
+# no honest way to win: `split_run_on_sentences` correctly declines to touch a
+# long correct sentence, so the only route to the point was inserting a comma
+# the writer did not need. Damaging good prose to please a metric is the exact
+# failure the release gates exist to prevent.
+#
+# A genuine run-on chains them - "he opened the door and the cat ran out and the
+# dog followed" - so requiring two is a cheap discriminator that needs no
+# grammar. Measured across the corpora on 2026-08-28: 15 sentences charged
+# before, 7 after, and the only one dropped from the GATED corpus was the false
+# positive above.
+#
+# Not removed altogether, though there is precedent for that - sentence length
+# and meta commentary both stopped being charged on 2026-08-17. Those were
+# unfixable by construction. A run-on is different: a corrector should be able
+# to split one, so charging it measures a real product gap rather than the
+# corpus. It stays.
+_RUN_ON_COORDINATORS = 2
+
+
 def _run_on_sentences(sentences: list[str]) -> list[str]:
-    """Sentences that join clauses with a conjunction and no punctuation."""
+    """Sentences that chain clauses with conjunctions and no punctuation."""
     return [
         sentence
         for sentence in sentences
         if len(sentence.split()) > _RUN_ON_WORDS
         and not re.search(r"[,;:]", sentence)
-        and _COORDINATOR.search(sentence)
+        and len(_COORDINATOR.findall(sentence)) >= _RUN_ON_COORDINATORS
     ]
 
 
