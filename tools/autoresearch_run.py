@@ -73,6 +73,32 @@ _PARTIAL = "partial"
 _CAPTURE_MISMATCH = "captured from"
 
 
+def idle_seconds() -> float:
+    """Seconds since the last keyboard or mouse input, or 0.0 if unknown.
+
+    Windows reports this for the whole session through GetLastInputInfo, which
+    is what "is anyone using this machine" actually means - not whether a
+    window is focused, and not whether a process is busy.
+
+    Unknown deliberately reads as ZERO, meaning "assume someone is here". An
+    idle check that cannot answer must not grant permission to seize the screen.
+    """
+    try:
+        import ctypes
+
+        class _LastInput(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+        info = _LastInput()
+        info.cbSize = ctypes.sizeof(_LastInput)
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+            return 0.0
+        ticks = ctypes.windll.kernel32.GetTickCount()
+        return max(0.0, (ticks - info.dwTime) / 1000.0)
+    except Exception:  # noqa: BLE001 - ctypes raises broadly on a locked session
+        return 0.0
+
+
 def _restart_word() -> None:
     """Kill Word before an experiment, so UI Automation has a small tree.
 
@@ -323,12 +349,36 @@ def main(argv: list[str] | None = None) -> int:
     # on 2026-08-23 went on to serve six acceptance tiers while reporting a
     # build made minutes earlier.
     parser.add_argument(
+        "--require-idle",
+        type=float,
+        default=0.0,
+        help="only run when nobody has touched the machine for this many "
+        "seconds. Exits 2 without measuring anything if someone is here, so a "
+        "loop can skip the tick rather than seize the screen.",
+    )
+    parser.add_argument(
         "--no-restart",
         action="store_true",
         help="measure the app already running. Only for debugging the harness: "
         "it cannot see a code change you just made.",
     )
     arguments = parser.parse_args(argv)
+
+    if arguments.require_idle > 0:
+        idle = idle_seconds()
+        if idle < arguments.require_idle:
+            # Not a crash and NOT a result: nothing was measured, so nothing
+            # belongs in results.tsv. Exit 2 says "come back later".
+            #
+            # This exists because Curtis wants the loop running whenever the
+            # machine is free rather than only overnight, and because his being
+            # here is not merely inconvenient - an experiment kills Word before
+            # every essay, and any typing in another editable window redirects
+            # the HUD and crashes the run. Both of those happened today.
+            print("---")  # noqa: T201
+            print(f"skipped:          machine in use, idle {idle:.0f}s")  # noqa: T201
+            print(f"required:         {arguments.require_idle:.0f}s")  # noqa: T201
+            return 2
 
     # An explicit list, because the two weakest essays are 08 and 10 and the
     # batch takes a contiguous range. Spanning 8 to 10 to reach both would drag

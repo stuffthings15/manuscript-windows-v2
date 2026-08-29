@@ -38,8 +38,22 @@ One experiment is a fixed slice of essays corrected through Word and the HUD,
 then graded. Launch it as:
 
 ```
-.venv/Scripts/python.exe tools/autoresearch_run.py --count 1 > run.log 2>&1
+.venv/Scripts/python.exe tools/autoresearch_run.py --essays 8,10 --require-idle 300 > run.log 2>&1
 ```
+
+`--essays 8,10` because those are the two weakest essays and therefore the only
+ones with headroom. Essay 1 scores 100 out of 100, and a night spent optimising
+it would measure every change as zero.
+
+`--require-idle 300` because this runs whenever the machine is free rather than
+only overnight. If anyone has touched the keyboard in the last five minutes the
+run exits 2, prints `skipped:` and measures nothing. Treat exit 2 as "come back
+later": do NOT write it to results.tsv, because nothing was measured and a
+skipped tick is not a crash.
+
+That gate is not politeness. An experiment kills Word before every essay, and
+typing in any other editable window redirects the HUD and crashes the run. Both
+happened on 2026-08-28.
 
 **Redirect it. Do not use tee and do not let the output into your context.** A
 batch prints thousands of lines and you have a hundred experiments to run.
@@ -107,10 +121,15 @@ that table is allowed to move.
 
 **The first run establishes the baseline.** Run it unchanged.
 
-**Then run the baseline again, unchanged, at least twice more.** Nobody has ever
-measured how much this score moves on its own. Until you know that spread, you
-cannot tell a real gain from a lucky run, and a change smaller than the spread
-means nothing. `tools/autoresearch_analysis.py` prints it.
+**The spread has been measured and it is ZERO.** Three unchanged runs on essays
+8 and 10 scored 91.500000 every time, with identical press counts, on
+2026-08-28. The corrector decodes greedily, so identical inputs give
+byte-identical corrections.
+
+That makes the keep rule simple: any improvement is real, because the
+measurement does not wander. Upstream needs a threshold; this does not. What
+still varies is the CRASH RATE, so treat a crash as no information rather than
+as a bad result, and re-run it.
 
 ## Output format
 
@@ -163,8 +182,9 @@ LOOP FOREVER:
 1. Look at the git state: which branch and commit you are on.
 2. Change `src/echo_link_core/polish*.py` with an experimental idea.
 3. `git commit`
-4. Run: `tools/autoresearch_run.py --count 1 > run.log 2>&1`
-5. Read it: `grep "^score:\|^crash:" run.log`
+4. Run: `tools/autoresearch_run.py --essays 8,10 --require-idle 300 > run.log 2>&1`
+5. Read it: `grep "^score:\|^crash:\|^skipped:" run.log`. A `skipped:` line means
+   the machine was in use - change nothing, record nothing, try again later.
 6. If there is no `score:` line the run failed. `tail -n 50 run.log`. Fix it if
    it is something dumb like a typo; skip it and log `crash` if the idea is
    fundamentally broken. Give up after a few attempts rather than burning the

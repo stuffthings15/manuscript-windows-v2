@@ -125,3 +125,42 @@ def test_vram_is_reported_as_zero_rather_than_crashing_without_a_gpu(monkeypatch
     monkeypatch.setattr(autoresearch_run, "_nvidia_status", None, raising=False)
 
     assert autoresearch_run._vram_used_mb() >= 0.0
+
+
+def test_the_loop_stands_down_while_the_machine_is_in_use(monkeypatch, capsys):
+    """Curtis wants this running whenever the machine is free, not only at night.
+
+    His being at the keyboard is not merely inconvenient. An experiment kills
+    Word before every essay, and typing in any other editable window redirects
+    the HUD and crashes the run - both happened on 2026-08-28.
+    """
+    monkeypatch.setattr(autoresearch_run, "idle_seconds", lambda: 12.0)
+
+    def _no_batch(command, *args, **kwargs):
+        if any("run_essays_batch" in str(part) for part in command):
+            raise AssertionError("must not seize the screen while someone is here")
+        return autoresearch_run.subprocess.run(command, *args, **kwargs)
+
+    monkeypatch.setattr(autoresearch_run.subprocess, "run", _no_batch)
+
+    exit_code = autoresearch_run.main(["--essays", "8", "--require-idle", "300"])
+    printed = capsys.readouterr().out
+
+    # Exit 2, not 1: nothing was measured and nothing failed, so the loop skips
+    # the tick rather than writing a crash row into results.tsv.
+    assert exit_code == 2
+    assert "skipped:" in printed
+    assert "score:" not in printed
+    assert "crash:" not in printed
+
+
+def test_an_unreadable_idle_time_means_somebody_is_here(monkeypatch):
+    """Fail closed. A check that cannot answer must not grant the screen away."""
+    import ctypes
+
+    # No windll at all is what a locked or non-Windows session looks like.
+    monkeypatch.setattr(ctypes, "windll", None, raising=False)
+
+    # Zero, meaning "assume somebody is here", so the gate refuses rather than
+    # granting the screen away on a reading it could not take.
+    assert autoresearch_run.idle_seconds() == 0.0
