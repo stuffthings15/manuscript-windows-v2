@@ -421,6 +421,13 @@ def _run(argv: list[str] | None = None) -> int:
             print(f"required:         {arguments.require_idle:.0f}s")  # noqa: T201
             return 2
 
+    _start_monitor()
+    _status(
+        phase="starting",
+        essays=arguments.essays or f"{arguments.first}..",
+        description=arguments.describe or "unnamed experiment",
+    )
+
     # An explicit list, because the two weakest essays are 08 and 10 and the
     # batch takes a contiguous range. Spanning 8 to 10 to reach both would drag
     # in 09, which has stopped part way twice today, and a flaky essay in the
@@ -493,6 +500,7 @@ def _run(argv: list[str] | None = None) -> int:
         print(f"requested:        {arguments.require_pack}")  # noqa: T201
         return 1
 
+    _status(phase="grading")
     from echo_link_core.polish_spelling import EnglishDictionary
     from echo_link_core.writing_suggestions import WritingSuggestionEngine
     from grade_corpus import essay_documents, grade
@@ -527,6 +535,7 @@ def _run(argv: list[str] | None = None) -> int:
     print(f"build:            {build}")  # noqa: T201
     print(f"peak_vram_mb:     {watch.peak:.1f}")  # noqa: T201
     print(f"unknown:          {sum(r['unknown'] for r in graded)}")  # noqa: T201
+    _status(phase="done", last_result=f"{score:.2f}")
     return 0
 
 
@@ -544,6 +553,21 @@ def _slice_names(arguments, rows: list[str]) -> list[str]:
         if found:
             names.append(found.group(1))
     return names
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run one experiment and always take the status panel down afterwards.
+
+    The panel exists only while a run does, which is the whole of Curtis's
+    "should not show up unless AutoResearch is being run". There are half a
+    dozen ways out of _run - a stale app, a crash, a timeout, a pack mismatch -
+    and a panel left on screen after any of them would be a lie about what the
+    machine is doing.
+    """
+    try:
+        return _run(argv)
+    finally:
+        autoresearch_status.clear_status()
 
 
 if __name__ == "__main__":
