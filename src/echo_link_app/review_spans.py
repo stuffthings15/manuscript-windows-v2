@@ -533,6 +533,25 @@ def _review_spans(
 def _sentence_spans(text: str) -> tuple[tuple[int, int], ...]:
     spans: list[tuple[int, int]] = []
     cursor = 0
+    # VERTICAL TAB is deliberately absent from this class, and that absence is
+    # the correct behaviour rather than an oversight - which is worth saying,
+    # because the obvious "fix" is to add it and the obvious fix is wrong twice
+    # over.
+    #
+    # Word gives Shift+Enter as \v and Enter as a new paragraph. \v means the
+    # text flowed on, so it must not end a sentence, and it does not: it is not
+    # matched here and reaches the trimming below only as `\s` via `isspace()`.
+    # \n means the writer ended something, and
+    # test_review_spans_keep_each_written_line_separate records what happens
+    # when that is merged - essay 2's title and subtitle were reviewed as one
+    # unit and came back fused, and a deleted paragraph break cannot be clicked
+    # back.
+    #
+    # Checked on 2026-08-29 against essay 10 of the error-riddled corpus, whose
+    # sixteen damaged breaks are all <w:br/> and so all arrive as \v. They are
+    # already held together here. The mangled output in that essay comes from
+    # the model, not from this splitter, so a change here would have moved
+    # nothing while looking like a fix.
     boundary_pattern = re.compile(
         r"[.!?]+[\"'\u201d\u2019)\]]*(?=\s|$)|[\r\n]+"
     )
