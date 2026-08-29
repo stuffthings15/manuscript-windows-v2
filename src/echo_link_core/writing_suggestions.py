@@ -363,6 +363,36 @@ _WORD = re.compile(r"\b[A-Za-z][A-Za-z'-]*\b")
 # an ellipsis, and none of those are touched.
 _STRAY_TERMINAL_STOP = re.compile(r"(?P<keep>[?!])[ 	]*\.")
 
+# A terminal mark stranded at the start of a line, with a finished sentence
+# behind it and a new one in front, punctuates nothing.
+#
+# Essay 10 of the error-riddled corpus has "servuce functions\n?? ." and the
+# corrector reduces it to "service functions.\n? The significance of this
+# point..." - the doubled mark is collapsed and the survivor is left leading a
+# line it has no business in. It is charged as a grammar error and it reads as
+# one.
+#
+# Every part of the guard does work. The preceding sentence must ALREADY be
+# terminated, or this would eat the real punctuation of a sentence that merely
+# wrapped. The following word must be capitalised, so a mark inside a continuing
+# clause is left alone. And \v is here for the same reason the duplicate rule
+# below carries it: Word writes a soft line break as VERTICAL TAB, and a rule
+# that knows only \n never fires on a real document.
+_STRANDED_TERMINAL_MARK = re.compile(
+    # Anchored at the START of the text or of a line, NOT after a preceding
+    # sentence. The first version required a terminated sentence behind the mark
+    # and so could never fire on the case it was written for: essay 10's
+    # paragraph 11 literally begins "?? . The significance of this point...", and
+    # a review unit is one paragraph, so there is nothing behind the mark at all.
+    # It measured as a clean no-op against the live document.
+    #
+    # No sentence in English opens with a full stop, question mark or
+    # exclamation mark, so requiring nothing before it is safe rather than loose.
+    # `(?!\.\.)` keeps an ellipsis, which is the one mark that legitimately opens
+    # a line: "He paused.\n... The story went on." lost its ellipsis without it.
+    r"(?:\A|(?<=[\r\n\v]))(?P<drop>[ \t]*(?!\.\.)[.!?][ \t.!?]*)(?=[A-Z])"
+)
+
 
 _DUPLICATE_WORD = re.compile(
     r"(?=\b(?P<first>[A-Za-z][A-Za-z'-]*)"
@@ -691,6 +721,32 @@ def _stray_terminal_stop_candidates(
     protected: tuple[tuple[int, int], ...],
 ) -> list[_Candidate]:
     found: list[_Candidate] = []
+    # The stranded-mark rule goes FIRST because acceptance is first-wins on
+    # overlap, and its span strictly contains the other's. On "?? . The
+    # significance..." the stray-stop rule matched "? ." at offset 1 and left
+    # "??" leading the line, which is the defect this pair exists to remove.
+    for match in _STRANDED_TERMINAL_MARK.finditer(text):
+        start, end = match.start("drop"), match.end("drop")
+        if _is_protected(start, end, protected):
+            continue
+        # The match starts AFTER any line break - the break is in a lookbehind -
+        # so removing the span deletes only the mark and the space around it.
+        # That separation is deliberate: fusing two of the writer's lines would
+        # delete a paragraph break, and a deleted paragraph break cannot be
+        # clicked back, which is the cost recorded in
+        # test_review_spans_keep_each_written_line_separate.
+        replacement = ""
+        found.append(
+            _Candidate(
+                "stranded-terminal-mark",
+                SuggestionCategory.FORMATTING,
+                "Remove the stray punctuation mark",
+                "A punctuation mark begins a line after a finished sentence.",
+                start,
+                end,
+                replacement,
+            )
+        )
     for match in _STRAY_TERMINAL_STOP.finditer(text):
         start, end = match.start(), match.end()
         if _is_protected(start, end, protected):
