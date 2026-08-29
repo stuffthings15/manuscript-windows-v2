@@ -625,6 +625,39 @@ def _typo_candidates(text: str, protected: tuple[tuple[int, int], ...]) -> list[
     return found
 
 
+# Doublings that are correct English and must never be collapsed.
+#
+# "She had had enough" is past perfect, not a stutter, and the corrector was
+# turning it into "She had enough" - a different tense and a different meaning,
+# in text the writer got right. Found on 2026-08-28 while reading what the
+# duplicate rule does, not from a report, which is worth noting: nobody
+# complains about a word quietly going missing.
+#
+# `polish_error_score` scores the same doubling as an error with the same naive
+# backreference, so the grader agrees with the defect. That means no amount of
+# optimising the corpus score can ever surface this - the metric rewards the
+# damage. It is fixed here because it is wrong for a writer, and the score is
+# expected not to move.
+#
+# Two kinds are listed. Grammatical: "had had" and "that that" are ordinary
+# constructions ("the fact that that happened"). Intensifying: "very very",
+# "many many", "long long", "far far" and "no no" are choices a writer makes,
+# and repairing a choice is not proofreading.
+_LEGITIMATE_DOUBLINGS = frozenset(
+    {
+        "had",
+        "that",
+        "very",
+        "many",
+        "long",
+        "far",
+        "no",
+        "ha",
+        "bye",
+    }
+)
+
+
 def _duplicate_candidates(
     text: str,
     protected: tuple[tuple[int, int], ...],
@@ -645,6 +678,8 @@ def _duplicate_candidates(
         # Only the second copy needs to be lowercase, so "By by the time" and
         # "The the gate" are still repaired at the start of a sentence.
         if first[:1].isupper() and second[:1].isupper():
+            continue
+        if first.casefold() in _LEGITIMATE_DOUBLINGS:
             continue
         start = match.start("first")
         end = match.end("second")
