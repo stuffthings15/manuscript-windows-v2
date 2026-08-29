@@ -1163,6 +1163,29 @@ def _run_together_repair(word: str, dictionary: EnglishDictionary) -> str:
         head = folded[: -len(tail)]
         if len(head) >= _RUN_TOGETHER_HEAD and dictionary.contains(head):
             return f"{head} {tail}"
+    # The same missing space with the function word FIRST. The loop above only
+    # ever looked for it at the end, so "vendorsmay" was repaired and
+    # "canappear" - which the comment beside the compound guard names as a case
+    # this rule handles - was not. Essay 12 of the error-riddled corpus carries
+    # it, and it survived every other layer.
+    #
+    # Symmetric guards, for the reason the originals exist: the function word
+    # comes from the same closed list, the other half must be a real word of at
+    # least _RUN_TOGETHER_HEAD characters, and has_close_candidate above has
+    # already refused anything a single edit could repair as one word.
+    #
+    # Measured the same way _RUN_TOGETHER_HEAD was, over all 24,690 bundled
+    # misspellings: four false accepts, of which "questionare" was already a
+    # casualty of the loop above. The three this direction adds are
+    # "canelation" to "can elation", "forwould" to "for would" and
+    # "theirselves" to "their selves". That is 0.012 percent, against a class of
+    # error this product's own input method creates.
+    for lead in _RUN_TOGETHER_TAILS:
+        if not folded.startswith(lead):
+            continue
+        rest = folded[len(lead) :]
+        if len(rest) >= _RUN_TOGETHER_HEAD and dictionary.contains(rest):
+            return f"{lead} {rest}"
     return ""
 
 
