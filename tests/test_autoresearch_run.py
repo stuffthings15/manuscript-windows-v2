@@ -164,3 +164,43 @@ def test_an_unreadable_idle_time_means_somebody_is_here(monkeypatch):
     # Zero, meaning "assume somebody is here", so the gate refuses rather than
     # granting the screen away on a reading it could not take.
     assert autoresearch_run.idle_seconds() == 0.0
+
+
+def test_the_status_panel_appears_only_while_a_run_is_happening(monkeypatch, tmp_path):
+    """Curtis asked to see the loop working, and to see nothing when it is not.
+
+    The panel lives exactly as long as the status file does, so every exit from
+    a run must remove it. There are half a dozen ways out - a stale app, a
+    crash, a timeout, a pack mismatch - and a panel left on screen after any of
+    them would misreport what the machine is doing.
+    """
+    import autoresearch_status
+
+    monkeypatch.setenv("MANUSCRIPT_STATE_DIR", str(tmp_path))
+    autoresearch_status.write_status({"phase": "correcting essay 8"})
+    assert autoresearch_status.read_status() is not None
+
+    # A run that dies on the staleness guard still takes the panel down.
+    monkeypatch.setattr(autoresearch_run, "_stale_reason", lambda: "stale")
+    monkeypatch.setattr(autoresearch_run, "_start_monitor", lambda: None)
+
+    autoresearch_run.main(["--no-restart"])
+
+    assert autoresearch_status.read_status() is None
+
+
+def test_a_skipped_tick_never_raises_the_panel(monkeypatch, tmp_path):
+    """An idle-gated skip is not a run, so nothing should appear on screen."""
+    import autoresearch_status
+
+    monkeypatch.setenv("MANUSCRIPT_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(autoresearch_run, "idle_seconds", lambda: 5.0)
+
+    started: list[int] = []
+    monkeypatch.setattr(autoresearch_run, "_start_monitor", lambda: started.append(1))
+
+    exit_code = autoresearch_run.main(["--essays", "8", "--require-idle", "300"])
+
+    assert exit_code == 2
+    assert started == []
+    assert autoresearch_status.read_status() is None

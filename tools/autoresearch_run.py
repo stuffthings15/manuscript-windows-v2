@@ -54,6 +54,8 @@ if str(ROOT / "src") not in sys.path:
 if str(ROOT / "tools") not in sys.path:
     sys.path.insert(0, str(ROOT / "tools"))
 
+import autoresearch_status  # noqa: E402
+
 APP_LOG = Path.home() / "AppData/Local/ManuscriptWindowsV2/echo-link.log"
 
 # The corpus the release gate uses. Coherent prose with seeded surface damage,
@@ -71,6 +73,38 @@ TIMEOUT_PER_ESSAY_SECONDS = 600
 _DEAD = "dead"
 _PARTIAL = "partial"
 _CAPTURE_MISMATCH = "captured from"
+
+
+def _start_monitor() -> None:
+    """Show the on-screen panel, if it is not already up.
+
+    pythonw, not python, so no console window appears and nothing flashes into
+    the foreground. The panel itself refuses focus three different ways - see
+    autoresearch_monitor - because a window that steals focus mid-experiment
+    corrupts the very run it is reporting on.
+    """
+    if autoresearch_status.read_status() is not None:
+        return  # a run is already up, and so is its panel
+    launcher = Path(sys.executable).with_name("pythonw.exe")
+    try:
+        subprocess.Popen(  # noqa: S603 - a fixed path in this repository
+            [
+                str(launcher if launcher.exists() else sys.executable),
+                str(ROOT / "tools/autoresearch_monitor.py"),
+            ],
+            cwd=ROOT,
+            creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0)),
+        )
+    except OSError:
+        # The display is a convenience. Never lose an experiment over it.
+        pass
+
+
+def _status(**values: object) -> None:
+    """Update what the panel shows, merging into what is already there."""
+    current = autoresearch_status.read_status() or {}
+    current.update(values)
+    autoresearch_status.write_status(current)
 
 
 def idle_seconds() -> float:
@@ -288,6 +322,7 @@ def _run_batches(essays: list[int], corpus: str) -> str:
         # state makes Word fragile sooner. Restarting per essay costs a few
         # seconds and removes the variable entirely, which matters more for a
         # loop that has to run unattended than the seconds do.
+        _status(phase=f"correcting essay {number}")
         _restart_word()
         completed = subprocess.run(
             [
@@ -311,7 +346,7 @@ def _run_batches(essays: list[int], corpus: str) -> str:
     return "\n".join(collected)
 
 
-def main(argv: list[str] | None = None) -> int:
+def _run(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--first", type=int, default=1, help="first essay")
     parser.add_argument(
@@ -348,6 +383,12 @@ def main(argv: list[str] | None = None) -> int:
     # build under test, and one of those cost six hours" - and an app started
     # on 2026-08-23 went on to serve six acceptance tiers while reporting a
     # build made minutes earlier.
+    parser.add_argument(
+        "--describe",
+        default="",
+        help="what this experiment is trying, shown on the status panel and "
+        "logged to results.tsv",
+    )
     parser.add_argument(
         "--require-idle",
         type=float,
