@@ -444,3 +444,43 @@ def test_a_real_stutter_is_still_repaired():
     )
 
     assert repaired == "We make secure procedures simpler."
+
+
+def test_a_full_stop_after_a_question_mark_is_removed():
+    """"matter?." reached the finished document, and is always wrong.
+
+    It survives because the sentence already ends correctly, so nothing
+    downstream treats the leftover stop as a defect. polish_error_score charges
+    it and no rule removed it, so essay 10 of the gated corpus carried one all
+    the way through on 2026-08-28.
+    """
+    from echo_link_core.writing_suggestions import (
+        WritingSuggestionEngine,
+        apply_all_suggestions,
+    )
+
+    engine = WritingSuggestionEngine()
+
+    for damaged, repaired in (
+        ("Why does it matter?. The next point follows.",
+         "Why does it matter? The next point follows."),
+        ("It works!. Then it stops.", "It works! Then it stops."),
+    ):
+        assert apply_all_suggestions(damaged, engine.analyze(damaged)) == repaired
+
+
+def test_deliberate_terminal_punctuation_is_left_alone():
+    """"?!" is a choice and "..." is an ellipsis. Neither is a mistake.
+
+    The rule is deliberately narrow for this reason: only a period directly
+    after ? or !, with nothing but spaces between.
+    """
+    from echo_link_core.writing_suggestions import (
+        WritingSuggestionEngine,
+        apply_all_suggestions,
+    )
+
+    engine = WritingSuggestionEngine()
+    sentence = "Really?! I had no idea."
+
+    assert apply_all_suggestions(sentence, engine.analyze(sentence)) == sentence

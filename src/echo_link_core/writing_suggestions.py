@@ -350,6 +350,20 @@ _WORD = re.compile(r"\b[A-Za-z][A-Za-z'-]*\b")
 # must keep its heading. That costs two of the corpus's 75, both real, and the
 # trade is deliberate: this rule deletes a word the writer typed, so it refuses
 # wherever the evidence is not plain.
+# A full stop left after terminal punctuation: "matter?." or "works!."
+#
+# Always wrong, in every register, which is what makes it safe to repair
+# without asking. It survives because the sentence already ends correctly, so
+# nothing downstream treats the leftover stop as a defect - polish_error_score
+# charges it, but no rule removed it, and essay 10 of the gated corpus carried
+# one all the way to the finished document on 2026-08-28.
+#
+# Deliberately narrow. Only a period after ? or !, and only when nothing but
+# whitespace separates them. "?!" and "!?" are choices a writer makes, "..." is
+# an ellipsis, and none of those are touched.
+_STRAY_TERMINAL_STOP = re.compile(r"(?P<keep>[?!])[ 	]*\.")
+
+
 _DUPLICATE_WORD = re.compile(
     r"(?=\b(?P<first>[A-Za-z][A-Za-z'-]*)"
     r"(?:[ \t]+|[ \t]*,[\s,]*,[ \t]*|[ \t]*\r?\n[ \t]*(?=(?-i:[a-z])))"
@@ -488,6 +502,7 @@ class WritingSuggestionEngine:
         candidates: list[_Candidate] = []
         candidates.extend(_typo_candidates(text, protected))
         candidates.extend(_duplicate_candidates(text, protected))
+        candidates.extend(_stray_terminal_stop_candidates(text, protected))
         candidates.extend(_grammar_phrase_candidates(text, protected))
         candidates.extend(_homophone_candidates(text, protected))
         candidates.extend(_sentence_boundary_candidates(text, protected))
@@ -656,6 +671,29 @@ _LEGITIMATE_DOUBLINGS = frozenset(
         "bye",
     }
 )
+
+
+def _stray_terminal_stop_candidates(
+    text: str,
+    protected: tuple[tuple[int, int], ...],
+) -> list[_Candidate]:
+    found: list[_Candidate] = []
+    for match in _STRAY_TERMINAL_STOP.finditer(text):
+        start, end = match.start(), match.end()
+        if _is_protected(start, end, protected):
+            continue
+        found.append(
+            _Candidate(
+                "stray-terminal-stop",
+                SuggestionCategory.FORMATTING,
+                "Remove the extra full stop",
+                "A full stop follows a question mark or exclamation mark.",
+                start,
+                end,
+                match.group("keep"),
+            )
+        )
+    return found
 
 
 def _duplicate_candidates(
