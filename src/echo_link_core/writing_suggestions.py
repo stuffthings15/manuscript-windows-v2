@@ -366,7 +366,20 @@ _STRAY_TERMINAL_STOP = re.compile(r"(?P<keep>[?!])[ 	]*\.")
 
 _DUPLICATE_WORD = re.compile(
     r"(?=\b(?P<first>[A-Za-z][A-Za-z'-]*)"
-    r"(?:[ \t]+|[ \t]*,[\s,]*,[ \t]*|[ \t]*\r?\n[ \t]*(?=(?-i:[a-z])))"
+    # \v as well as \n, and this is the whole reason the rule kept missing.
+    #
+    # Word represents a soft line break - Shift+Enter - as VERTICAL TAB, not a
+    # newline. Read through Word's own COM on 2026-08-28, essay 8 of the gated
+    # corpus contains 19 vertical tabs, 13 carriage returns and ZERO newlines,
+    # and the character sitting between "procedures" and "procedures" is
+    # \x0b. The harness reads the same file from its XML and turns <w:br/> into
+    # "\n", which is why every offline test of this rule passed and every live
+    # measurement failed: the two paths were never looking at the same string.
+    #
+    # That one character accounts for all 39 duplicate hits across the corpora
+    # and for two AutoResearch experiments that were discarded as failures when
+    # the ideas were sound.
+    r"(?:[ \t]+|[ \t]*,[\s,]*,[ \t]*|[ \t]*(?:\r?\n|\v)[ \t]*(?=(?-i:[a-z])))"
     r"(?P<second>[A-Za-z][A-Za-z'-]*)\b)",
     re.IGNORECASE,
 )
