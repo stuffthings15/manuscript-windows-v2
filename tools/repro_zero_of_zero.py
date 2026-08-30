@@ -140,12 +140,16 @@ def press_hotkey() -> None:
 
 
 def hud_counter() -> str:
-    import uiautomation as automation
+    # Found by handle, like every other window lookup in the batch path.
+    #
+    # I argued for leaving this one alone because nothing in the batch calls it,
+    # and tests/test_harness_window_lookup.py made the better case: it lives in
+    # a module run_essays_batch imports, so it is one call away from costing
+    # another five essays, and "unused today" is not a property anyone maintains.
+    from full_page_user_journey_probe import _hud_window
 
-    hud = automation.GetRootControl().WindowControl(
-        searchDepth=3, RegexName=r"Manuscript writing HUD.*"
-    )
-    if not hud.Exists(25.0, 0.5):
+    hud = _hud_window(25.0)
+    if hud is None:
         return "<no HUD window>"
     found: list[str] = []
 
