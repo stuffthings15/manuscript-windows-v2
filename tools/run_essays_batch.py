@@ -1206,11 +1206,33 @@ def main() -> int:
                 # without a location the only way to tell them apart was to
                 # guess and re-run - which cost a wrong diagnosis on 2026-08-28,
                 # when the focus helper was blamed and a probe cleared it.
+                # And name OUR frame as well as the library's, which is the
+                # level of detail this still lacked on 2026-08-30. Naming the
+                # deepest frame alone gave "uiautomation.py:7015
+                # GetNextSiblingControl" for five lost essays in one gate run -
+                # true, and useless, because it is the same answer for every
+                # tree walk in the harness. It identified the library and not
+                # the caller, so a fix aimed at one call site could not be told
+                # apart from no fix at all: replacing the enumeration in
+                # focus_named_word_window changed nothing here and the frame
+                # stayed identical, which is exactly the ambiguity that a
+                # location was supposed to remove.
                 frame = traceback.extract_tb(exc.__traceback__)
                 where = ""
                 if frame:
                     last = frame[-1]
                     where = f" at {Path(last.filename).name}:{last.lineno} {last.name}"
+                    ours = [
+                        item
+                        for item in frame
+                        if "uiautomation" not in Path(item.filename).name
+                    ]
+                    if ours:
+                        caller = ours[-1]
+                        where += (
+                            f" from {Path(caller.filename).name}:"
+                            f"{caller.lineno} {caller.name}"
+                        )
                 result = {
                     "error": f"{type(exc).__name__}: {exc}{where}",
                     "after": "",
