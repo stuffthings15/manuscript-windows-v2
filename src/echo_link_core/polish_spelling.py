@@ -1134,6 +1134,12 @@ _RUN_TOGETHER_TAILS = frozenset(
         "has", "have", "that", "this", "with", "from", "they", "their", "when",
         "which", "would", "should", "could", "into", "than", "then", "also",
         "only", "more", "most",
+        # Prepositions and pronouns. Everything above is a modal, a
+        # determiner or a conjunction, which is why "vendorsmay" split
+        # and "closelyat" did not - an arbitrary gap rather than a
+        # decision anyone took.
+        "at", "in", "on", "of", "to", "by", "as", "or", "up", "out",
+        "is", "be", "it", "its", "his", "her", "our", "your",
     }
 )
 # The head has to be a real word of at least this length. Measured: at 4 the
