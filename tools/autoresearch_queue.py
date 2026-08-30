@@ -35,6 +35,11 @@ from pathlib import Path
 import subprocess
 import sys
 
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import autoresearch_cycle  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 
 SPELLING = "src/echo_link_core/polish_spelling.py"
@@ -170,6 +175,42 @@ QUEUE: tuple[tuple[str, str, tuple[tuple[str, str], ...], str], ...] = (
         ),
         "5",
     ),
+    # Two edits out, retried. It was DISCARDED on essay 10 and that verdict
+    # stands for the tree it ran against - but the tie-break ratio has come down
+    # to 30 since, and that changes what a wider lookup can deliver. "serreous"
+    # finds serious at 38.3M against ferrous at 1.0M: a 38x lead, refused as a
+    # tie under the old 50x bar and decisive under the new one. The lookup never
+    # reached those candidates because it only ever looked one edit out.
+    #
+    # A discard is a verdict on an idea in a context, not on the idea forever.
+    (
+        "look two edits out, now that a 38x lead is no longer a tie",
+        SPELLING,
+        ((_LOOKUP_ONE_EDIT, _LOOKUP_TWO_EDITS),),
+        "12",
+    ),
+    # "mayfund" is may + fund, and it fails on one character: the rule wants the
+    # content half to be five long and "fund" is four. The comment on the
+    # constant records what 4 cost when it was last measured - gallare, hearwith,
+    # origonly, beththe - so this is a known trade being re-measured against the
+    # metric rather than against that note.
+    (
+        "let the content half of a run-together word be four letters",
+        SPELLING,
+        (("_RUN_TOGETHER_HEAD = 5", "_RUN_TOGETHER_HEAD = 4"),),
+        "13",
+    ),
+    # "makels" is makes at 87.8M against makers at 13.3M - a 6.6x lead, still a
+    # tie at 30x. Rather than drop the ratio again and let raw frequency decide
+    # more often, narrow the ranker's margin so the SENTENCE gets to decide: it
+    # is the layer that can tell "makels sense" from a plural noun, and 0.02 to
+    # 0.012 already took essay 10 to 100.
+    (
+        "narrow the ranker's margin again, from 0.012 to 0.008",
+        CLASSIFIER,
+        (("_MARGIN = 0.012", "_MARGIN = 0.008"),),
+        "19",
+    ),
 )
 
 
@@ -218,6 +259,22 @@ def main(argv: list[str] | None = None) -> int:
         description, _relative, _edits, essays = entry
         essays = arguments.essays or essays
         print(f"=== {index} (essay {essays}): {description}", flush=True)  # noqa: T201
+        if autoresearch_cycle.current_baseline(essays) <= 0.0:
+            # No baseline row for this slice means the bar is zero and the next
+            # result is kept whatever it scores. That has already happened twice:
+            # essays 4 and 6 were judged against 0.00, and only escaped being
+            # wrong because both happened to score 100.
+            #
+            # Refusing here rather than warning, because a keep recorded against
+            # no baseline is worse than a missing experiment - it puts a number
+            # in results.tsv that nothing supports, and every later comparison on
+            # that slice inherits it.
+            print(  # noqa: T201
+                f"NO BASELINE for essay {essays}. Measure it unchanged and "
+                f"record the row before running experiments on this slice.",
+                flush=True,
+            )
+            return 2
         try:
             changed = apply(entry, ROOT)
         except SystemExit as reason:
