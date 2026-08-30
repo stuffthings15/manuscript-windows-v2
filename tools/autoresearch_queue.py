@@ -94,15 +94,32 @@ QUEUE: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...] = (
 )
 
 
-def apply(entry, root: Path) -> None:
+def apply(entry, root: Path) -> bool:
+    """Make this entry's change. True when something actually changed.
+
+    A substitution whose result is ALREADY in the file is not a failure, and
+    treating it as one halted the first run. Entry 1 raised the tie-break ratio
+    to 30 and was KEPT, so entry 3 - which combines that with a wider lookup -
+    could no longer find `= 50` and the queue stopped with two experiments
+    unrun. Combination entries are exactly the ones that follow their own parts,
+    so this is the normal case, not an edge case.
+
+    A substitution that matches NEITHER form is still a hard error: that means
+    the anchor is wrong, and an experiment that silently changed nothing would
+    be recorded as a discard and read as an idea that failed.
+    """
     _, relative, edits = entry
     path = root / relative
     text = path.read_text(encoding="utf-8")
+    changed = False
     for before, after in edits:
-        if before not in text:
+        if before in text:
+            text = text.replace(before, after, 1)
+            changed = True
+        elif after not in text:
             raise SystemExit(f"substitution did not match in {relative}: {before!r}")
-        text = text.replace(before, after, 1)
     path.write_text(text, encoding="utf-8")
+    return changed
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -117,12 +134,19 @@ def main(argv: list[str] | None = None) -> int:
         description = entry[0]
         print(f"=== {index}: {description}", flush=True)  # noqa: T201
         try:
-            apply(entry, ROOT)
+            changed = apply(entry, ROOT)
         except SystemExit as reason:
-            # Loud, and it stops. A queue that skipped an entry it could not
-            # apply would leave a gap nobody would ever notice in results.tsv.
+            # Loud, and it stops. A bad anchor means every later entry is
+            # suspect, and a queue that skipped one would leave a gap nobody
+            # would ever notice in results.tsv.
             print(f"SKIPPED {index}: {reason}", flush=True)  # noqa: T201
             return 1
+        if not changed:
+            # Everything this entry asks for is already in the tree, because an
+            # earlier entry was kept. There is nothing to measure and the cycle
+            # would return NOCHANGE, so say so and carry on.
+            print(f"ALREADY IN {index}: {description}", flush=True)  # noqa: T201
+            continue
         done = subprocess.run(
             [
                 sys.executable,
