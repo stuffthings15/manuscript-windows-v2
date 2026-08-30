@@ -119,6 +119,14 @@ def _run(command: list[str], label: str) -> tuple[bool, str]:
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        # UTF-8 and replace, not the console default. `text=True` decodes as
+        # cp1252 on this machine, and a single 0x9d byte in a tool's output -
+        # ruff prints curly quotes around code it cites - raised
+        # UnicodeDecodeError and took the whole gate run down with a traceback,
+        # after the tests it was reporting on had already passed. A release gate
+        # must fail on what it measures, never on how it reads the output.
+        encoding="utf-8",
+        errors="replace",
     )
     if process.stdout is not None:
         for line in process.stdout:

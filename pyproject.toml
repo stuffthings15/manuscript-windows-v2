@@ -47,6 +47,16 @@ addopts = "-ra"
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+# Vendored upstream, pinned and read-only. `third_party/autoresearch_ref` is a
+# byte-identical mirror of karpathy/autoresearch at 228791f, kept so the
+# specification this loop follows can be checked against its source rather than
+# against a paraphrase. Its whole value is that it is unmodified, so it cannot
+# be brought in line with our lint rules and must not be.
+#
+# It was not excluded when it landed, and release_acceptance.py runs
+# `ruff check .` rather than `ruff check src tools tests`, so gate 4 failed on
+# upstream's print statements - a red gate that said nothing about this product.
+exclude = ["third_party"]
 
 [tool.ruff.lint]
 # Deliberately narrow. These are the checks that catch the defects this
