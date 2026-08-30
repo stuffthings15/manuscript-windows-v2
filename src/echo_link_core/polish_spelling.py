@@ -187,6 +187,14 @@ class DeterministicPolishResult:
 _COMPOUND_PREFIXES = (
     "cyber", "micro", "multi", "para", "bio", "geo", "eco", "nano", "tele",
     "pre", "post", "anti", "non", "semi", "sub", "super", "inter", "ultra",
+    # Native English prefixes, every bit as productive as the Greek and
+    # Latin ones above and left out for no stated reason. "outplanting"
+    # is ordinary English that both bundled lists lack, and
+    # RELEASE_ACCEPTANCE.md names it as a word the spelling term charges
+    # wrongly. DERIVING it is exactly what this table is for; listing the
+    # word itself would be memorising the corpus.
+    "out", "over", "under", "up", "down", "off", "back", "cross",
+    "counter", "self", "re", "un", "mis", "co",
 )
 
 # A compound joins content words. These are the words that never form one, and
