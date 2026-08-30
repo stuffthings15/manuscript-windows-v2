@@ -1175,7 +1175,7 @@ _RUN_TOGETHER_TAILS = frozenset(
 # only casualty left in 24,690 known misspellings is "questionare", which
 # becomes "question are" instead of "questionnaire". One in twenty-four
 # thousand, against a class of error this product's own input method creates.
-_RUN_TOGETHER_HEAD = 5
+_RUN_TOGETHER_HEAD = 4
 
 
 def _run_together_repair(word: str, dictionary: EnglishDictionary) -> str:
