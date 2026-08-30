@@ -386,7 +386,7 @@ class ContextWordRanker:
     # Above the largest margin measured on a context that should refuse
     # (0.010) and below the smallest margin on a correct pick that is worth
     # taking (0.022). Set from the measurements in the docstring, not by taste.
-    _MARGIN = 0.02
+    _MARGIN = 0.012
     # Long enough to carry a topic. Below this the context is a heading or a
     # fragment, and the neutral-context rows above are what that looks like.
     _MINIMUM_CONTEXT_WORDS = 12
