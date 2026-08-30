@@ -485,7 +485,7 @@ def _is_ambiguous(source: str, ranked: list) -> bool:
 
 # How far ahead the best candidate must be before frequency alone is allowed
 # to break a tie between two equally well-shaped repairs.
-_DOMINANT_FREQUENCY_RATIO = 50
+_DOMINANT_FREQUENCY_RATIO = 30
 
 
 def _typo_shape_rank(source: str, candidate: str) -> int:
