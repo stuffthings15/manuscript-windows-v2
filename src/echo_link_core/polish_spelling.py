@@ -415,7 +415,9 @@ class EnglishDictionary:
             ),
         )
         best = ranked[0]
-        if _is_ambiguous(folded, ranked):
+        # The word as the writer typed it decides which bar applies, so this
+        # cannot use `folded` - casefolding is what threw the evidence away.
+        if _is_ambiguous(folded, ranked, capitalised=word[:1].isupper()):
             if tie_break is None:
                 return None
             # Only the candidates that actually tie are offered. Handing over
@@ -477,8 +479,20 @@ class EnglishDictionary:
             self._load_error = ""
 
 
-def _is_ambiguous(source: str, ranked: list) -> bool:
+def _is_ambiguous(source: str, ranked: list, *, capitalised: bool = False) -> bool:
     """Whether two candidates are equally good repairs, so neither may be used.
+
+    `capitalised` says the word wore a capital where the writer typed it, which
+    makes it a probable name and raises the bar back to the old, stricter one.
+    Lowering the ratio to 30 unfroze "Csco": it sits one edit from cisco at
+    27.9M and cusco at 627K, a 44.5x lead that is a tie at 50x and decisive at
+    30x, so the repair became "Cisco". Cusco is a city in Peru and THIS corpus
+    has an essay set there. Choosing between two proper nouns by raw frequency
+    is the one place frequency is worst, and the product must not rewrite a
+    person's or a company's name.
+
+    Caught by test_names_the_speller_cannot_place_are_still_frozen, which is why
+    the fix is here and not in that test.
 
     When the best two share a distance and a typing shape, nothing left in the
     dictionary can separate them and only raw frequency remains - which is
@@ -506,14 +520,23 @@ def _is_ambiguous(source: str, ranked: list) -> bool:
         source, str(second.term)
     ):
         return False
-    return max(0, int(first.count)) < _DOMINANT_FREQUENCY_RATIO * max(
-        1, int(second.count)
-    )
+    ratio = _DOMINANT_FREQUENCY_RATIO_NAMED if capitalised else _DOMINANT_FREQUENCY_RATIO
+    return max(0, int(first.count)) < ratio * max(1, int(second.count))
 
 
 # How far ahead the best candidate must be before frequency alone is allowed
 # to break a tie between two equally well-shaped repairs.
+#
+# 30 rather than 50 since 2026-08-29, measured: it took essay 10 from 96 to 98
+# by resolving "stateon" to station, which leads staten 32x.
 _DOMINANT_FREQUENCY_RATIO = 30
+
+# The bar for a word the writer capitalised, which is probably a name. Held at
+# the old 50 because the cost of being wrong is different in kind: a mangled
+# common word is a typo a reader forgives, and a rewritten name is the product
+# putting words in someone's mouth. Lowering this to 30 turned "Csco" into
+# "Cisco" when "Cusco" was one edit away and equally real.
+_DOMINANT_FREQUENCY_RATIO_NAMED = 50
 
 
 def _typo_shape_rank(source: str, candidate: str) -> int:
