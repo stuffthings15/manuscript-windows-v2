@@ -230,6 +230,13 @@ SPELLING_CORRECTIONS = {
     "secratary": "secretary",
     "sentances": "sentences",
     "sentnce": "sentence",
+    # A repair, not a lexicon entry. "serreous" is two edits from "serious" so
+    # the distance-1 lookup never sees it, and at distance 2 it competes with
+    # "ferrous" and "serous". It is a wrong word with a right answer, which is
+    # exactly what this map is for; putting it in _LEXICON_ADDITIONS would teach
+    # the speller that a typo is English and suppress the correction.
+    "serreous": "serious",
+    "lahaar": "lahar",
     "seperate": "separate",
     "seperated": "separated",
     "seperately": "separately",

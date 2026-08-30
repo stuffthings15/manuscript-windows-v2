@@ -188,6 +188,39 @@ class DeterministicPolishResult:
 # real word: "passivation" is passive + ation, ordinary English that
 # neither bundled list has. Same principle as the prefixes below -
 # derive the word, never list it.
+# Ordinary English that neither bundled list carries, because both are old and
+# neither tracks technical vocabulary.
+#
+# ADDED AT CURTIS'S EXPLICIT INSTRUCTION on 2026-08-29, and that matters, because
+# CLAUDE.md and program.md both forbid adding a word because a corpus essay
+# contains it. Four of these - cyber, lahar, lidar, sonar's neighbours - were
+# reached through the corpus, and no derivation can produce them: `lahar` and
+# `lidar` are absent from the frequency list entirely, so there is no stem,
+# prefix or suffix to build them from, and `cyber` is blocked by `caber` and
+# `cuber` sitting one edit away. The word-formation tables above are the right
+# answer wherever one exists; this is for the residue where none does.
+#
+# The list is deliberately WIDER than the corpus. If it held exactly the four
+# words four essays needed, it would be a scorecard rather than a lexicon, and
+# the next document with a different technical word would get no help at all.
+# Everything here is a real English word a writer could reasonably type.
+#
+# Each entry must be a word, not a repair. `serreous` is NOT here: it is a
+# misspelling of "serious" and belongs in SPELLING_CORRECTIONS, where a wrong
+# word maps to a right one. Putting it here would teach the speller that a typo
+# is English and suppress the correction entirely.
+_LEXICON_ADDITIONS = frozenset(
+    """cyber lidar lahar sonar radar caldera tephra pyroclastic seismograph
+    tiltmeter fumarole geothermal
+    telemetry microplastics biochar permafrost cryosphere
+    outplanting passivation deorbit aerobraking regolith exosphere
+    microgrid makerspace tradeoff tradeoffs multifactor phishing ransomware
+    keylogger botnet firewalls cybersecurity
+    walkability bikeability transit-oriented paratransit headway
+    remittance agroforestry silvopasture permaculture""".split()
+)
+
+
 _COMPOUND_SUFFIXES = (
     "ation", "ations", "isation", "ization", "ising", "izing",
     "ised", "ized", "ment", "ments", "ness", "less", "able", "ible",
@@ -280,6 +313,8 @@ class EnglishDictionary:
     def contains(self, word: str) -> bool:
         self._ensure_loaded()
         folded = _dictionary_form(word)
+        if folded in _LEXICON_ADDITIONS:
+            return True
         return bool(folded and self._words is not None and folded in self._words)
 
     def recognises_compound(self, word: str) -> bool:
