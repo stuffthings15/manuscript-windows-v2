@@ -184,6 +184,15 @@ class DeterministicPolishResult:
 # memorising the corpus, which is the rule that governs the 149 frozen
 # sentences in polish_proofread.py, and grade_corpus.py already records an
 # earlier session refusing exactly that.
+# Productive English suffixes. A known stem carrying one of these is a
+# real word: "passivation" is passive + ation, ordinary English that
+# neither bundled list has. Same principle as the prefixes below -
+# derive the word, never list it.
+_COMPOUND_SUFFIXES = (
+    "ation", "ations", "isation", "ization", "ising", "izing",
+    "ised", "ized", "ment", "ments", "ness", "less", "able", "ible",
+)
+
 _COMPOUND_PREFIXES = (
     "cyber", "micro", "multi", "para", "bio", "geo", "eco", "nano", "tele",
     "pre", "post", "anti", "non", "semi", "sub", "super", "inter", "ultra",
@@ -312,6 +321,17 @@ class EnglishDictionary:
             rest = folded[len(prefix) :]
             if len(rest) > 2 and real(rest) and common(rest):
                 return True
+
+        for suffix in _COMPOUND_SUFFIXES:
+            if not folded.endswith(suffix):
+                continue
+            stem = folded[: -len(suffix)]
+            # The stem as written, and with a dropped final -e restored:
+            # "passivation" is passive + ation with the e elided, which
+            # is how English actually forms these.
+            for candidate in (stem, stem + "e"):
+                if len(candidate) > 3 and real(candidate) and common(candidate):
+                    return True
 
         # Both parts at least four characters: shorter splits are how "acid" +
         # "dent" and "annal" + "isis" got in.
