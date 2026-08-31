@@ -400,7 +400,15 @@ def main(argv: list[str] | None = None) -> int:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=2400,
+            # Two hours, not forty minutes. A tone experiment restarts the
+            # app, drives three essays through Word, and waits up to 300
+            # seconds per slow section before judging with a 27B model - and
+            # the 2400 second ceiling killed the Friendly experiment mid-run on
+            # 2026-08-31. That is the worst possible outcome: the cycle had
+            # already COMMITTED the change, so the timeout left an unmeasured
+            # edit in the tree with no keep, no discard and no row, which is the
+            # one state this loop must never produce.
+            timeout=7200,
         )
         print((done.stdout or "").strip() or "no output", flush=True)  # noqa: T201
         # No branching on the result on purpose. The cycle has already kept or
