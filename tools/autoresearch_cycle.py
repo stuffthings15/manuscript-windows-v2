@@ -63,7 +63,7 @@ def _git(*arguments: str) -> str:
     return done.stdout.strip()
 
 
-def slice_tag(essays: str) -> str:
+def slice_tag(name: str, kind: str = "essays") -> str:
     """The prefix every description carries, naming the slice it was measured on.
 
     A score means nothing without the essays it came from, and results.tsv is
@@ -76,12 +76,17 @@ def slice_tag(essays: str) -> str:
     discarded correct improvements as failures - indistinguishable, in the log,
     from having no ideas.
     """
-    return f"essays {essays}:"
+    # `kind` because a slice is not always a set of essays. The tone cycle
+    # measures a judge percentage on one tone, and tagging its rows
+    # "essays Shorten:" would be a lie in the one field that says what a
+    # number means. Defaulted so every existing caller and every row already
+    # written keeps its exact shape.
+    return f"{kind} {name}:"
 
 
-def current_baseline(essays: str) -> float:
+def current_baseline(name: str, kind: str = "essays") -> float:
     """The best score kept so far ON THIS SLICE, which an experiment must beat."""
-    tag = slice_tag(essays)
+    tag = slice_tag(name, kind)
     best = 0.0
     try:
         for line in RESULTS.read_text(encoding="utf-8").splitlines()[1:]:
