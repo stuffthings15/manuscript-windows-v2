@@ -313,6 +313,41 @@ def section_provenance(hud) -> str:
     return ""
 
 
+def _hud_tree_summary(hud, limit: int = 14) -> str:
+    """The buttons actually present in the HUD, for a failure that found none.
+
+    Deliberately narrow: control type plus name plus enabled, buttons first,
+    truncated. A full dump is thousands of lines and the batch already refuses
+    to print those; what a reader needs is whether the tree held a DIFFERENT
+    button, no buttons at all, or nothing whatsoever - three causes that the
+    message "no Replace button" cannot tell apart.
+
+    Never raises. This runs on a path that is already failing, and losing the
+    diagnosis to an exception in the diagnostic would be the worst outcome.
+    """
+    if hud is None:
+        return "<no hud control>"
+    try:
+        from repro_accept_advance import _descend
+
+        names = []
+        for control in _descend(hud):
+            try:
+                kind = str(control.ControlTypeName or "")
+                if kind != "ButtonControl":
+                    continue
+                name = str(control.Name or "")[:44]
+                names.append(f"{name!r}{'' if control.IsEnabled else ' (disabled)'}")
+            except Exception:  # noqa: BLE001 - a repainting control answers oddly
+                continue
+            if len(names) >= limit:
+                names.append("...")
+                break
+        return "[" + ", ".join(names) + "]" if names else "<no buttons in tree>"
+    except Exception as exc:  # noqa: BLE001 - diagnostics must never mask the failure
+        return f"<tree read failed: {type(exc).__name__}>"
+
+
 def wait_for_the_ai(hud_reader, hud, seconds: float = 90.0):
     """Hold until the section stops waiting on the model, and say what it got.
 
@@ -938,11 +973,24 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
             timeout=30.0,
             what="the HUD to leave the loading view",
         )
-        button = replace_button(hud_window(8.0) or hud) if settled else None
+        found_hud = hud_window(8.0) if settled else None
+        button = replace_button(found_hud or hud) if settled else None
         if button is None:
+            # Say what WAS there, not only what was missing.
+            #
+            # "no Replace button at press 1" has now cost four gates and two
+            # days of guessing, twice being blamed on the harness looking too
+            # early when the app was genuinely hung, and once the reverse. The
+            # message names an absence, and an absence is consistent with every
+            # hypothesis: a hidden button, a renamed one, a stale window handle,
+            # a tree deeper than the walk, a HUD that never appeared. Naming the
+            # deepest traceback frame did exactly this for the COMError today and
+            # pointed at the real caller on the first run afterwards.
             report["stopped_because"] = (
                 f"no Replace button at press {press}; "
                 + harness_state.describe(harness_state.read_state())
+                + f"; hud_found={found_hud is not None}"
+                + f"; tree={_hud_tree_summary(found_hud or hud)}"
             )
             break
         if not button.IsEnabled:
