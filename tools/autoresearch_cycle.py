@@ -101,7 +101,9 @@ def current_baseline(name: str, kind: str = "essays") -> float:
     return best
 
 
-def decide(baseline: float, score: float | None) -> str:
+def decide(
+    baseline: float, score: float | None, *, higher_is_better: bool = True
+) -> str:
     """keep, discard or crash. The whole of steps 6, 8 and 9.
 
     Separated from the running so it can be tested without a Word session, and
@@ -110,7 +112,19 @@ def decide(baseline: float, score: float | None) -> str:
     """
     if score is None:
         return "crash"
-    return "keep" if score > baseline else "discard"
+    if higher_is_better:
+        return "keep" if score > baseline else "discard"
+    # LOWER is better for latency, and this direction is not optional. A
+    # latency experiment judged by the default rule would keep the SLOWEST
+    # result every time and record it as an improvement - a loop that
+    # confidently optimises backwards while every row says "keep".
+    #
+    # A baseline of 0.0 means no measurement yet. For a lower-is-better metric
+    # that is not a floor to beat but an impossible one, so it is treated as
+    # "no bar" rather than silently discarding every result.
+    if baseline <= 0.0:
+        return "keep"
+    return "keep" if score < baseline else "discard"
 
 
 def record(commit: str, score: float | None, memory_gb: float, status: str,

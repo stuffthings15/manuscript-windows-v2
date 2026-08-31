@@ -129,3 +129,35 @@ def test_a_stale_app_is_a_crash_and_the_batch_never_runs(monkeypatch):
     assert "stale app" in reason
     assert "1234" in reason
     assert not launched
+
+
+def test_a_lower_is_better_metric_is_not_judged_by_the_higher_is_better_rule():
+    """Latency must not be optimised backwards.
+
+    The keep rule was written for scores where higher wins. Handing it a
+    latency, where lower wins, would keep the SLOWEST result every time and
+    record it as an improvement - a loop confidently going the wrong way while
+    every row in results.tsv reads "keep". Nothing about the log would look
+    wrong.
+    """
+    from autoresearch_cycle import decide
+
+    assert decide(15.0, 12.0, higher_is_better=False) == "keep"
+    assert decide(15.0, 18.0, higher_is_better=False) == "discard"
+    # Equal is still a discard, so a no-op cannot be recorded as progress.
+    assert decide(15.0, 15.0, higher_is_better=False) == "discard"
+    # And the default is unchanged, so no existing caller shifts direction.
+    assert decide(15.0, 18.0) == "keep"
+
+
+def test_no_baseline_means_no_bar_for_a_lower_is_better_metric():
+    """0.0 is an impossible floor when smaller wins, not a strict one.
+
+    For a score, a 0.0 baseline is the honest "nothing measured yet" bar and
+    anything beats it. For a latency it would be a bar nothing can ever beat,
+    so every first measurement would be discarded and the slice could never
+    acquire a baseline at all.
+    """
+    from autoresearch_cycle import decide
+
+    assert decide(0.0, 18.0, higher_is_better=False) == "keep"
