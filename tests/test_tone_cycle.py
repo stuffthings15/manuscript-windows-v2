@@ -92,3 +92,40 @@ def test_the_judged_essay_is_the_one_the_gate_judges():
     source, corrected = autoresearch_tone_cycle._essay_paths()
     assert source == sorted(release_acceptance.COHERENT.glob("*.docx"))[0]
     assert corrected.name == source.name
+
+
+def test_a_stale_app_is_a_crash_and_the_batch_never_runs(monkeypatch):
+    """The defect that would have made every tone experiment a false discard.
+
+    The cycle edits polish_quality.py, but the app is a long-running process
+    that already holds the OLD contract. Without restarting and then CHECKING,
+    the batch measures the baseline again and records "no improvement" for an
+    idea that was never actually tried.
+
+    autoresearch_run carries the same guard and the scar behind it: three runs
+    in two days measured a process that was not the build under test, and one
+    cost six hours.
+
+    Asserting the batch is never launched, not merely that the return value is
+    None - a version that ran Word for twenty minutes and then reported stale
+    would pass a weaker test while wasting the measurement.
+    """
+    import autoresearch_run
+    import autoresearch_tone_cycle as cycle
+
+    launched = []
+
+    def explode(*args, **kwargs):
+        launched.append(args)
+        raise AssertionError("the batch ran against a stale app")
+
+    monkeypatch.setattr(autoresearch_run, "_restart_word", lambda: None)
+    monkeypatch.setattr(autoresearch_run, "_stale_reason", lambda: "build 1234 != 5678")
+    monkeypatch.setattr(cycle.subprocess, "run", lambda *a, **k: None)
+
+    percent, reason = cycle.measure("Shorten", Path("build/unused.log"))
+
+    assert percent is None
+    assert "stale app" in reason
+    assert "1234" in reason
+    assert not launched

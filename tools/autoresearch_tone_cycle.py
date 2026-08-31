@@ -85,8 +85,35 @@ def _judged_run_completed(source_stem: str) -> str:
 
 
 def measure(tone: str, log: Path) -> tuple[float | None, str]:
-    """(pass percentage, reason it is missing). Never both."""
+    """(pass percentage, reason it is missing). Never both.
+
+    RESTARTS THE APP FIRST, then checks the build it published. Without this
+    every tone experiment would be a false discard: the cycle edits
+    polish_quality.py, but the app is a long-running process that already has
+    the OLD contract loaded, so the batch would measure the baseline again and
+    the honest conclusion "no improvement" would be recorded for an idea that
+    was never tried.
+
+    `autoresearch_run` carries the same guard and the scar behind it - "three
+    separate times in two days a run measured a process that was not the build
+    under test, and one of those cost six hours". This cycle was written without
+    it, and the queue would have run three tone experiments against stale code.
+
+    Both helpers are imported rather than reimplemented. A second copy of a
+    staleness check is a second thing that can rot, and the original was once
+    inert for weeks because it compared HEAD with HEAD.
+    """
+    import autoresearch_run
+
     source, corrected = _essay_paths()
+    autoresearch_run._restart_word()
+    subprocess.run(
+        [sys.executable, "-u", str(ROOT / "tools/restart_app_and_wait.py")],
+        cwd=ROOT, capture_output=True, text=True, timeout=600,
+    )
+    stale = autoresearch_run._stale_reason()
+    if stale:
+        return None, f"stale app, {stale}"
     with log.open("w", encoding="utf-8") as stream:
         subprocess.run(
             [
