@@ -1542,6 +1542,19 @@ class PolishEngine:
                         getattr(self.runtime, "last_downgrade_reason", "")
                     ).strip()
                     if reason:
+                        # Log the runtime's OWN reason, not just the sentence
+                        # shown to the writer. The app ran nine hours on the
+                        # compatibility runtime on 2026-08-31 - 891 log lines -
+                        # and the log said only "Bundled local AI runtime
+                        # unavailable", which names the symptom and not one
+                        # thing that could be acted on. Every bug found today
+                        # was found by making a message say what it actually
+                        # saw.
+                        logger.info(
+                            "Bundled runtime declined, using compatibility "
+                            "runtime: %s",
+                            reason[:200],
+                        )
                         plan = replace(
                             plan,
                             downgrade_reason=(
