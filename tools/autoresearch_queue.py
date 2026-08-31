@@ -44,6 +44,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 SPELLING = "src/echo_link_core/polish_spelling.py"
 CLASSIFIER = "src/echo_link_core/polish_classifier.py"
+QUALITY = "src/echo_link_core/polish_quality.py"
 
 # The lookup inside `suggestion`, NOT the one inside `has_close_candidate`.
 # Both read `max_edit_distance=1,` and the wrong one is FIRST in the file, so a
@@ -127,7 +128,48 @@ _SUFFIX_LOOP_AFTER = "\n".join(
     )
 )
 
-# (description, file, ((before, after), ...), essays)
+# The tone contract edits, built with join rather than embedded escapes. Every
+# one adds a checkable target beside constraints that were already concrete.
+_SHORTEN_BEFORE = "\n".join(
+    (
+        '"Remove repetition and filler while retaining all actors, factual clauses, "',
+        '        "important details, and boundaries.",',
+    )
+)
+_SHORTEN_AFTER = "\n".join(
+    (
+        '"Remove repetition and filler while retaining all actors, factual clauses, "',
+        '        "important details, and boundaries. Aim for at least twenty percent "',
+        '        "fewer words than the source. A sentence that is merely tidied has not "',
+        '        "been shortened.",',
+    )
+)
+
+_REPHRASE_BEFORE = '"different natural wording without changing meaning.",'
+_REPHRASE_AFTER = "\n".join(
+    (
+        '"different natural wording without changing meaning. Every sentence must "',
+        '        "differ from the source in word order or word choice; a sentence that "',
+        '        "only fixes spelling, capitalisation or punctuation has not been "',
+        '        "rephrased.",',
+    )
+)
+
+_FRIENDLY_BEFORE = (
+    '"claims around helping people and making their work easier wherever '
+    'the source supports it. "'
+)
+_FRIENDLY_AFTER = "\n".join(
+    (
+        _FRIENDLY_BEFORE,
+        '        "Address the reader as you at least once in every paragraph where the "',
+        '        "source allows it, and open at least one paragraph with a short "',
+        '        "sentence of under ten words. "',
+    )
+)
+
+
+# (description, file, ((before, after), ...), slice, kind)
 #
 # The slice is PER ENTRY, because each lever below aims at the one word a
 # particular essay has left. Measuring it on an essay that does not contain that
@@ -211,6 +253,41 @@ QUEUE: tuple[tuple[str, str, tuple[tuple[str, str], ...], str], ...] = (
         (("_MARGIN = 0.012", "_MARGIN = 0.008"),),
         "19",
     ),
+    # TONE entries, measured by autoresearch_tone_cycle against the judge's pass
+    # percentage. The corpus score does not move for a tone change, so these
+    # cannot go through the correction cycle at all.
+    #
+    # ONE diagnosis, three edits. Across every failing tone the judge reports
+    # usefulness 4.0-4.21 and target_style 2.21-3.21: the output is good English
+    # that will not COMMIT to the transformation. The contracts say why - each
+    # states its CONSTRAINTS concretely and its TARGET vaguely, so the model
+    # optimises for the half it can check. Clear, the only tone at 100 percent,
+    # is one sentence with nothing competing against it.
+    #
+    # Every edit is ADDITIVE. No guard is removed and the Modality clause stays:
+    # 14 of 19 Friendly refusals on 2026-08-20 were real modal shifts, where
+    # "hesitation blocks progress" became "hesitation can block progress".
+    (
+        "give Shorten a measurable target, not only things to retain",
+        QUALITY,
+        ((_SHORTEN_BEFORE, _SHORTEN_AFTER),),
+        "Shorten",
+        "tone",
+    ),
+    (
+        "tell Rephrase what counts as rephrased",
+        QUALITY,
+        ((_REPHRASE_BEFORE, _REPHRASE_AFTER),),
+        "Rephrase",
+        "tone",
+    ),
+    (
+        "give Friendly a concrete warmth move it is allowed to make",
+        QUALITY,
+        ((_FRIENDLY_BEFORE, _FRIENDLY_AFTER),),
+        "Friendly",
+        "tone",
+    ),
 )
 
 
@@ -228,7 +305,7 @@ def apply(entry, root: Path) -> bool:
     wrong, and an experiment that silently changed nothing would be recorded as
     a discard and read as an idea that failed.
     """
-    _, relative, edits, _essays = entry
+    relative, edits = entry[1], entry[2]
     path = root / relative
     text = path.read_text(encoding="utf-8")
     changed = False
@@ -256,10 +333,14 @@ def main(argv: list[str] | None = None) -> int:
     for index, entry in enumerate(QUEUE):
         if index < arguments.start:
             continue
-        description, _relative, _edits, essays = entry
-        essays = arguments.essays or essays
-        print(f"=== {index} (essay {essays}): {description}", flush=True)  # noqa: T201
-        if autoresearch_cycle.current_baseline(essays) <= 0.0:
+        description, _relative, _edits, slice_name = entry[:4]
+        # "essays" unless the entry says otherwise, so every entry written
+        # before tones existed keeps its exact meaning.
+        kind = entry[4] if len(entry) > 4 else "essays"
+        if kind == "essays":
+            slice_name = arguments.essays or slice_name
+        print(f"=== {index} ({kind} {slice_name}): {description}", flush=True)  # noqa: T201
+        if autoresearch_cycle.current_baseline(slice_name, kind) <= 0.0:
             # No baseline row for this slice means the bar is zero and the next
             # result is kept whatever it scores. That has already happened twice:
             # essays 4 and 6 were judged against 0.00, and only escaped being
@@ -270,7 +351,7 @@ def main(argv: list[str] | None = None) -> int:
             # in results.tsv that nothing supports, and every later comparison on
             # that slice inherits it.
             print(  # noqa: T201
-                f"NO BASELINE for essay {essays}. Measure it unchanged and "
+                f"NO BASELINE for {kind} {slice_name}. Measure it unchanged and "
                 f"record the row before running experiments on this slice.",
                 flush=True,
             )
@@ -289,15 +370,31 @@ def main(argv: list[str] | None = None) -> int:
             # would return NOCHANGE, so say so and carry on.
             print(f"ALREADY IN {index}: {description}", flush=True)  # noqa: T201
             continue
-        done = subprocess.run(
-            [
+        # A tone is measured by the judge's pass percentage and a slice of
+        # essays by the corpus score. They are different numbers on different
+        # scales, so they need different cycles; sending a tone through the
+        # correction cycle would record a flat corpus score and read as a
+        # failed idea.
+        if kind == "tone":
+            command = [
+                sys.executable,
+                str(ROOT / "tools/autoresearch_tone_cycle.py"),
+                "--tone",
+                slice_name,
+                "--describe",
+                description,
+            ]
+        else:
+            command = [
                 sys.executable,
                 str(ROOT / "tools/autoresearch_cycle.py"),
                 "--essays",
-                essays,
+                slice_name,
                 "--describe",
                 description,
-            ],
+            ]
+        done = subprocess.run(
+            command,
             cwd=ROOT,
             capture_output=True,
             text=True,
