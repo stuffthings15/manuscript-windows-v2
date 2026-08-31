@@ -988,7 +988,29 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
         # Replace is disabled while a section has no AI answer yet, so reading
         # the button first cannot tell "the AI is still working" from "there is
         # nothing to apply here". The card states which it is; wait on that.
-        hud, provenance = wait_for_the_ai(hud_window, hud)
+        #
+        # A tone gets far longer, and a section still waiting is waited on again
+        # rather than pressed on with. Measured 2026-08-31: the Friendly baseline
+        # died at press 24 of 25 with `provenance=waiting`, EVERY button
+        # disabled, and the Replace control still reading "Proofreading loc..."
+        # - the model was genuinely mid-section. The HUD window was found and
+        # visible, so this is not the window race fixed the day before; the
+        # 90-second wait simply expired and the loop walked into a button lookup
+        # that could not succeed, then reported "no Replace button" as though
+        # something were broken.
+        #
+        # A tone request regenerates the whole span after proofreading it, so it
+        # is the slowest thing this harness ever waits for. Giving up on it at 90
+        # seconds and calling the result a failure measures the clock, not the
+        # product.
+        patience = 300.0 if tone else 90.0
+        hud, provenance = wait_for_the_ai(hud_window, hud, seconds=patience)
+        if provenance == "waiting":
+            # One more full round before proceeding. Bounded, because a section
+            # that never settles has to end the run eventually - but the reason
+            # will then say `provenance=waiting` after ten minutes, which is a
+            # claim about the product rather than about the harness's patience.
+            hud, provenance = wait_for_the_ai(hud_window, hud, seconds=patience)
         report.setdefault("provenance", []).append(provenance)
         if provenance:
             report["provenance_counts"] = report.get("provenance_counts", {})
