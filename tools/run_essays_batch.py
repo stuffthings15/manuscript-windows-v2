@@ -973,8 +973,38 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
             timeout=30.0,
             what="the HUD to leave the loading view",
         )
-        found_hud = hud_window(8.0) if settled else None
-        button = replace_button(found_hud or hud) if settled else None
+        # Then wait for the HUD WINDOW itself, not just for the view to settle.
+        #
+        # This is the actual cause of "no Replace button", found on 2026-08-30
+        # once the failure started reporting what the tree held. BOTH failures
+        # in the reproduction carried `hud_found=False` - `hud_window(8.0)` had
+        # not found the window - and on one of them the stale control it fell
+        # back to DID contain 'Replace text in source box. Local AI | CUDA'. The
+        # button existed. `replace_button` had looked a moment too early and the
+        # diagnostic, running milliseconds later, found it.
+        #
+        # So the HUD briefly leaves the desktop between sections, and one look
+        # taken during that gap ended the run. Waiting for the view to leave
+        # "loading" was necessary and not sufficient: the published state can
+        # say `view=card, replace_enabled=True` while the window itself is
+        # momentarily absent, which is exactly what both failures reported.
+        #
+        # Polling for both together also removes the stale-control fallback,
+        # which is what made this present as two different bugs - sometimes the
+        # old control still answered and sometimes it was empty.
+        found_hud = None
+        button = None
+        if settled:
+            deadline = time.monotonic() + 30.0
+            while True:
+                found_hud = hud_window(4.0)
+                if found_hud is not None:
+                    button = replace_button(found_hud)
+                    if button is not None:
+                        break
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(1.0)
         if button is None:
             # Say what WAS there, not only what was missing.
             #
