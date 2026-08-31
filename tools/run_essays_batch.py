@@ -313,6 +313,45 @@ def section_provenance(hud) -> str:
     return ""
 
 
+def _hud_window_candidates() -> str:
+    """Every window whose title mentions Manuscript, visible or not.
+
+    `hud_found=False` means the lookup skipped it, and there are two very
+    different reasons: the window is GONE, or it is present but not visible.
+    EnumWindows-based lookups filter on IsWindowVisible, so a hidden HUD reads
+    exactly like a closed one, and the fix for each is opposite - wait longer,
+    or stop requiring visibility.
+
+    That ambiguity survived a 30-second poll on 2026-08-30: both remaining
+    failures still reported hud_found=False, which rules out a repaint gap and
+    leaves these two open. Never raises.
+    """
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        proto = ctypes.WINFUNCTYPE(
+            ctypes.c_bool, ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)
+        )
+        seen: list[str] = []
+
+        def callback(hwnd, _result):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                buffer = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buffer, length + 1)
+                title = buffer.value
+                if "Manuscript" in title:
+                    visible = bool(user32.IsWindowVisible(hwnd))
+                    seen.append(f"{title[:40]!r} visible={visible}")
+            return True
+
+        user32.EnumWindows(proto(callback), ctypes.byref(ctypes.c_int(0)))
+        return "[" + ", ".join(seen) + "]" if seen else "<no Manuscript window at all>"
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not mask the failure
+        return f"<candidate scan failed: {type(exc).__name__}>"
+
+
 def _hud_tree_summary(hud, limit: int = 14) -> str:
     """The buttons actually present in the HUD, for a failure that found none.
 
@@ -1021,6 +1060,7 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
                 + harness_state.describe(harness_state.read_state())
                 + f"; hud_found={found_hud is not None}"
                 + f"; tree={_hud_tree_summary(found_hud or hud)}"
+                + f"; windows={_hud_window_candidates()}"
             )
             break
         if not button.IsEnabled:
