@@ -467,6 +467,14 @@ def _replace_word_document_range(
         else:
             range_start = int(record.selection_start or 0)
             range_end = int(record.selection_end or 0)
+            # A selection that runs to the end of the document carries the
+            # trailing paragraph marks with it, and `visible_text` above has
+            # already dropped them, so the captured end sits a few characters
+            # past this text while pointing at the same place. Clamping is safe
+            # because it is not the guard: the text equality below still has to
+            # hold, and it refuses anything this clamp got wrong. Refusing here
+            # instead cost a writer every correction after the first.
+            range_end = min(range_end, len(visible_text))
             live_digest = hashlib.sha256(visible_text.encode("utf-8")).hexdigest()
             if (
                 live_digest != record.document_digest

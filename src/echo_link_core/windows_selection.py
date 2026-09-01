@@ -1049,6 +1049,15 @@ def _text_digest(text: str) -> str:
         for character in value
         if character not in _COM_ONLY_CHARACTERS
     )
+    # Trailing paragraph marks, for the same reason as everything above: the
+    # replacement side hashes `_word_visible_text_and_spans`, which ends with
+    # `value[:len(value.rstrip("\n"))]`. Leaving them here made a document that
+    # ends in a blank line - which is most documents a writer saves - hash
+    # differently on the two sides while nobody had touched it. On 2026-09-01
+    # that refused every correction after the first with "The document changed
+    # since it was captured" and collapsed the review to "0 of 0", on a live
+    # digest that was provably identical 29 seconds apart.
+    value = value.rstrip("\n")
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
