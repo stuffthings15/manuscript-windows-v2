@@ -84,6 +84,40 @@ def _judged_run_completed(source_stem: str) -> str:
     return ""
 
 
+def _release_the_judge() -> None:
+    """Evict the 27B judge from VRAM as soon as it has answered.
+
+    THE ROOT CAUSE of the tone spread, and it was self-inflicted. The judge asks
+    ollama for `keep_alive: 300s`, so a 27B model sits in VRAM for five minutes
+    after the last section is judged. The next tone run then cannot fit the 12b
+    correction pack, cold-loads it, exceeds the 30-second timeout and the
+    45-second retry, and the adaptive runtime hands the section to the ~4B
+    standby. A 4B rewrite fails the meaning guards, a failed guard falls back to
+    deterministic rules, and rules cannot do tone at all.
+
+    That is why the same essay scored 35.7 in an isolated run and 7.1 inside the
+    release tier, where six tones were judged back to back: the tier poisoned
+    each run with the previous run's judge.
+
+    Never raises. Failing to unload costs a slow next run; failing the
+    measurement over it would cost the run outright.
+    """
+    try:
+        import urllib.request
+
+        body = json.dumps({"model": JUDGE_MODEL, "keep_alive": 0}).encode()
+        urllib.request.urlopen(
+            urllib.request.Request(
+                "http://127.0.0.1:11434/api/generate",
+                body,
+                {"Content-Type": "application/json"},
+            ),
+            timeout=60,
+        ).read()
+    except Exception:  # noqa: BLE001 - an unload failure must not lose the run
+        pass
+
+
 def measure(tone: str, log: Path) -> tuple[float | None, str]:
     """(pass percentage, reason it is missing). Never both.
 
@@ -161,6 +195,7 @@ def measure(tone: str, log: Path) -> tuple[float | None, str]:
         cwd=ROOT, capture_output=True, text=True,
         encoding="utf-8", errors="replace", timeout=3600,
     )
+    _release_the_judge()
     try:
         report = json.loads(verdict.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
