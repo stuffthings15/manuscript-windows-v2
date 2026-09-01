@@ -52,6 +52,10 @@ import autoresearch_status  # noqa: E402
 CORPUS = ROOT / "test-corpus" / "error-riddled-20-docx"
 JUDGE_MODEL = "gemma3:27b"
 
+# The pack a tone measurement must be served by, end to end. Anything
+# smaller is a different product answering, not a slower one.
+REQUIRED_PACK = "gemma4-12b-qat-v1"
+
 # Three essays, like the gate. The judge only reads the FIRST one - that is the
 # gate's own design, recorded there: a stall in essay 2 or 3 says nothing about
 # the number being taken. The other two still run, because the tone has to
@@ -148,7 +152,25 @@ def measure(tone: str, log: Path) -> tuple[float | None, str]:
     stale = autoresearch_run._stale_reason()
     if stale:
         return None, f"stale app, {stale}"
+
+    # Check the pack BEFORE the batch, not only after it.
+    #
+    # The after-the-fact guard below is correct but expensive: on
+    # 2026-09-01 it refused five of six tone baselines, each after driving
+    # Word for about twenty-five minutes. Two hours of measurement produced
+    # one number.
+    #
+    # The planner takes a VRAM snapshot per request and picks a smaller pack
+    # when headroom is short, and headroom is short whenever another GPU
+    # application is running - ChatGPT.exe was on the GPU during those runs.
+    # So the condition is visible at prewarm, before a single essay opens.
     mark = autoresearch_run._log_length()
+    prewarmed = autoresearch_run._served_pack(0)[0]
+    if prewarmed not in ("unknown", REQUIRED_PACK):
+        return None, (
+            f"the app prewarmed {prewarmed}, not {REQUIRED_PACK}; "
+            f"free the GPU before measuring tone"
+        )
     with log.open("w", encoding="utf-8") as stream:
         subprocess.run(
             [

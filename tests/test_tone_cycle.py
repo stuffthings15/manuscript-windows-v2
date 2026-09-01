@@ -230,3 +230,59 @@ def test_every_pack_that_served_is_reported_not_just_the_last(tmp_path, monkeypa
     # The old helper sees only the last, which is exactly why it could not
     # catch this.
     assert autoresearch_run._served_pack(0)[0] == "gemma4-12b-qat-v1"
+
+
+def test_a_downgraded_pack_is_refused_before_the_batch_runs(monkeypatch):
+    """Fail fast, at prewarm, not after twenty-five minutes of Word.
+
+    The post-run guard refused five of six tone baselines on 2026-09-01, each
+    after driving Word for about twenty-five minutes - two hours of machine time
+    for one number. The condition is visible the moment the app prewarms, so
+    there is no reason to spend the essays first.
+    """
+    import autoresearch_run
+    import autoresearch_tone_cycle as cycle
+
+    ran = []
+    monkeypatch.setattr(autoresearch_run, "_restart_word", lambda: None)
+    monkeypatch.setattr(autoresearch_run, "_stale_reason", lambda: "")
+    monkeypatch.setattr(autoresearch_run, "_log_length", lambda: 0)
+    monkeypatch.setattr(
+        autoresearch_run, "_served_pack", lambda _m: ("gemma4-e4b-qat-v1", "m", "cuda")
+    )
+    monkeypatch.setattr(cycle.subprocess, "run", lambda *a, **k: ran.append(a))
+
+    percent, reason = cycle.measure("Friendly", Path("build/unused.log"))
+
+    assert percent is None
+    assert "e4b" in reason and cycle.REQUIRED_PACK in reason
+    # Only the app restart may have run. The essay batch must not.
+    assert not any("run_essays_batch" in str(a) for a in ran)
+
+
+def test_an_unknown_pack_does_not_block_the_run(monkeypatch):
+    """A log that cannot be read must not become a permanent refusal.
+
+    `_served_pack` returns "unknown" when it cannot find a plan line, which
+    happens on a fresh log. Treating that as a downgrade would make the cycle
+    refuse every run on a clean machine - a guard that fails closed on missing
+    evidence stops all work rather than protecting it.
+    """
+    import autoresearch_run
+    import autoresearch_tone_cycle as cycle
+
+    monkeypatch.setattr(autoresearch_run, "_restart_word", lambda: None)
+    monkeypatch.setattr(autoresearch_run, "_stale_reason", lambda: "")
+    monkeypatch.setattr(autoresearch_run, "_log_length", lambda: 0)
+    monkeypatch.setattr(
+        autoresearch_run, "_served_pack", lambda _m: ("unknown", "m", "cuda")
+    )
+    monkeypatch.setattr(
+        autoresearch_run, "_packs_that_served", lambda _m: {"gemma4-12b-qat-v1"}
+    )
+    monkeypatch.setattr(cycle.subprocess, "run", lambda *a, **k: None)
+
+    percent, reason = cycle.measure("Friendly", Path("build/unused.log"))
+
+    # It proceeds past the pack check; it stops later for a different reason.
+    assert "prewarmed" not in reason
