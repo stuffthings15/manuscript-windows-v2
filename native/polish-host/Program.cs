@@ -777,11 +777,23 @@ internal sealed class LlamaServerRuntime : IAsyncDisposable
                 "span, actor, negation, obligation, ordering word, paragraph, and factual " +
                 "relationship exactly. Apply the smallest complete correction. Do not think " +
                 "aloud. Thinking is disabled.";
+            // "/no_think" is a QWEN control token, and only Qwen strips it.
+            // Every other family reads it as ordinary text, so it can be
+            // echoed straight into the writer's document. On 2026-09-01, with
+            // gemma4:12b-it-qat behind this host, dictation returned
+            // "Testing, testing. /no_think." into Notepad. The system prompt
+            // above already says thinking is disabled, so nothing is lost by
+            // withholding the token from models that do not understand it.
+            bool understandsNoThink =
+                _configuration.ModelName is not null
+                && _configuration.ModelName.Contains(
+                    "qwen", StringComparison.OrdinalIgnoreCase);
+            string thinkingDirective = understandsNoThink ? "\n/no_think" : string.Empty;
             string user =
                 $"ACTION: {command}\nPROFILE: {profile}\nLANGUAGE: " +
                 $"{(string.IsNullOrWhiteSpace(language) ? "Same as source" : language)}\n" +
                 $"INSTRUCTION: {instruction}\nPROTECTED VALUES:\n{protectedBlock}\n\n" +
-                $"TEXT:\n{text}\n/no_think";
+                $"TEXT:\n{text}{thinkingDirective}";
             object payload = new
             {
                 model = _configuration.ModelName,
