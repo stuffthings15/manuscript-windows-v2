@@ -1581,6 +1581,13 @@ class RewritePalette(QDialog):
         self._ai_ready_messages[suggestion_id] = message
         self._update_series_progress()
         self._render_suggestions()
+        # Hiding a section that came back unchanged slides a DIFFERENT section
+        # under the card, and that one may never have been asked for. Without
+        # this the review simply stops requesting and the remaining sections
+        # are never processed, which is a worse fault than the inconsistency
+        # the hiding fixes. Caught by
+        # test_palette_requests_local_ai_for_each_review_chunk.
+        self._request_ai_proofread_current()
         QTimer.singleShot(0, self._reassert_current_view_size)
         current = self._current_review_suggestion()
         current_id = str(getattr(current, "suggestion_id", ""))
@@ -1920,6 +1927,12 @@ class RewritePalette(QDialog):
         return command
 
     def _tone_selected(self, _tone: str) -> None:
+        # Rebuild the list before reading the current section. Sections the
+        # proofreader left unchanged are hidden in the automatic pass but are
+        # still legitimate tone targets, so choosing a tone brings them back -
+        # and until the rebuild happens the index points at a DIFFERENT
+        # section, which would silently tone the wrong sentence.
+        self._render_suggestions()
         suggestion = self._current_review_suggestion()
         if suggestion is None or self._view not in {"card", "loading"}:
             return
@@ -2073,15 +2086,55 @@ class RewritePalette(QDialog):
                 return True
         return self._ai_attempts.get(self._active_ai_attempt_id) == suggestion_id
 
+    def _declined_ai_request(self, reason: str, suggestion_id: str = "") -> bool:
+        """Say why no AI request was made, and return False for the caller.
+
+        Every silent return from the method below leaves the writer on a card
+        whose Replace is disabled, waiting for an answer nobody asked for.
+        `_open_from_badge` falls through to the card view when this returns
+        False, so the two states are indistinguishable on screen: the badge
+        vanishes and nothing arrives.
+
+        This is the third freeze traced to this one method - two were fixed on
+        2026-08-20 and 2026-08-23, a third on 2026-09-01 - and each diagnosis
+        cost a live reproduction, because the published state says only
+        `ai_requested=0` and cannot say which branch produced it. Naming the
+        branch turns the next occurrence into one line of log.
+
+        Logged at INFO with no document text: only the reason and a truncated
+        opaque id.
+        """
+        # index and count together, because "there is no current section" has
+        # two very different causes and the reason alone cannot separate them:
+        # a review whose list was emptied underneath the card, and a review
+        # whose index walked past the end of a list that is still there.
+        logger.info(
+            "Writing HUD made no AI request: %s (id=%s index=%d sections=%d "
+            "view=%s resolved=%d)",
+            reason,
+            suggestion_id[:16] or "none",
+            self._review_index,
+            len(self._review_suggestions),
+            self._view,
+            len(self._review_resolved),
+        )
+        return False
+
     def _request_ai_proofread_current(self) -> bool:
-        if not self._ai_proofread or self._busy or self._view not in {"card", "loading"}:
-            return False
+        if not self._ai_proofread:
+            return self._declined_ai_request("AI proofread is off")
+        if self._busy:
+            return self._declined_ai_request("the HUD is busy")
+        if self._view not in {"card", "loading"}:
+            return self._declined_ai_request(f"the view is {self._view}")
         suggestion = self._current_review_suggestion()
         if suggestion is None:
-            return False
+            return self._declined_ai_request("there is no current section")
         suggestion_id = str(getattr(suggestion, "suggestion_id", ""))
-        if not suggestion_id or suggestion_id in self._ai_completed_ids:
-            return False
+        if not suggestion_id:
+            return self._declined_ai_request("the section has no id")
+        if suggestion_id in self._ai_completed_ids:
+            return self._declined_ai_request("already completed", suggestion_id)
         if suggestion_id in self._ai_requested_ids and not self._ai_request_in_flight(
             suggestion_id
         ):
@@ -2114,10 +2167,14 @@ class RewritePalette(QDialog):
             )
             self._ai_requested_ids.discard(suggestion_id)
         elif suggestion_id in self._ai_requested_ids:
-            return False
+            return self._declined_ai_request(
+                "already requested and a request is in flight", suggestion_id
+            )
         source = str(getattr(suggestion, "replacement", "")).strip()
         if not source:
-            return False
+            return self._declined_ai_request(
+                "the section has no text to send", suggestion_id
+            )
         command = self._selected_tone_command(automatic=True)
         members = self._tone_batch_ids(suggestion_id, command)
         for member in members:
@@ -2649,11 +2706,29 @@ class RewritePalette(QDialog):
             for suggestion in self._suggestions
             if str(getattr(suggestion, "suggestion_id", "")) not in self._dismissed_ids
         )
-        # All or nothing, deliberately. Hiding sections INDIVIDUALLY was tried
-        # first and broke a real feature: a sentence the proofreader correctly
-        # left alone is still a legitimate target for a tone rewrite, and
-        # removing it took that away. Two tests caught it.
+        # Hiding sections individually was tried once and reverted, because a
+        # sentence the proofreader correctly left alone is still a legitimate
+        # target for a TONE rewrite, and removing it took that away. That
+        # reasoning holds only while a tone is selected, so the rule is now
+        # split rather than abandoned.
         #
+        # Curtis, 2026-09-01: "It needs to be consistent throughout; something
+        # it does in the first section should also be done in the next
+        # sections... applying the correction to one section but not to
+        # another. It's confusing for the user." In plain proofread an
+        # unchanged section offers the original text as its own correction, so
+        # the card shows nothing underlined and Replace appears to do nothing.
+        # Three of eleven sections behaved that way in his run, between
+        # sections that corrected normally.
+        #
+        # A section still waiting for its AI result is never hidden by this -
+        # `_is_finished_and_unchanged` requires the answer to have arrived - so
+        # nothing is skipped before it has been looked at. The requirement is
+        # that every section is processed, not that every section is displayed.
+        if self._selected_tone_command(automatic=True) in ("", "Proofread"):
+            return tuple(
+                item for item in offered if not self._is_finished_and_unchanged(item)
+            )
         # A document where EVERY remaining section came back from the AI
         # untouched is the case worth acting on: there is nothing to show and
         # nothing to accept, and presenting ten such sections is what let a

@@ -2204,7 +2204,17 @@ def test_palette_requests_local_ai_for_each_review_chunk(app):
     palette.show_sentence_result(
         second_attempt, second_id, "Fourth.", "AI proofread ready."
     )
-    assert palette.card_position.text() == "2 of 2"
+    # "1 of 2", not "2 of 2": the first chunk came back from the AI unchanged,
+    # so it is not shown. Curtis, 2026-09-01: "applying the correction to one
+    # section but not to another. It's confusing for the user." In the
+    # automatic proofread every card now carries a real change, so Replace
+    # always does something visible.
+    #
+    # The chunk is skipped only for DISPLAY. The assertions above are the ones
+    # that matter and they are unchanged: both chunks were sent to the AI, with
+    # their own ids, and the second card shows the second chunk. Hiding a
+    # section must never stop the next one being processed.
+    assert palette.card_position.text() == "1 of 2"
     assert palette.before_text.toPlainText() == "Four."
     assert palette.after_text.toPlainText() == "Fourth."
     palette.finish_choice()
