@@ -2058,6 +2058,21 @@ class RewritePalette(QDialog):
         self._ai_failure_messages.pop(suggestion_id, None)
         self._ai_ready_messages[suggestion_id] = message
 
+    def _ai_request_in_flight(self, suggestion_id: str) -> bool:
+        """Whether a live attempt is actually going to answer for this section.
+
+        A section is "requested" only while some attempt that includes it is
+        still running. `_ai_attempts` holds the live ones; `_ai_batch_members`
+        says which sections each attempt speaks for, and a batch answers for
+        every member, not only the one whose card is showing.
+        """
+        for attempt, members in self._ai_batch_members.items():
+            if suggestion_id in members and (
+                attempt in self._ai_attempts or attempt == self._active_ai_attempt_id
+            ):
+                return True
+        return self._ai_attempts.get(self._active_ai_attempt_id) == suggestion_id
+
     def _request_ai_proofread_current(self) -> bool:
         if not self._ai_proofread or self._busy or self._view not in {"card", "loading"}:
             return False
@@ -2065,11 +2080,40 @@ class RewritePalette(QDialog):
         if suggestion is None:
             return False
         suggestion_id = str(getattr(suggestion, "suggestion_id", ""))
-        if (
-            not suggestion_id
-            or suggestion_id in self._ai_requested_ids
-            or suggestion_id in self._ai_completed_ids
+        if not suggestion_id or suggestion_id in self._ai_completed_ids:
+            return False
+        if suggestion_id in self._ai_requested_ids and not self._ai_request_in_flight(
+            suggestion_id
         ):
+            # The mark is STALE and this is the deadlock it caused.
+            #
+            # A tone batch marks every member requested up front. If that batch
+            # is then discarded - the model merges or splits the paragraphs, the
+            # request fails, the attempt is cancelled - some paths clear the
+            # marks and some do not. The failure path clears members[1:] and
+            # leaves the first. Whichever member keeps a stale mark can never be
+            # requested again, because this method refuses any id already marked,
+            # so the card sits on it forever.
+            #
+            # Observed 2026-09-01 and reported by Curtis as a complete freeze:
+            # the HUD advanced 20 of 22 -> 21 of 22 with pending=2, then made no
+            # further request for nine hours. State was view=card, busy=false,
+            # provenance=waiting, sections_ready 0 of 2 - waiting on work nobody
+            # had asked for. The counters said so plainly, ai_completed=20
+            # against ai_requested=16.
+            #
+            # Rather than chase each path that can leave a mark behind - two have
+            # been fixed already, on 2026-08-20 and 2026-08-23, and this is the
+            # third - the mark is treated as evidence only while a request is
+            # actually in flight. Nothing running means nothing is coming, so
+            # ask again.
+            logger.warning(
+                "Writing HUD re-requesting section %s: marked requested with "
+                "no request in flight",
+                suggestion_id[:16],
+            )
+            self._ai_requested_ids.discard(suggestion_id)
+        elif suggestion_id in self._ai_requested_ids:
             return False
         source = str(getattr(suggestion, "replacement", "")).strip()
         if not source:
