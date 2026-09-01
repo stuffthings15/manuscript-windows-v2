@@ -18,7 +18,14 @@ from __future__ import annotations
 import hashlib
 
 from echo_link_core.insertion import _word_visible_text_and_spans
-from echo_link_core.windows_selection import _text_digest
+from echo_link_core.windows_selection import _text_digest, normalize_captured_text
+
+
+def _text_normalized(text: str) -> str:
+    """The capture text in the one form both sides agree on."""
+    value = normalize_captured_text(text)
+    value = value.replace(chr(13) + chr(10), chr(10)).replace(chr(13), chr(10))
+    return value.rstrip(chr(10))
 
 
 def _live_digest(word_com_text: str) -> str:
@@ -45,3 +52,41 @@ def test_a_real_edit_still_changes_the_digest():
     captured = _text_digest("First line.\rSecond line.\r\r")
     edited = _live_digest("First line.\rSecond LINE.\r\r")
     assert captured != edited
+
+
+def test_automatic_list_labels_are_reconstructed_from_com_text():
+    """Word COM omits automatic numbering; UI Automation reports it as text.
+
+    On 2026-09-01 `Unit 1 Discussion.docx` had two automatically numbered
+    paragraphs, '1.' and '2.'. The capture read 3524 characters and COM read
+    3518, the six being those labels with their separating tabs, and the first
+    difference was at offset 643 where the capture held the '1' of a label and
+    the document held the 'I' that begins the item. Every correction was
+    refused and the review collapsed to "0 of 0".
+    """
+    # What COM returns: no numbering anywhere in the text.
+    com_text = "Intro.\rIt starts here.\rIt continues.\r"
+    # What accessibility returns, and therefore what the capture recorded.
+    uia_text = "Intro.\r1.\tIt starts here.\r2.\tIt continues.\r"
+    labels = {7: "1.\t", 23: "2.\t"}
+
+    visible, spans = _word_visible_text_and_spans(com_text, labels)
+
+    assert visible == _text_normalized(uia_text)
+    assert _text_digest(uia_text) == hashlib.sha256(
+        visible.encode("utf-8")
+    ).hexdigest()
+    # A label occupies no COM characters, so its span is empty. That is what
+    # lets the replacement path refuse a range that would write over one.
+    assert spans[7] == (7, 7)
+    assert spans[8] == (7, 7)
+    # Real text either side of a label still maps to its own COM offset.
+    assert spans[0] == (0, 1)
+    assert spans[10][1] - spans[10][0] == 1
+
+
+def test_a_document_without_lists_is_unchanged_by_the_label_path():
+    com_text = "First line.\rSecond line.\r"
+    assert _word_visible_text_and_spans(com_text, {}) == (
+        _word_visible_text_and_spans(com_text)
+    )

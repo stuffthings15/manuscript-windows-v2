@@ -289,12 +289,60 @@ def record_uses_word_document_adapter(record: SelectionRecord) -> bool:
     )
 
 
-def _word_visible_text_and_spans(text: str) -> tuple[str, tuple[tuple[int, int], ...]]:
+def _word_automatic_list_labels(document, content) -> dict[int, str]:
+    """Where Word's automatic list labels sit, keyed by offset into Content.Text.
+
+    Word COM's `Range.Text` omits automatic numbering entirely; UI Automation
+    reports it as ordinary text. The capture reads through UI Automation and the
+    replacement writes through COM, so on any document with an automatic list
+    the two disagree about every offset after the first list item.
+
+    On 2026-09-01 that made a two-item numbered list uncorrectable: the capture
+    held 3524 characters against COM's 3518, the six being '1.' and '2.' with
+    their separating tabs, and the first difference was at offset 643 where the
+    capture had the '1' of a label and the document had the 'I' that starts the
+    item. Every correction was refused and the review collapsed to "0 of 0".
+
+    The label is followed by a tab because that is the separator Word's default
+    list templates use and what UI Automation reported for this document. A list
+    whose template separates differently will reconstruct one character short,
+    which the text equality check downstream refuses; it does not misplace an
+    edit.
+    """
+    labels: dict[int, str] = {}
+    content_start = int(getattr(content, "Start", 0) or 0)
+    try:
+        paragraphs = document.Paragraphs
+    except Exception:  # noqa: BLE001 - COM raises undocumented types here
+        return labels
+    for paragraph in paragraphs:
+        try:
+            paragraph_range = paragraph.Range
+            label = str(paragraph_range.ListFormat.ListString or "")
+            offset = int(paragraph_range.Start) - content_start
+        except Exception:  # noqa: BLE001 - COM raises undocumented types here
+            continue
+        if label and offset >= 0:
+            labels[offset] = f"{label}\t"
+    return labels
+
+
+def _word_visible_text_and_spans(
+    text: str,
+    labels: dict[int, str] | None = None,
+) -> tuple[str, tuple[tuple[int, int], ...]]:
     visible: list[str] = []
     spans: list[tuple[int, int]] = []
     raw = str(text or "")
     index = 0
     while index < len(raw):
+        # An automatic label occupies no characters in the COM text, so its
+        # span is empty. That is what marks it: a replacement whose range
+        # touches an empty span is refused below rather than written into the
+        # wrong place, because there is no real text under it to replace.
+        for character in (labels or {}).get(index, ""):
+            visible.append(character)
+            spans.append((index, index))
         character = raw[index]
         if character in _WORD_UIA_OMITTED_CHARACTERS:
             index += 1
@@ -457,7 +505,9 @@ def _replace_word_document_range(
             )
             return False
         content = document.Content
-        visible_text, spans = _word_visible_text_and_spans(content.Text)
+        visible_text, spans = _word_visible_text_and_spans(
+            content.Text, _word_automatic_list_labels(document, content)
+        )
         captured_text = _canonical_word_text(expected_document_text).rstrip("\n")
         record_text = _canonical_word_text(record.text).rstrip("\n")
         if record_covers_entire_document(record):
@@ -530,6 +580,17 @@ def _replace_word_document_range(
             return False
         absolute_start = range_start + start
         absolute_end = range_start + end
+        if any(
+            spans[position][0] == spans[position][1]
+            for position in range(absolute_start, absolute_end)
+        ):
+            # An automatic list label. Word owns those characters; they are not
+            # in the document text and cannot be replaced through a range.
+            logger.warning(
+                "Word COM range replacement refused a range covering an "
+                "automatic list label"
+            )
+            return False
         raw_start = spans[absolute_start][0]
         raw_end = spans[absolute_end - 1][1]
         raw_range = str(content.Text or "")[raw_start:raw_end]
@@ -555,8 +616,13 @@ def _replace_word_document_range(
                 + _canonical_word_text(new_text)
                 + captured_text[end:]
             )
+            # Recomputed, not reused: applying an edit can renumber a list,
+            # and a digest taken with the old labels would refuse the next
+            # correction for the very reason this function exists.
+            updated_content = document.Content
             updated_document_text, _updated_spans = _word_visible_text_and_spans(
-                document.Content.Text
+                updated_content.Text,
+                _word_automatic_list_labels(document, updated_content),
             )
             return replace(
                 record,
