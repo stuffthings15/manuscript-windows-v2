@@ -289,7 +289,9 @@ def record_uses_word_document_adapter(record: SelectionRecord) -> bool:
     )
 
 
-def _word_automatic_list_labels(document, content) -> dict[int, str]:
+def _word_automatic_list_labels(
+    document, content, captured_text: str = ""
+) -> dict[int, str]:
     """Where Word's automatic list labels sit, keyed by offset into Content.Text.
 
     Word COM's `Range.Text` omits automatic numbering entirely; UI Automation
@@ -308,22 +310,78 @@ def _word_automatic_list_labels(document, content) -> dict[int, str]:
     whose template separates differently will reconstruct one character short,
     which the text equality check downstream refuses; it does not misplace an
     edit.
+
+    Offsets are accumulated by walking the paragraphs in order and adding up
+    their lengths, NOT taken from `Range.Start`. Word's range coordinates are a
+    different space from indices into `Content.Text` and the two drift apart:
+    measured on the document above, a paragraph whose range started at 751 began
+    at about 641 in the text, 110 characters out, so a label keyed by
+    `Range.Start` landed in the middle of an unrelated word.
+
+    Each paragraph is checked against the text it should occupy before its
+    label is recorded. If the paragraphs do not tile `Content.Text` exactly -
+    tables, text boxes and fields can all break that - this returns nothing and
+    the caller reconstructs no labels at all. A missing label refuses the edit;
+    a misplaced one would corrupt the document.
     """
     labels: dict[int, str] = {}
-    content_start = int(getattr(content, "Start", 0) or 0)
+    raw = str(getattr(content, "Text", "") or "")
+    captured = str(captured_text or "")
+    if not captured:
+        # Nothing to align the labels against, so nothing can be verified.
+        return {}
+    capture_offset = 0
     try:
         paragraphs = document.Paragraphs
     except Exception:  # noqa: BLE001 - COM raises undocumented types here
-        return labels
+        return {}
+    offset = 0
     for paragraph in paragraphs:
         try:
             paragraph_range = paragraph.Range
+            text = str(paragraph_range.Text or "")
             label = str(paragraph_range.ListFormat.ListString or "")
-            offset = int(paragraph_range.Start) - content_start
         except Exception:  # noqa: BLE001 - COM raises undocumented types here
-            continue
-        if label and offset >= 0:
-            labels[offset] = f"{label}\t"
+            return {}
+        if raw[offset : offset + len(text)] != text:
+            logger.warning(
+                "Word automatic list labels not reconstructed: paragraph %d "
+                "does not sit at offset %d",
+                len(labels) + 1,
+                offset,
+            )
+            return {}
+        if label:
+            # The separator is READ from the capture, never assumed.
+            #
+            # Three assumptions failed here in a row on 2026-09-01. A tab was
+            # hard-coded and the capture held a space. Word's own setting was
+            # then checked and says wdTrailingTab for this very list, so
+            # trusting it would have been wrong in the same way: accessibility
+            # does not report what the list template stores.
+            #
+            # Whatever produced the captured text is the only authority on what
+            # it contains, so the label is located in it and the character that
+            # follows is taken as it is. A capture that does not hold this label
+            # here reconstructs nothing at all, because a refused edit costs one
+            # correction and a misplaced one costs the document.
+            found = captured.find(label, capture_offset)
+            if found < 0 or found - capture_offset > len(label) + 2:
+                logger.warning(
+                    "Word automatic list labels not reconstructed: label %d "
+                    "is not in the captured text near offset %d",
+                    len(labels) + 1,
+                    capture_offset,
+                )
+                return {}
+            separator = captured[found + len(label) : found + len(label) + 1]
+            if separator not in (" ", "\t"):
+                separator = ""
+            labels[offset] = f"{label}{separator}"
+            capture_offset = found + len(label) + len(separator)
+        canonical = text.replace("\r\n", "\n").replace("\r", "\n")
+        offset += len(text)
+        capture_offset += len(canonical)
     return labels
 
 
@@ -505,10 +563,13 @@ def _replace_word_document_range(
             )
             return False
         content = document.Content
-        visible_text, spans = _word_visible_text_and_spans(
-            content.Text, _word_automatic_list_labels(document, content)
-        )
+        # The capture is canonicalised first because the list labels are read
+        # out of it, not guessed. See _word_automatic_list_labels.
         captured_text = _canonical_word_text(expected_document_text).rstrip("\n")
+        visible_text, spans = _word_visible_text_and_spans(
+            content.Text,
+            _word_automatic_list_labels(document, content, captured_text),
+        )
         record_text = _canonical_word_text(record.text).rstrip("\n")
         if record_covers_entire_document(record):
             range_start = 0
@@ -580,12 +641,59 @@ def _replace_word_document_range(
             return False
         absolute_start = range_start + start
         absolute_end = range_start + end
-        if any(
-            spans[position][0] == spans[position][1]
-            for position in range(absolute_start, absolute_end)
+
+        def _is_label(position: int) -> bool:
+            """A reconstructed list label: present in the capture, absent in COM."""
+            return spans[position][0] == spans[position][1]
+
+        # A section that begins at a list item begins with the item's number,
+        # because the capture contains it, so its range covers characters Word
+        # owns and no range can replace. Refusing the whole correction was the
+        # first attempt and it is too blunt: measured 2026-09-01, it made every
+        # numbered paragraph permanently uncorrectable, which the writer saw as
+        # one section silently declining to fix anything.
+        #
+        # The number is trimmed off the edit instead, and only when the rewrite
+        # left it alone. What remains is the writer's own sentence, which is
+        # ordinary text at ordinary offsets. A rewrite that tried to change the
+        # number itself keeps the label inside the range and is still refused
+        # below, because that edit genuinely cannot be expressed.
+        leading = 0
+        while (
+            absolute_start + leading < absolute_end
+            and _is_label(absolute_start + leading)
         ):
-            # An automatic list label. Word owns those characters; they are not
-            # in the document text and cannot be replaced through a range.
+            leading += 1
+        if leading and expected_text[:leading] == new_text[:leading]:
+            start += leading
+            absolute_start += leading
+            expected_text = expected_text[leading:]
+            new_text = new_text[leading:]
+
+        trailing = 0
+        while (
+            absolute_end - 1 - trailing >= absolute_start
+            and _is_label(absolute_end - 1 - trailing)
+        ):
+            trailing += 1
+        if trailing and expected_text[-trailing:] == new_text[-trailing:]:
+            end -= trailing
+            absolute_end -= trailing
+            expected_text = expected_text[:-trailing]
+            new_text = new_text[:-trailing]
+
+        if absolute_end <= absolute_start:
+            logger.warning(
+                "Word COM range replacement refused a range that is only an "
+                "automatic list label"
+            )
+            return False
+        if any(
+            _is_label(position) for position in range(absolute_start, absolute_end)
+        ):
+            # A label inside the edit, not at its edges. Word owns those
+            # characters; they are not in the document text and cannot be
+            # replaced through a range.
             logger.warning(
                 "Word COM range replacement refused a range covering an "
                 "automatic list label"
@@ -619,10 +727,20 @@ def _replace_word_document_range(
             # Recomputed, not reused: applying an edit can renumber a list,
             # and a digest taken with the old labels would refuse the next
             # correction for the very reason this function exists.
+            #
+            # Aligned against `updated_text`, the capture as it is AFTER this
+            # edit, never against `captured_text`. Using the pre-edit capture
+            # walked the new document while matching the old text, so the
+            # labels were rejected and the digest written here did not describe
+            # the document. Measured 2026-09-01: sections 1 and 2 applied, then
+            # the third was refused with the live text 102 characters longer
+            # than a record whose two edits had added six.
             updated_content = document.Content
             updated_document_text, _updated_spans = _word_visible_text_and_spans(
                 updated_content.Text,
-                _word_automatic_list_labels(document, updated_content),
+                _word_automatic_list_labels(
+                    document, updated_content, updated_text
+                ),
             )
             return replace(
                 record,

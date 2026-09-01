@@ -17,7 +17,10 @@ from __future__ import annotations
 
 import hashlib
 
-from echo_link_core.insertion import _word_visible_text_and_spans
+from echo_link_core.insertion import (
+    _word_automatic_list_labels,
+    _word_visible_text_and_spans,
+)
 from echo_link_core.windows_selection import _text_digest, normalize_captured_text
 
 
@@ -90,3 +93,104 @@ def test_a_document_without_lists_is_unchanged_by_the_label_path():
     assert _word_visible_text_and_spans(com_text, {}) == (
         _word_visible_text_and_spans(com_text)
     )
+
+
+class _FakeRange:
+    def __init__(self, text, label):
+        self.Text = text
+        self.ListFormat = type("_ListFormat", (), {"ListString": label})()
+        # Deliberately wrong, and deliberately present. Word's range
+        # coordinates are a different space from indices into Content.Text: on
+        # the failing document a paragraph whose Range.Start was 751 began at
+        # 641 in the text, 110 characters out, so a label keyed by Range.Start
+        # landed inside an unrelated word. Reading this attribute is the bug
+        # this fixture exists to catch.
+        self.Start = 10_000
+
+
+class _FakeParagraph:
+    def __init__(self, text, label=""):
+        self.Range = _FakeRange(text, label)
+
+
+class _FakeDocument:
+    def __init__(self, paragraphs):
+        self.Paragraphs = paragraphs
+
+
+class _FakeContent:
+    def __init__(self, text):
+        self.Text = text
+        self.Start = 0
+
+
+def _document(*paragraphs):
+    return _FakeDocument(list(paragraphs))
+
+
+def test_label_offsets_accumulate_rather_than_trusting_range_start():
+    paragraphs = _document(
+        _FakeParagraph("Intro.\r"),
+        _FakeParagraph("It starts here.\r", "1."),
+        _FakeParagraph("It continues.\r", "2."),
+    )
+    content = _FakeContent("Intro.\rIt starts here.\rIt continues.\r")
+    capture = "Intro.\n1.\tIt starts here.\n2.\tIt continues."
+
+    assert _word_automatic_list_labels(paragraphs, content, capture) == {
+        7: "1.\t",
+        23: "2.\t",
+    }
+
+
+def test_the_separator_is_read_from_the_capture_not_assumed():
+    """Three assumptions about the separator failed in a row on 2026-09-01.
+
+    A tab was hard-coded and the capture held a space. Word's own
+    ListLevel.TrailingCharacter was then read and reports wdTrailingTab for
+    that very list, so trusting it would have been wrong in the same way:
+    accessibility does not report what the list template stores. Only the
+    capture knows what the capture contains.
+    """
+    paragraphs = _document(
+        _FakeParagraph("Intro.\r"),
+        _FakeParagraph("It starts here.\r", "1."),
+    )
+    content = _FakeContent("Intro.\rIt starts here.\r")
+
+    spaced = _word_automatic_list_labels(
+        paragraphs, content, "Intro.\n1. It starts here."
+    )
+    tabbed = _word_automatic_list_labels(
+        paragraphs, content, "Intro.\n1.\tIt starts here."
+    )
+
+    assert spaced == {7: "1. "}
+    assert tabbed == {7: "1.\t"}
+
+
+def test_labels_are_refused_when_paragraphs_do_not_tile_the_text():
+    """A missing label refuses the edit; a misplaced one would corrupt it."""
+    paragraphs = _document(
+        _FakeParagraph("Intro.\r"),
+        _FakeParagraph("A paragraph that is not in the content.\r", "1."),
+    )
+    content = _FakeContent("Intro.\rSomething else entirely.\r")
+    capture = "Intro.\n1.\tA paragraph that is not in the content."
+
+    assert _word_automatic_list_labels(paragraphs, content, capture) == {}
+
+
+def test_labels_are_refused_when_the_capture_does_not_hold_them():
+    paragraphs = _document(
+        _FakeParagraph("Intro.\r"),
+        _FakeParagraph("It starts here.\r", "1."),
+    )
+    content = _FakeContent("Intro.\rIt starts here.\r")
+
+    # A capture with no numbering in it at all cannot be aligned against.
+    assert _word_automatic_list_labels(
+        paragraphs, content, "Intro.\nIt starts here."
+    ) == {}
+    # And neither can a missing capture.
+    assert _word_automatic_list_labels(paragraphs, content, "") == {}
