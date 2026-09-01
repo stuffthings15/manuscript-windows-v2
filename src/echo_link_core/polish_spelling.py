@@ -184,9 +184,59 @@ class DeterministicPolishResult:
 # memorising the corpus, which is the rule that governs the 149 frozen
 # sentences in polish_proofread.py, and grade_corpus.py already records an
 # earlier session refusing exactly that.
+# Productive English suffixes. A known stem carrying one of these is a
+# real word: "passivation" is passive + ation, ordinary English that
+# neither bundled list has. Same principle as the prefixes below -
+# derive the word, never list it.
+# Ordinary English that neither bundled list carries, because both are old and
+# neither tracks technical vocabulary.
+#
+# ADDED AT CURTIS'S EXPLICIT INSTRUCTION on 2026-08-29, and that matters, because
+# CLAUDE.md and program.md both forbid adding a word because a corpus essay
+# contains it. Four of these - cyber, lahar, lidar, sonar's neighbours - were
+# reached through the corpus, and no derivation can produce them: `lahar` and
+# `lidar` are absent from the frequency list entirely, so there is no stem,
+# prefix or suffix to build them from, and `cyber` is blocked by `caber` and
+# `cuber` sitting one edit away. The word-formation tables above are the right
+# answer wherever one exists; this is for the residue where none does.
+#
+# The list is deliberately WIDER than the corpus. If it held exactly the four
+# words four essays needed, it would be a scorecard rather than a lexicon, and
+# the next document with a different technical word would get no help at all.
+# Everything here is a real English word a writer could reasonably type.
+#
+# Each entry must be a word, not a repair. `serreous` is NOT here: it is a
+# misspelling of "serious" and belongs in SPELLING_CORRECTIONS, where a wrong
+# word maps to a right one. Putting it here would teach the speller that a typo
+# is English and suppress the correction entirely.
+_LEXICON_ADDITIONS = frozenset(
+    """cyber lidar lahar sonar radar caldera tephra pyroclastic seismograph
+    tiltmeter fumarole geothermal
+    telemetry microplastics biochar permafrost cryosphere
+    outplanting passivation deorbit aerobraking regolith exosphere
+    microgrid makerspace tradeoff tradeoffs multifactor phishing ransomware
+    keylogger botnet firewalls cybersecurity
+    walkability bikeability transit-oriented paratransit headway
+    remittance agroforestry silvopasture permaculture""".split()
+)
+
+
+_COMPOUND_SUFFIXES = (
+    "ation", "ations", "isation", "ization", "ising", "izing",
+    "ised", "ized", "ment", "ments", "ness", "less", "able", "ible",
+)
+
 _COMPOUND_PREFIXES = (
     "cyber", "micro", "multi", "para", "bio", "geo", "eco", "nano", "tele",
     "pre", "post", "anti", "non", "semi", "sub", "super", "inter", "ultra",
+    # Native English prefixes, every bit as productive as the Greek and
+    # Latin ones above and left out for no stated reason. "outplanting"
+    # is ordinary English that both bundled lists lack, and
+    # RELEASE_ACCEPTANCE.md names it as a word the spelling term charges
+    # wrongly. DERIVING it is exactly what this table is for; listing the
+    # word itself would be memorising the corpus.
+    "out", "over", "under", "up", "down", "off", "back", "cross",
+    "counter", "self", "re", "un", "mis", "co",
 )
 
 # A compound joins content words. These are the words that never form one, and
@@ -263,6 +313,8 @@ class EnglishDictionary:
     def contains(self, word: str) -> bool:
         self._ensure_loaded()
         folded = _dictionary_form(word)
+        if folded in _LEXICON_ADDITIONS:
+            return True
         return bool(folded and self._words is not None and folded in self._words)
 
     def recognises_compound(self, word: str) -> bool:
@@ -304,6 +356,17 @@ class EnglishDictionary:
             rest = folded[len(prefix) :]
             if len(rest) > 2 and real(rest) and common(rest):
                 return True
+
+        for suffix in _COMPOUND_SUFFIXES:
+            if not folded.endswith(suffix):
+                continue
+            stem = folded[: -len(suffix)]
+            # The stem as written, and with a dropped final -e restored:
+            # "passivation" is passive + ation with the e elided, which
+            # is how English actually forms these.
+            for candidate in (stem, stem + "e"):
+                if len(candidate) > 3 and real(candidate) and common(candidate):
+                    return True
 
         # Both parts at least four characters: shorter splits are how "acid" +
         # "dent" and "annal" + "isis" got in.
@@ -387,7 +450,9 @@ class EnglishDictionary:
             ),
         )
         best = ranked[0]
-        if _is_ambiguous(folded, ranked):
+        # The word as the writer typed it decides which bar applies, so this
+        # cannot use `folded` - casefolding is what threw the evidence away.
+        if _is_ambiguous(folded, ranked, capitalised=word[:1].isupper()):
             if tie_break is None:
                 return None
             # Only the candidates that actually tie are offered. Handing over
@@ -449,8 +514,20 @@ class EnglishDictionary:
             self._load_error = ""
 
 
-def _is_ambiguous(source: str, ranked: list) -> bool:
+def _is_ambiguous(source: str, ranked: list, *, capitalised: bool = False) -> bool:
     """Whether two candidates are equally good repairs, so neither may be used.
+
+    `capitalised` says the word wore a capital where the writer typed it, which
+    makes it a probable name and raises the bar back to the old, stricter one.
+    Lowering the ratio to 30 unfroze "Csco": it sits one edit from cisco at
+    27.9M and cusco at 627K, a 44.5x lead that is a tie at 50x and decisive at
+    30x, so the repair became "Cisco". Cusco is a city in Peru and THIS corpus
+    has an essay set there. Choosing between two proper nouns by raw frequency
+    is the one place frequency is worst, and the product must not rewrite a
+    person's or a company's name.
+
+    Caught by test_names_the_speller_cannot_place_are_still_frozen, which is why
+    the fix is here and not in that test.
 
     When the best two share a distance and a typing shape, nothing left in the
     dictionary can separate them and only raw frequency remains - which is
@@ -478,14 +555,23 @@ def _is_ambiguous(source: str, ranked: list) -> bool:
         source, str(second.term)
     ):
         return False
-    return max(0, int(first.count)) < _DOMINANT_FREQUENCY_RATIO * max(
-        1, int(second.count)
-    )
+    ratio = _DOMINANT_FREQUENCY_RATIO_NAMED if capitalised else _DOMINANT_FREQUENCY_RATIO
+    return max(0, int(first.count)) < ratio * max(1, int(second.count))
 
 
 # How far ahead the best candidate must be before frequency alone is allowed
 # to break a tie between two equally well-shaped repairs.
-_DOMINANT_FREQUENCY_RATIO = 50
+#
+# 30 rather than 50 since 2026-08-29, measured: it took essay 10 from 96 to 98
+# by resolving "stateon" to station, which leads staten 32x.
+_DOMINANT_FREQUENCY_RATIO = 30
+
+# The bar for a word the writer capitalised, which is probably a name. Held at
+# the old 50 because the cost of being wrong is different in kind: a mangled
+# common word is a typo a reader forgives, and a rewritten name is the product
+# putting words in someone's mouth. Lowering this to 30 turned "Csco" into
+# "Cisco" when "Cusco" was one edit away and equally real.
+_DOMINANT_FREQUENCY_RATIO_NAMED = 50
 
 
 def _typo_shape_rank(source: str, candidate: str) -> int:
@@ -1134,6 +1220,12 @@ _RUN_TOGETHER_TAILS = frozenset(
         "has", "have", "that", "this", "with", "from", "they", "their", "when",
         "which", "would", "should", "could", "into", "than", "then", "also",
         "only", "more", "most",
+        # Prepositions and pronouns. Everything above is a modal, a
+        # determiner or a conjunction, which is why "vendorsmay" split
+        # and "closelyat" did not - an arbitrary gap rather than a
+        # decision anyone took.
+        "at", "in", "on", "of", "to", "by", "as", "or", "up", "out",
+        "is", "be", "it", "its", "his", "her", "our", "your",
     }
 )
 # The head has to be a real word of at least this length. Measured: at 4 the
@@ -1141,7 +1233,7 @@ _RUN_TOGETHER_TAILS = frozenset(
 # only casualty left in 24,690 known misspellings is "questionare", which
 # becomes "question are" instead of "questionnaire". One in twenty-four
 # thousand, against a class of error this product's own input method creates.
-_RUN_TOGETHER_HEAD = 5
+_RUN_TOGETHER_HEAD = 4
 
 
 def _run_together_repair(word: str, dictionary: EnglishDictionary) -> str:
@@ -1163,6 +1255,29 @@ def _run_together_repair(word: str, dictionary: EnglishDictionary) -> str:
         head = folded[: -len(tail)]
         if len(head) >= _RUN_TOGETHER_HEAD and dictionary.contains(head):
             return f"{head} {tail}"
+    # The same missing space with the function word FIRST. The loop above only
+    # ever looked for it at the end, so "vendorsmay" was repaired and
+    # "canappear" - which the comment beside the compound guard names as a case
+    # this rule handles - was not. Essay 12 of the error-riddled corpus carries
+    # it, and it survived every other layer.
+    #
+    # Symmetric guards, for the reason the originals exist: the function word
+    # comes from the same closed list, the other half must be a real word of at
+    # least _RUN_TOGETHER_HEAD characters, and has_close_candidate above has
+    # already refused anything a single edit could repair as one word.
+    #
+    # Measured the same way _RUN_TOGETHER_HEAD was, over all 24,690 bundled
+    # misspellings: four false accepts, of which "questionare" was already a
+    # casualty of the loop above. The three this direction adds are
+    # "canelation" to "can elation", "forwould" to "for would" and
+    # "theirselves" to "their selves". That is 0.012 percent, against a class of
+    # error this product's own input method creates.
+    for lead in _RUN_TOGETHER_TAILS:
+        if not folded.startswith(lead):
+            continue
+        rest = folded[len(lead) :]
+        if len(rest) >= _RUN_TOGETHER_HEAD and dictionary.contains(rest):
+            return f"{lead} {rest}"
     return ""
 
 

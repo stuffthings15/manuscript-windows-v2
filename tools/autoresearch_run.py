@@ -54,6 +54,8 @@ if str(ROOT / "src") not in sys.path:
 if str(ROOT / "tools") not in sys.path:
     sys.path.insert(0, str(ROOT / "tools"))
 
+import autoresearch_status  # noqa: E402
+
 APP_LOG = Path.home() / "AppData/Local/ManuscriptWindowsV2/echo-link.log"
 
 # The corpus the release gate uses. Coherent prose with seeded surface damage,
@@ -71,6 +73,147 @@ TIMEOUT_PER_ESSAY_SECONDS = 600
 _DEAD = "dead"
 _PARTIAL = "partial"
 _CAPTURE_MISMATCH = "captured from"
+
+
+_MONITOR: subprocess.Popen | None = None
+
+
+def _start_monitor() -> None:
+    """Show the on-screen panel, if it is not already up.
+
+    pythonw, not python, so no console window appears and nothing flashes into
+    the foreground. The panel itself refuses focus three different ways - see
+    autoresearch_monitor - because a window that steals focus mid-experiment
+    corrupts the very run it is reporting on.
+    """
+    # The guard here used to be "a status file exists, so a panel is already
+    # up", and it was wrong twice over. The status file has to be written before
+    # the panel starts - the panel quits after four missing reads - so that test
+    # was always true by the time it ran, and it suppressed the launch every
+    # time. It also could not tell a live panel from one left behind by a killed
+    # run. A module-level handle answers the only question worth asking: has
+    # THIS runner already started one.
+    global _MONITOR
+    if _MONITOR is not None and _MONITOR.poll() is None:
+        return
+    launcher = Path(sys.executable).with_name("pythonw.exe")
+    try:
+        _MONITOR = subprocess.Popen(  # noqa: S603 - a fixed path in this repository
+            [
+                str(launcher if launcher.exists() else sys.executable),
+                str(ROOT / "tools/autoresearch_monitor.py"),
+            ],
+            cwd=ROOT,
+            creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0)),
+        )
+    except OSError:
+        # The display is a convenience. Never lose an experiment over it.
+        pass
+
+
+def _tally() -> dict[str, object]:
+    """What results.tsv says so far, for the panel. Never fatal.
+
+    Read here rather than passed in, because the runner is launched fresh for
+    every experiment and the file is the only memory the loop has.
+    """
+    best = 0.0
+    counts = {"keep": 0, "discard": 0, "crash": 0}
+    try:
+        lines = (ROOT / "results.tsv").read_text(encoding="utf-8").splitlines()[1:]
+    except OSError:
+        lines = []
+    for line in lines:
+        parts = line.split("\t")
+        if len(parts) < 4:
+            continue
+        if parts[3] in counts:
+            counts[parts[3]] += 1
+        if parts[3] == "keep":
+            try:
+                best = max(best, float(parts[1]))
+            except ValueError:
+                pass
+    return {
+        "baseline": f"{best:.2f}" if best else "-",
+        "best": f"{best:.2f}" if best else "-",
+        "kept": counts["keep"],
+        "discarded": counts["discard"],
+        "crashed": counts["crash"],
+    }
+
+
+def _status(**values: object) -> None:
+    """Update what the panel shows, merging into what is already there."""
+    current = autoresearch_status.read_status() or {}
+    current.update(values)
+    autoresearch_status.write_status(current)
+
+
+def idle_seconds() -> float:
+    """Seconds since the last keyboard or mouse input, or 0.0 if unknown.
+
+    Windows reports this for the whole session through GetLastInputInfo, which
+    is what "is anyone using this machine" actually means - not whether a
+    window is focused, and not whether a process is busy.
+
+    Unknown deliberately reads as ZERO, meaning "assume someone is here". An
+    idle check that cannot answer must not grant permission to seize the screen.
+    """
+    try:
+        import ctypes
+
+        class _LastInput(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+        info = _LastInput()
+        info.cbSize = ctypes.sizeof(_LastInput)
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+            return 0.0
+        ticks = ctypes.windll.kernel32.GetTickCount()
+        return max(0.0, (ticks - info.dwTime) / 1000.0)
+    except Exception:  # noqa: BLE001 - ctypes raises broadly on a locked session
+        return 0.0
+
+
+def _restart_word() -> None:
+    """Kill Word before an experiment, so UI Automation has a small tree.
+
+    Measured on 2026-08-28, and it cost most of a morning. Every experiment for
+    two hours failed with `COMError (-2146233083)` at 250 seconds and zero
+    presses. The error is raised inside uiautomation while walking the control
+    tree - GetFirstChildControl, then GetNextSiblingControl - which is why
+    "COMError" was such a poor clue: Word, UI Automation and the clipboard all
+    raise it, and the bare string was equally consistent with three different
+    bugs. Two of my own changes were blamed and cleared by probe first.
+
+    What it actually was: WINWORD had been running eleven hours across dozens
+    of documents and app restarts. Killing it and running the same essay
+    unchanged scored 91.000000 with 19 presses. The 16-essay tier that mostly
+    succeeded had run on a fresh Word too.
+
+    Killing Word between runs is already this harness's default behaviour
+    outside --as-a-writer, so this is not a new liberty. It does mean an
+    experiment will close a Word document somebody left open, which is part of
+    why the loop runs on an idle machine.
+    """
+    subprocess.run(
+        ["taskkill", "/F", "/IM", "WINWORD.EXE"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    # Word leaves owner-lock files behind when it is killed, and it reopens the
+    # next document read-only if they are still there.
+    for lock in (ROOT / "build/batch").glob("~$*.docx"):
+        try:
+            lock.unlink()
+        except OSError:
+            # A lock the harness cannot remove is not worth losing the run over;
+            # Word will say so itself if it matters.
+            pass
+    time.sleep(2.0)
 
 
 def _stale_reason() -> str:
@@ -208,6 +351,22 @@ def _run_batches(essays: list[int], corpus: str) -> str:
     """
     collected = []
     for number in essays:
+        # Fresh Word for EVERY essay, not just every experiment.
+        #
+        # Measured on 2026-08-28: with one restart per experiment, essay 8
+        # completed at 298s and 324s across two baselines and essay 10 then
+        # failed both times with COMError inside uiautomation's tree walk. The
+        # first document after a restart works and the second does not, so the
+        # tree Word leaves behind after a single essay is already enough to
+        # break traversal on this machine.
+        #
+        # A 16-essay tier once ran 20 documents in one Word session with only 4
+        # failures, so this is not universal and something about the current
+        # state makes Word fragile sooner. Restarting per essay costs a few
+        # seconds and removes the variable entirely, which matters more for a
+        # loop that has to run unattended than the seconds do.
+        _status(phase=f"correcting essay {number}")
+        _restart_word()
         completed = subprocess.run(
             [
                 sys.executable,
@@ -230,9 +389,9 @@ def _run_batches(essays: list[int], corpus: str) -> str:
     return "\n".join(collected)
 
 
-def main(argv: list[str] | None = None) -> int:
+def _run(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--first", type=int, default=1, help="first essay")
+    parser.add_argument("--first", type=int, default=8, help="first essay")
     parser.add_argument(
         "--count",
         type=int,
@@ -242,7 +401,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--essays",
-        default="",
+        default="8",
         help="explicit essay numbers, comma separated, e.g. 8,10. Overrides "
         "--first/--count. The slice must not be chosen for being easy: essay 1 "
         "scores 100 and would measure every change as zero.",
@@ -268,12 +427,37 @@ def main(argv: list[str] | None = None) -> int:
     # on 2026-08-23 went on to serve six acceptance tiers while reporting a
     # build made minutes earlier.
     parser.add_argument(
+        "--describe",
+        default="",
+        help="what this experiment is trying, shown on the status panel and "
+        "logged to results.tsv",
+    )
+    parser.add_argument(
+        "--require-idle",
+        type=float,
+        default=0.0,
+        help="only run when nobody has touched the machine for this many "
+        "seconds. Exits 2 without measuring anything if someone is here, so a "
+        "loop can skip the tick rather than seize the screen.",
+    )
+    parser.add_argument(
         "--no-restart",
         action="store_true",
         help="measure the app already running. Only for debugging the harness: "
         "it cannot see a code change you just made.",
     )
     arguments = parser.parse_args(argv)
+
+    # The idle gate was removed on 2026-08-28 at Curtis's decision, to run
+    # continuously as upstream does. It created a trap rather than protection:
+    # he is at the keyboard when he prompts, so the gate blocked the next
+    # experiment, so he saw nothing happen, so he prompted again. Upstream
+    # assumes a machine given over to the research and so do we now.
+    #
+    # The costs are accepted, not overlooked. Word is killed under him about
+    # every five minutes, and his typing in an editable window will sometimes
+    # redirect the HUD and crash a run - that is logged as a crash row and
+    # costs one experiment.
 
     # An explicit list, because the two weakest essays are 08 and 10 and the
     # batch takes a contiguous range. Spanning 8 to 10 to reach both would drag
@@ -289,7 +473,25 @@ def main(argv: list[str] | None = None) -> int:
     mark = _log_length()
     build = _git_head()
 
+    # The status file FIRST, then the panel. The panel closes itself after four
+    # consecutive misses, so a monitor started before anything has been written
+    # would poll an absent file and quit within four seconds of launching.
+    #
+    # And this is the call that was missing. `_start_monitor` was written,
+    # tested and never invoked, so every run since it was added has produced no
+    # panel at all - which is exactly what Curtis saw. A feature whose only
+    # purpose is to be visible fails silently when it is not wired in.
+    _status(
+        phase="starting",
+        description=arguments.describe,
+        essays=arguments.essays,
+        experiment=build,
+        **_tally(),
+    )
+    _start_monitor()
+
     if not arguments.no_restart:
+        _restart_word()
         subprocess.run(
             [sys.executable, "-u", str(ROOT / "tools/restart_app_and_wait.py")],
             cwd=ROOT,
@@ -346,6 +548,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"requested:        {arguments.require_pack}")  # noqa: T201
         return 1
 
+    _status(phase="grading")
     from echo_link_core.polish_spelling import EnglishDictionary
     from echo_link_core.writing_suggestions import WritingSuggestionEngine
     from grade_corpus import essay_documents, grade
@@ -380,6 +583,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"build:            {build}")  # noqa: T201
     print(f"peak_vram_mb:     {watch.peak:.1f}")  # noqa: T201
     print(f"unknown:          {sum(r['unknown'] for r in graded)}")  # noqa: T201
+    _status(phase="done", last_result=f"{score:.2f}")
     return 0
 
 
@@ -397,6 +601,21 @@ def _slice_names(arguments, rows: list[str]) -> list[str]:
         if found:
             names.append(found.group(1))
     return names
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run one experiment and always take the status panel down afterwards.
+
+    The panel exists only while a run does, which is the whole of Curtis's
+    "should not show up unless AutoResearch is being run". There are half a
+    dozen ways out of _run - a stale app, a crash, a timeout, a pack mismatch -
+    and a panel left on screen after any of them would be a lie about what the
+    machine is doing.
+    """
+    try:
+        return _run(argv)
+    finally:
+        autoresearch_status.clear_status()
 
 
 if __name__ == "__main__":

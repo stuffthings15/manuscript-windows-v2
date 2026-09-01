@@ -119,6 +119,14 @@ def _run(command: list[str], label: str) -> tuple[bool, str]:
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        # UTF-8 and replace, not the console default. `text=True` decodes as
+        # cp1252 on this machine, and a single 0x9d byte in a tool's output -
+        # ruff prints curly quotes around code it cites - raised
+        # UnicodeDecodeError and took the whole gate run down with a traceback,
+        # after the tests it was reporting on had already passed. A release gate
+        # must fail on what it measures, never on how it reads the output.
+        encoding="utf-8",
+        errors="replace",
     )
     if process.stdout is not None:
         for line in process.stdout:
@@ -133,6 +141,48 @@ def _run(command: list[str], label: str) -> tuple[bool, str]:
     # value like 3221225477 is an access violation at shutdown.
     _say(f"=== {label}: {state} in {time.time() - started:.0f}s")
     return code == 0, "".join(lines)
+
+
+_SECTION_PROGRESS = re.compile(r"section (\d+)/(\d+)")
+
+
+def _run_was_truncated(row: dict) -> bool:
+    """Whether this essay run stopped before it reached the last section.
+
+    This used to be `outcome != "complete"`, and that conflated two different
+    things. `run_essays_batch.outcome` returns "partial" whenever `unchanged` is
+    non-empty, but `unchanged` counts paragraphs THE REVIEW LEFT ALONE - a
+    quality signal, not a completion signal. For a tone run an unchanged
+    paragraph is expected, because a tone may legitimately have nothing to say
+    about a sentence.
+
+    Measured on 2026-08-30: essay 3 pressed all 22 of its 22 sections with no
+    stall and no error, reported `unchanged=[1]`, and was therefore "partial" -
+    which made its whole tone UNMEASURED. A gate that discards a fully applied
+    run because one paragraph did not need changing is not measuring what it
+    claims to.
+
+    So ask the precise question instead: did the run REACH THE LAST SECTION. The
+    batch already records that in `stopped_because` as "section N/M", and N < M
+    is the honest test. This is deliberately not a loosening - a run that stopped
+    at "section 5/25" is still excluded, and so is any run with no presses, a
+    stall, or an error. Only the unchanged-paragraph case changes.
+    """
+    if row.get("error"):
+        return True
+    if not row.get("presses"):
+        return True
+    if row.get("stalled_at"):
+        return True
+    stopped = str(row.get("stopped_because") or "")
+    found = _SECTION_PROGRESS.search(stopped)
+    if found:
+        reached, total = int(found.group(1)), int(found.group(2))
+        # The HUD closing after the final press is how a finished document
+        # ends, and it arrives here as "section M/M".
+        return reached < total
+    # No progress marker and nothing else wrong: the run ended on its own terms.
+    return False
 
 
 def _incomplete_runs() -> list[dict[str, object]]:
@@ -162,7 +212,7 @@ def _incomplete_runs() -> list[dict[str, object]]:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        if str(row.get("outcome") or "") == "complete":
+        if not _run_was_truncated(row):
             continue
         bad.append(
             {

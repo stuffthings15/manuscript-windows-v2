@@ -48,15 +48,55 @@ def open_in_word(path: Path):
     return word
 
 
+def _word_handle(timeout: float = 15.0) -> int:
+    """The Word window's handle, by Win32 enumeration rather than a UIA walk.
+
+    The same hazard `repro_accept_advance.hud_window` carried, in the other
+    function this batch imports. `GetRootControl().WindowControl(...).Exists()`
+    re-walks every top-level window and its children until it matches or times
+    out, and one slow or dying window anywhere on the desktop raises
+    `COMError (-2146233083)` from `GetNextSiblingControl` and ends the run.
+
+    Found by fixing the HUD lookup and then grepping for the shape rather than
+    waiting for it to cost another five essays. `hud_counter` below has it too
+    and is deliberately left alone: nothing in the batch path calls it, and
+    changing code that no measurement covers is how untested churn gets in.
+    """
+    user32 = ctypes.windll.user32
+    proto = ctypes.WINFUNCTYPE(
+        ctypes.c_bool, ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)
+    )
+    deadline = time.monotonic() + timeout
+    while True:
+        found = ctypes.c_int(0)
+
+        def callback(hwnd, result):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length <= 0:
+                return True
+            buffer = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buffer, length + 1)
+            if buffer.value.endswith("- Word"):
+                result[0] = hwnd
+                return False
+            return True
+
+        user32.EnumWindows(proto(callback), ctypes.byref(found))
+        if found.value:
+            return int(found.value)
+        if time.monotonic() >= deadline:
+            return 0
+        time.sleep(0.2)
+
+
 def foreground_word() -> tuple[int, tuple[int, int, int, int]]:
     import uiautomation as automation
 
-    window = automation.GetRootControl().WindowControl(
-        searchDepth=2, RegexName=r".*- Word$"
-    )
-    if not window.Exists(15.0, 0.4):
+    handle = _word_handle()
+    if not handle:
         raise SystemExit("no Word window found")
-    handle = int(window.NativeWindowHandle or 0)
     user32 = ctypes.windll.user32
     user32.ShowWindow(handle, 9)
     current = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)
@@ -66,6 +106,8 @@ def foreground_word() -> tuple[int, tuple[int, int, int, int]]:
     user32.SetForegroundWindow(handle)
     user32.AttachThreadInput(current, target, False)
     time.sleep(1.5)
+    # One UIA call, on a window already known to exist, instead of a search.
+    window = automation.ControlFromHandle(handle)
     rect = window.BoundingRectangle
     return handle, (rect.left, rect.top, rect.right, rect.bottom)
 
@@ -98,12 +140,16 @@ def press_hotkey() -> None:
 
 
 def hud_counter() -> str:
-    import uiautomation as automation
+    # Found by handle, like every other window lookup in the batch path.
+    #
+    # I argued for leaving this one alone because nothing in the batch calls it,
+    # and tests/test_harness_window_lookup.py made the better case: it lives in
+    # a module run_essays_batch imports, so it is one call away from costing
+    # another five essays, and "unused today" is not a property anyone maintains.
+    from full_page_user_journey_probe import _hud_window
 
-    hud = automation.GetRootControl().WindowControl(
-        searchDepth=3, RegexName=r"Manuscript writing HUD.*"
-    )
-    if not hud.Exists(25.0, 0.5):
+    hud = _hud_window(25.0)
+    if hud is None:
         return "<no HUD window>"
     found: list[str] = []
 

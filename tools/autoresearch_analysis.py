@@ -49,16 +49,38 @@ def read_rows(path: Path) -> list[dict]:
 
 def baseline_spread(rows: list[dict]) -> tuple[float, float, float, int] | None:
     """min, max, spread and count over the repeated unchanged baseline."""
-    scores = [
-        float(row["score"])
-        for row in rows
-        if row.get("description", "").strip().casefold().startswith("baseline")
-        and row.get("status") != CRASHED
-        and _is_number(row.get("score"))
-    ]
-    if len(scores) < 2:
+    # Grouped BY SLICE, and the slice prefix stripped before the "baseline"
+    # test. Descriptions carry "essays 10: " since the baseline became per-slice,
+    # so a plain startswith("baseline") matched nothing and this quietly reported
+    # "NO BASELINE SPREAD YET" forever - the failure mode of a check that can
+    # only ever say the cautious thing.
+    #
+    # Repeats of one slice are the only comparable set. Pooling essay 8's 98 with
+    # essay 10's 94 would report a spread of 4 points for a measurement whose
+    # real spread is zero, and every honest keep would then look like noise.
+    by_slice: dict[str, list[float]] = {}
+    for row in rows:
+        if row.get("status") == CRASHED or not _is_number(row.get("score")):
+            continue
+        description = str(row.get("description", "")).strip()
+        slice_name, _, rest = description.partition(":")
+        if not rest or not slice_name.casefold().startswith("essays"):
+            slice_name, rest = "", description
+        if not rest.strip().casefold().startswith("baseline"):
+            continue
+        by_slice.setdefault(slice_name, []).append(float(row["score"]))
+    repeated = [scores for scores in by_slice.values() if len(scores) >= 2]
+    if not repeated:
         return None
-    return (min(scores), max(scores), max(scores) - min(scores), len(scores))
+    # The WIDEST spread any one slice showed, because the question this answers
+    # is how far a change must move before it means anything anywhere.
+    widest = max(repeated, key=lambda scores: max(scores) - min(scores))
+    return (
+        min(widest),
+        max(widest),
+        max(widest) - min(widest),
+        sum(len(scores) for scores in repeated),
+    )
 
 
 def _is_number(value) -> bool:

@@ -230,6 +230,13 @@ SPELLING_CORRECTIONS = {
     "secratary": "secretary",
     "sentances": "sentences",
     "sentnce": "sentence",
+    # A repair, not a lexicon entry. "serreous" is two edits from "serious" so
+    # the distance-1 lookup never sees it, and at distance 2 it competes with
+    # "ferrous" and "serous". It is a wrong word with a right answer, which is
+    # exactly what this map is for; putting it in _LEXICON_ADDITIONS would teach
+    # the speller that a typo is English and suppress the correction.
+    "serreous": "serious",
+    "lahaar": "lahar",
     "seperate": "separate",
     "seperated": "separated",
     "seperately": "separately",
@@ -350,9 +357,66 @@ _WORD = re.compile(r"\b[A-Za-z][A-Za-z'-]*\b")
 # must keep its heading. That costs two of the corpus's 75, both real, and the
 # trade is deliberate: this rule deletes a word the writer typed, so it refuses
 # wherever the evidence is not plain.
+# A full stop left after terminal punctuation: "matter?." or "works!."
+#
+# Always wrong, in every register, which is what makes it safe to repair
+# without asking. It survives because the sentence already ends correctly, so
+# nothing downstream treats the leftover stop as a defect - polish_error_score
+# charges it, but no rule removed it, and essay 10 of the gated corpus carried
+# one all the way to the finished document on 2026-08-28.
+#
+# Deliberately narrow. Only a period after ? or !, and only when nothing but
+# whitespace separates them. "?!" and "!?" are choices a writer makes, "..." is
+# an ellipsis, and none of those are touched.
+_STRAY_TERMINAL_STOP = re.compile(r"(?P<keep>[?!])[ 	]*\.")
+
+# A terminal mark stranded at the start of a line, with a finished sentence
+# behind it and a new one in front, punctuates nothing.
+#
+# Essay 10 of the error-riddled corpus has "servuce functions\n?? ." and the
+# corrector reduces it to "service functions.\n? The significance of this
+# point..." - the doubled mark is collapsed and the survivor is left leading a
+# line it has no business in. It is charged as a grammar error and it reads as
+# one.
+#
+# Every part of the guard does work. The preceding sentence must ALREADY be
+# terminated, or this would eat the real punctuation of a sentence that merely
+# wrapped. The following word must be capitalised, so a mark inside a continuing
+# clause is left alone. And \v is here for the same reason the duplicate rule
+# below carries it: Word writes a soft line break as VERTICAL TAB, and a rule
+# that knows only \n never fires on a real document.
+_STRANDED_TERMINAL_MARK = re.compile(
+    # Anchored at the START of the text or of a line, NOT after a preceding
+    # sentence. The first version required a terminated sentence behind the mark
+    # and so could never fire on the case it was written for: essay 10's
+    # paragraph 11 literally begins "?? . The significance of this point...", and
+    # a review unit is one paragraph, so there is nothing behind the mark at all.
+    # It measured as a clean no-op against the live document.
+    #
+    # No sentence in English opens with a full stop, question mark or
+    # exclamation mark, so requiring nothing before it is safe rather than loose.
+    # `(?!\.\.)` keeps an ellipsis, which is the one mark that legitimately opens
+    # a line: "He paused.\n... The story went on." lost its ellipsis without it.
+    r"(?:\A|(?<=[\r\n\v]))(?P<drop>[ \t]*(?!\.\.)[.!?][ \t.!?]*)(?=[A-Z])"
+)
+
+
 _DUPLICATE_WORD = re.compile(
     r"(?=\b(?P<first>[A-Za-z][A-Za-z'-]*)"
-    r"(?:[ \t]+|[ \t]*,[\s,]*,[ \t]*|[ \t]*\r?\n[ \t]*(?=(?-i:[a-z])))"
+    # \v as well as \n, and this is the whole reason the rule kept missing.
+    #
+    # Word represents a soft line break - Shift+Enter - as VERTICAL TAB, not a
+    # newline. Read through Word's own COM on 2026-08-28, essay 8 of the gated
+    # corpus contains 19 vertical tabs, 13 carriage returns and ZERO newlines,
+    # and the character sitting between "procedures" and "procedures" is
+    # \x0b. The harness reads the same file from its XML and turns <w:br/> into
+    # "\n", which is why every offline test of this rule passed and every live
+    # measurement failed: the two paths were never looking at the same string.
+    #
+    # That one character accounts for all 39 duplicate hits across the corpora
+    # and for two AutoResearch experiments that were discarded as failures when
+    # the ideas were sound.
+    r"(?:[ \t]+|[ \t]*,[\s,]*,[ \t]*|[ \t]*(?:\r?\n|\v)[ \t]*(?=(?-i:[a-z])))"
     r"(?P<second>[A-Za-z][A-Za-z'-]*)\b)",
     re.IGNORECASE,
 )
@@ -488,6 +552,7 @@ class WritingSuggestionEngine:
         candidates: list[_Candidate] = []
         candidates.extend(_typo_candidates(text, protected))
         candidates.extend(_duplicate_candidates(text, protected))
+        candidates.extend(_stray_terminal_stop_candidates(text, protected))
         candidates.extend(_grammar_phrase_candidates(text, protected))
         candidates.extend(_homophone_candidates(text, protected))
         candidates.extend(_sentence_boundary_candidates(text, protected))
@@ -625,6 +690,88 @@ def _typo_candidates(text: str, protected: tuple[tuple[int, int], ...]) -> list[
     return found
 
 
+# Doublings that are correct English and must never be collapsed.
+#
+# "She had had enough" is past perfect, not a stutter, and the corrector was
+# turning it into "She had enough" - a different tense and a different meaning,
+# in text the writer got right. Found on 2026-08-28 while reading what the
+# duplicate rule does, not from a report, which is worth noting: nobody
+# complains about a word quietly going missing.
+#
+# `polish_error_score` scores the same doubling as an error with the same naive
+# backreference, so the grader agrees with the defect. That means no amount of
+# optimising the corpus score can ever surface this - the metric rewards the
+# damage. It is fixed here because it is wrong for a writer, and the score is
+# expected not to move.
+#
+# Two kinds are listed. Grammatical: "had had" and "that that" are ordinary
+# constructions ("the fact that that happened"). Intensifying: "very very",
+# "many many", "long long", "far far" and "no no" are choices a writer makes,
+# and repairing a choice is not proofreading.
+_LEGITIMATE_DOUBLINGS = frozenset(
+    {
+        "had",
+        "that",
+        "very",
+        "many",
+        "long",
+        "far",
+        "no",
+        "ha",
+        "bye",
+    }
+)
+
+
+def _stray_terminal_stop_candidates(
+    text: str,
+    protected: tuple[tuple[int, int], ...],
+) -> list[_Candidate]:
+    found: list[_Candidate] = []
+    # The stranded-mark rule goes FIRST because acceptance is first-wins on
+    # overlap, and its span strictly contains the other's. On "?? . The
+    # significance..." the stray-stop rule matched "? ." at offset 1 and left
+    # "??" leading the line, which is the defect this pair exists to remove.
+    for match in _STRANDED_TERMINAL_MARK.finditer(text):
+        start, end = match.start("drop"), match.end("drop")
+        if _is_protected(start, end, protected):
+            continue
+        # The match starts AFTER any line break - the break is in a lookbehind -
+        # so removing the span deletes only the mark and the space around it.
+        # That separation is deliberate: fusing two of the writer's lines would
+        # delete a paragraph break, and a deleted paragraph break cannot be
+        # clicked back, which is the cost recorded in
+        # test_review_spans_keep_each_written_line_separate.
+        replacement = ""
+        found.append(
+            _Candidate(
+                "stranded-terminal-mark",
+                SuggestionCategory.FORMATTING,
+                "Remove the stray punctuation mark",
+                "A punctuation mark begins a line after a finished sentence.",
+                start,
+                end,
+                replacement,
+            )
+        )
+    for match in _STRAY_TERMINAL_STOP.finditer(text):
+        start, end = match.start(), match.end()
+        if _is_protected(start, end, protected):
+            continue
+        found.append(
+            _Candidate(
+                "stray-terminal-stop",
+                SuggestionCategory.FORMATTING,
+                "Remove the extra full stop",
+                "A full stop follows a question mark or exclamation mark.",
+                start,
+                end,
+                match.group("keep"),
+            )
+        )
+    return found
+
+
 def _duplicate_candidates(
     text: str,
     protected: tuple[tuple[int, int], ...],
@@ -645,6 +792,8 @@ def _duplicate_candidates(
         # Only the second copy needs to be lowercase, so "By by the time" and
         # "The the gate" are still repaired at the start of a sentence.
         if first[:1].isupper() and second[:1].isupper():
+            continue
+        if first.casefold() in _LEGITIMATE_DOUBLINGS:
             continue
         start = match.start("first")
         end = match.end("second")

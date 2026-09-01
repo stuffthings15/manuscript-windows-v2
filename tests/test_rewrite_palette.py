@@ -4738,3 +4738,31 @@ def test_refused_tone_batch_puts_the_card_back(app):
     palette.close()
     palette.deleteLater()
     app.processEvents()
+
+
+def test_the_state_file_names_this_process_from_startup(app, tmp_path, monkeypatch):
+    """The staleness check reads this field; it must describe the LIVE process.
+
+    session_state calls hud-state.json "what is true NOW, rewritten on every
+    change", and after a restart it was not: nothing published until the HUD did
+    something, so the file went on describing the process that had just been
+    killed.
+
+    Measured on 2026-08-28. The app was restarted onto build 8100c70 and the
+    state file still read 4ee766a, eighty-five minutes stale. Every staleness
+    check in the harness reads that field to decide whether the running app is
+    the code under test, so the guard against measuring a stale process was
+    itself answering from a stale file - and it refused a good AutoResearch
+    experiment while a genuinely stale app would have been waved through.
+    """
+    from echo_link_core import session_state
+
+    monkeypatch.setenv("MANUSCRIPT_STATE_DIR", str(tmp_path))
+
+    RewritePalette()
+
+    import json
+
+    published = json.loads(session_state.state_path().read_text(encoding="utf-8"))
+
+    assert published.get("build") == session_state.build_identifier()

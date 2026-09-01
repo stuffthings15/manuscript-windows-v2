@@ -125,3 +125,38 @@ def test_vram_is_reported_as_zero_rather_than_crashing_without_a_gpu(monkeypatch
     monkeypatch.setattr(autoresearch_run, "_nvidia_status", None, raising=False)
 
     assert autoresearch_run._vram_used_mb() >= 0.0
+
+
+def test_the_status_panel_appears_only_while_a_run_is_happening(monkeypatch, tmp_path):
+    """Curtis asked to see the loop working, and to see nothing when it is not.
+
+    The panel lives exactly as long as the status file does, so every exit from
+    a run must remove it. There are half a dozen ways out - a stale app, a
+    crash, a timeout, a pack mismatch - and a panel left on screen after any of
+    them would misreport what the machine is doing.
+    """
+    import autoresearch_status
+
+    monkeypatch.setenv("MANUSCRIPT_STATE_DIR", str(tmp_path))
+    autoresearch_status.write_status({"phase": "correcting essay 8"})
+    assert autoresearch_status.read_status() is not None
+
+    # A run that dies on the staleness guard still takes the panel down.
+    monkeypatch.setattr(autoresearch_run, "_stale_reason", lambda: "stale")
+    monkeypatch.setattr(autoresearch_run, "_start_monitor", lambda: None)
+
+    autoresearch_run.main(["--no-restart"])
+
+    assert autoresearch_status.read_status() is None
+
+
+# The idle-gate tests were removed on 2026-08-29, not weakened.
+#
+# They asserted that an experiment stands down while somebody is at the
+# keyboard, which was real behaviour until Curtis decided to run continuously as
+# upstream does. The gate had become a trap rather than a protection: he is at
+# the keyboard when he prompts, so it blocked the next experiment, so he saw
+# nothing happen, so he prompted again.
+#
+# A test for a deliberately removed feature is not a safety net, it is a record
+# of a decision - and this comment is the better place for that record.

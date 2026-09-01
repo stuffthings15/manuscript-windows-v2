@@ -22,6 +22,7 @@ import re
 import shutil
 import sys
 import time
+import traceback
 
 ROOT = Path(__file__).resolve().parents[1]
 for entry in (ROOT / "src", ROOT / "tools"):
@@ -310,6 +311,80 @@ def section_provenance(hud) -> str:
         if "Current writing suggestion position" in name and ", section " in name:
             return name.rsplit(", section ", 1)[1].strip()
     return ""
+
+
+def _hud_window_candidates() -> str:
+    """Every window whose title mentions Manuscript, visible or not.
+
+    `hud_found=False` means the lookup skipped it, and there are two very
+    different reasons: the window is GONE, or it is present but not visible.
+    EnumWindows-based lookups filter on IsWindowVisible, so a hidden HUD reads
+    exactly like a closed one, and the fix for each is opposite - wait longer,
+    or stop requiring visibility.
+
+    That ambiguity survived a 30-second poll on 2026-08-30: both remaining
+    failures still reported hud_found=False, which rules out a repaint gap and
+    leaves these two open. Never raises.
+    """
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        proto = ctypes.WINFUNCTYPE(
+            ctypes.c_bool, ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)
+        )
+        seen: list[str] = []
+
+        def callback(hwnd, _result):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                buffer = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buffer, length + 1)
+                title = buffer.value
+                if "Manuscript" in title:
+                    visible = bool(user32.IsWindowVisible(hwnd))
+                    seen.append(f"{title[:40]!r} visible={visible}")
+            return True
+
+        user32.EnumWindows(proto(callback), ctypes.byref(ctypes.c_int(0)))
+        return "[" + ", ".join(seen) + "]" if seen else "<no Manuscript window at all>"
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not mask the failure
+        return f"<candidate scan failed: {type(exc).__name__}>"
+
+
+def _hud_tree_summary(hud, limit: int = 14) -> str:
+    """The buttons actually present in the HUD, for a failure that found none.
+
+    Deliberately narrow: control type plus name plus enabled, buttons first,
+    truncated. A full dump is thousands of lines and the batch already refuses
+    to print those; what a reader needs is whether the tree held a DIFFERENT
+    button, no buttons at all, or nothing whatsoever - three causes that the
+    message "no Replace button" cannot tell apart.
+
+    Never raises. This runs on a path that is already failing, and losing the
+    diagnosis to an exception in the diagnostic would be the worst outcome.
+    """
+    if hud is None:
+        return "<no hud control>"
+    try:
+        from repro_accept_advance import _descend
+
+        names = []
+        for control in _descend(hud):
+            try:
+                kind = str(control.ControlTypeName or "")
+                if kind != "ButtonControl":
+                    continue
+                name = str(control.Name or "")[:44]
+                names.append(f"{name!r}{'' if control.IsEnabled else ' (disabled)'}")
+            except Exception:  # noqa: BLE001 - a repainting control answers oddly
+                continue
+            if len(names) >= limit:
+                names.append("...")
+                break
+        return "[" + ", ".join(names) + "]" if names else "<no buttons in tree>"
+    except Exception as exc:  # noqa: BLE001 - diagnostics must never mask the failure
+        return f"<tree read failed: {type(exc).__name__}>"
 
 
 def wait_for_the_ai(hud_reader, hud, seconds: float = 90.0):
@@ -758,6 +833,20 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
     word = open_in_word(path)
     _handle, bounds = foreground_word()
     click_in_document(bounds)
+    # Hold the document before the FIRST capture too, not only between presses.
+    #
+    # _hold_focus was added for the press loop, which left the opening capture
+    # unguarded - and that is where essay 10 died on 2026-08-28, 6.7 seconds in,
+    # with "the review on screen was captured from 'Claude'". The hotkey press
+    # below is what tells the app to capture, so whatever holds focus at this
+    # instant is what gets reviewed.
+    #
+    # Worth recording because it changes the diagnosis: nobody was typing. An
+    # earlier failure the same night was caused by commands run mid-experiment,
+    # but this one happened while the machine was left alone, between two
+    # essays. Focus can move on its own, so "do not touch the machine" is
+    # necessary and not sufficient.
+    _hold_focus(path.stem)
     press_hotkey()
 
     report: dict = {"presses": 0, "stalled_at": None, "counters": []}
@@ -899,7 +988,29 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
         # Replace is disabled while a section has no AI answer yet, so reading
         # the button first cannot tell "the AI is still working" from "there is
         # nothing to apply here". The card states which it is; wait on that.
-        hud, provenance = wait_for_the_ai(hud_window, hud)
+        #
+        # A tone gets far longer, and a section still waiting is waited on again
+        # rather than pressed on with. Measured 2026-08-31: the Friendly baseline
+        # died at press 24 of 25 with `provenance=waiting`, EVERY button
+        # disabled, and the Replace control still reading "Proofreading loc..."
+        # - the model was genuinely mid-section. The HUD window was found and
+        # visible, so this is not the window race fixed the day before; the
+        # 90-second wait simply expired and the loop walked into a button lookup
+        # that could not succeed, then reported "no Replace button" as though
+        # something were broken.
+        #
+        # A tone request regenerates the whole span after proofreading it, so it
+        # is the slowest thing this harness ever waits for. Giving up on it at 90
+        # seconds and calling the result a failure measures the clock, not the
+        # product.
+        patience = 300.0 if tone else 90.0
+        hud, provenance = wait_for_the_ai(hud_window, hud, seconds=patience)
+        if provenance == "waiting":
+            # One more full round before proceeding. Bounded, because a section
+            # that never settles has to end the run eventually - but the reason
+            # will then say `provenance=waiting` after ten minutes, which is a
+            # claim about the product rather than about the harness's patience.
+            hud, provenance = wait_for_the_ai(hud_window, hud, seconds=patience)
         report.setdefault("provenance", []).append(provenance)
         if provenance:
             report["provenance_counts"] = report.get("provenance_counts", {})
@@ -923,11 +1034,55 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
             timeout=30.0,
             what="the HUD to leave the loading view",
         )
-        button = replace_button(hud_window(8.0) or hud) if settled else None
+        # Then wait for the HUD WINDOW itself, not just for the view to settle.
+        #
+        # This is the actual cause of "no Replace button", found on 2026-08-30
+        # once the failure started reporting what the tree held. BOTH failures
+        # in the reproduction carried `hud_found=False` - `hud_window(8.0)` had
+        # not found the window - and on one of them the stale control it fell
+        # back to DID contain 'Replace text in source box. Local AI | CUDA'. The
+        # button existed. `replace_button` had looked a moment too early and the
+        # diagnostic, running milliseconds later, found it.
+        #
+        # So the HUD briefly leaves the desktop between sections, and one look
+        # taken during that gap ended the run. Waiting for the view to leave
+        # "loading" was necessary and not sufficient: the published state can
+        # say `view=card, replace_enabled=True` while the window itself is
+        # momentarily absent, which is exactly what both failures reported.
+        #
+        # Polling for both together also removes the stale-control fallback,
+        # which is what made this present as two different bugs - sometimes the
+        # old control still answered and sometimes it was empty.
+        found_hud = None
+        button = None
+        if settled:
+            deadline = time.monotonic() + 30.0
+            while True:
+                found_hud = hud_window(4.0)
+                if found_hud is not None:
+                    button = replace_button(found_hud)
+                    if button is not None:
+                        break
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(1.0)
         if button is None:
+            # Say what WAS there, not only what was missing.
+            #
+            # "no Replace button at press 1" has now cost four gates and two
+            # days of guessing, twice being blamed on the harness looking too
+            # early when the app was genuinely hung, and once the reverse. The
+            # message names an absence, and an absence is consistent with every
+            # hypothesis: a hidden button, a renamed one, a stale window handle,
+            # a tree deeper than the walk, a HUD that never appeared. Naming the
+            # deepest traceback frame did exactly this for the COMError today and
+            # pointed at the real caller on the first run afterwards.
             report["stopped_because"] = (
                 f"no Replace button at press {press}; "
                 + harness_state.describe(harness_state.read_state())
+                + f"; hud_found={found_hud is not None}"
+                + f"; tree={_hud_tree_summary(found_hud or hud)}"
+                + f"; windows={_hud_window_candidates()}"
             )
             break
         if not button.IsEnabled:
@@ -1182,7 +1337,46 @@ def main() -> int:
             try:
                 result = review_one(target, tone=args.tone)
             except Exception as exc:  # noqa: BLE001 - keep going through the corpus
-                result = {"error": f"{type(exc).__name__}: {exc}", "after": ""}
+                # Name the FRAME, not just the exception.
+                #
+                # "COMError: (-2146233083, None, (None, None, None, 0, None))"
+                # is what this reported for four separate lost measurements
+                # across two days, and it says nothing about which call failed.
+                # Word, UI Automation and the clipboard all raise COMError, and
+                # without a location the only way to tell them apart was to
+                # guess and re-run - which cost a wrong diagnosis on 2026-08-28,
+                # when the focus helper was blamed and a probe cleared it.
+                # And name OUR frame as well as the library's, which is the
+                # level of detail this still lacked on 2026-08-30. Naming the
+                # deepest frame alone gave "uiautomation.py:7015
+                # GetNextSiblingControl" for five lost essays in one gate run -
+                # true, and useless, because it is the same answer for every
+                # tree walk in the harness. It identified the library and not
+                # the caller, so a fix aimed at one call site could not be told
+                # apart from no fix at all: replacing the enumeration in
+                # focus_named_word_window changed nothing here and the frame
+                # stayed identical, which is exactly the ambiguity that a
+                # location was supposed to remove.
+                frame = traceback.extract_tb(exc.__traceback__)
+                where = ""
+                if frame:
+                    last = frame[-1]
+                    where = f" at {Path(last.filename).name}:{last.lineno} {last.name}"
+                    ours = [
+                        item
+                        for item in frame
+                        if "uiautomation" not in Path(item.filename).name
+                    ]
+                    if ours:
+                        caller = ours[-1]
+                        where += (
+                            f" from {Path(caller.filename).name}:"
+                            f"{caller.lineno} {caller.name}"
+                        )
+                result = {
+                    "error": f"{type(exc).__name__}: {exc}{where}",
+                    "after": "",
+                }
             elapsed = round(time.monotonic() - started, 1)
 
             judged = score(before_text, result.get("after", ""), dictionary)

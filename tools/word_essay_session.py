@@ -227,22 +227,55 @@ def word_application():
         return word
 
 
+def _word_window_handle(stem: str) -> int:
+    """The handle of the Word window showing `stem`, by direct Win32 read.
+
+    NOT `automation.GetRootControl().GetChildren()`, which is what this used to
+    be and which cost the release gate three essays on 2026-08-30. That call
+    enumerates every top-level window on the desktop and reads each one's Name
+    through UI Automation. The per-window reads were guarded here; the
+    ENUMERATION was not, and it is the enumeration that fails - `GetChildren`
+    walks siblings internally, so one slow or dying window raises
+    `COMError (-2146233083)` out of `GetNextSiblingControl` and takes the whole
+    batch with it. Three essays died that way with presses=0 after 300 seconds
+    each, and the same error is recorded against this harness on 2026-08-26 and
+    2026-08-28.
+
+    `full_page_user_journey_probe._find_window_handle_by_prefix` already solved
+    this, for the speed half of the same problem: EnumWindows plus
+    GetWindowTextW is a direct Win32 read costing microseconds, and it cannot
+    raise COMError because no UI Automation is involved. This is that approach,
+    matching on a suffix and a substring instead of a prefix.
+
+    A window that misbehaves is now simply a window this skips.
+    """
+    user32 = ctypes.windll.user32
+    proto = ctypes.WINFUNCTYPE(
+        ctypes.c_bool, ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)
+    )
+    found = ctypes.c_int(0)
+
+    def callback(hwnd, result):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buffer, length + 1)
+        title = buffer.value
+        if title.endswith("- Word") and stem in title:
+            result[0] = hwnd
+            return False
+        return True
+
+    user32.EnumWindows(proto(callback), ctypes.byref(found))
+    return int(found.value or 0)
+
+
 def focus_named_word_window(stem: str) -> int:
     """Bring the Word window showing `stem` to the front. Returns its handle."""
-    import uiautomation as automation
-
-    handle = 0
-    for control in automation.GetRootControl().GetChildren():
-        try:
-            if control.ControlTypeName != "WindowControl":
-                continue
-            name = str(control.Name)
-        except Exception:  # noqa: BLE001 - other apps answer slowly
-            continue
-        if not name.endswith("- Word") or stem not in name:
-            continue
-        handle = int(control.NativeWindowHandle or 0)
-        break
+    handle = _word_window_handle(stem)
     if not handle:
         return 0
     user32 = ctypes.windll.user32

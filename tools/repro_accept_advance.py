@@ -34,12 +34,30 @@ MAX_PRESSES = 24
 
 
 def hud_window(timeout: float = 20.0):
-    import uiautomation as automation
+    """The HUD, found by window handle rather than by walking the UIA tree.
 
-    hud = automation.GetRootControl().WindowControl(
-        searchDepth=3, RegexName=r"Manuscript writing HUD.*"
-    )
-    return hud if hud.Exists(timeout, 0.4) else None
+    THIS is the call that has been costing whole batches. It used to build a
+    `WindowControl(searchDepth=3, RegexName=...)` off the root and poll
+    `Exists()`, which re-walks every top-level window and their children for up
+    to twenty seconds. On 2026-08-30 it took five of five essays in one gate run
+    with `COMError (-2146233083)` out of `GetNextSiblingControl`, presses=0 after
+    about 280 seconds each, and the same error is recorded against this harness
+    on 2026-08-26 and 2026-08-28.
+
+    It hid for so long because the batch reported only the deepest frame, and
+    `uiautomation.py GetNextSiblingControl` is the same answer for every tree
+    walk in this harness. It named the library, never the caller. Reporting our
+    own frame alongside it pointed here on the first run afterwards.
+
+    `full_page_user_journey_probe._hud_window` already does this correctly, and
+    its comment says why: EnumWindows plus GetWindowTextW is a direct Win32 read
+    costing microseconds, and it cannot raise COMError because no UI Automation
+    is involved in the search. Only the final `ControlFromHandle` touches UIA,
+    once, on a window already known to exist.
+    """
+    from full_page_user_journey_probe import _hud_window
+
+    return _hud_window(timeout)
 
 
 def _descend(control, depth: int = 0):

@@ -128,3 +128,42 @@ def test_a_batch_still_respects_the_timeout_ceiling():
     for batch in tone_request_batches(texts):
         total = sum(len(texts[index]) for index in batch)
         assert total <= TONE_BATCH_MAXIMUM_CHARACTERS, total
+
+
+def test_word_soft_line_break_is_not_a_sentence_boundary():
+    """Shift+Enter flows text on; it must never end a review unit.
+
+    Word gives a soft line break as VERTICAL TAB, and every one of the sixteen
+    damaged breaks in essay 10 of the error-riddled corpus is a <w:br/>, so
+    every one of them arrives as \v. Splitting there would send the model two
+    units where there is one sentence, and the orphaned half comes back with a
+    beginning the writer never wrote.
+
+    This already holds. The test exists because the character is invisible in
+    every offline fixture written with \n, so the requirement is one an edit
+    can silently break with every test still green - which is exactly how a \n
+    only duplicate rule hid 39 hits in writing_suggestions.py.
+    """
+    from echo_link_app.review_spans import _sentence_spans
+
+    text = "At the sametime, disruptions drive riders away. Next."
+    assert [text[start:end] for start, end in _sentence_spans(text)] == [
+        "At the sametime, disruptions drive riders away.",
+        "Next.",
+    ]
+
+
+def test_a_line_break_before_a_capital_still_ends_a_sentence():
+    """The guard above must not merge genuine paragraphs.
+
+    The corpus damages sentences by breaking them mid-clause, so the lowercase
+    test is what separates damage from structure. A paragraph that opens with a
+    capital is structure and stays its own unit, terminal punctuation or not.
+    """
+    from echo_link_app.review_spans import _sentence_spans
+
+    text = "The first paragraph ends here\nThe second one begins."
+    assert [text[start:end] for start, end in _sentence_spans(text)] == [
+        "The first paragraph ends here",
+        "The second one begins.",
+    ]

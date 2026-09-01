@@ -256,7 +256,15 @@ def _capitalised_misspelling(value: str) -> bool:
         dictionary = _entity_dictionary()
         if dictionary.contains(value.casefold()):
             return False
-        suggestion = dictionary.suggestion(value.casefold())
+        # `value`, NOT `value.casefold()`. The speller holds a stricter
+        # tie-break bar for a capitalised word, on the grounds that it is
+        # probably a name, and casefolding here threw away the very evidence
+        # that bar reads. This call is the one asking whether a NAME is a typo,
+        # so it is the last place that should discard the capital.
+        #
+        # Only distance and frequency are used below, and `suggestion` casefolds
+        # for its own lookup, so nothing else about this changes.
+        suggestion = dictionary.suggestion(value)
     except Exception:  # noqa: BLE001 - a missing dictionary must not unprotect names
         return False
     if suggestion is None:
