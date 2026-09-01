@@ -161,3 +161,72 @@ def test_no_baseline_means_no_bar_for_a_lower_is_better_metric():
     from autoresearch_cycle import decide
 
     assert decide(0.0, 18.0, higher_is_better=False) == "keep"
+
+
+def test_a_run_served_by_two_packs_is_a_crash_not_a_score(monkeypatch):
+    """The cause of the tone spread that made every verdict this session void.
+
+    The adaptive runtime silently swaps in the standby pack when the primary
+    cannot answer in time. A ~4B model writes weaker rewrites, those fail the
+    meaning guards, a failed guard falls back to deterministic rules, and rules
+    cannot do tone - so the score tracks how many sections happened to be handed
+    to the small model rather than how good the tone is.
+
+    Measured: the same source essay, judge and tone gave 35.7, 7.1 and 28.6
+    across three runs, while the judge returned 28.6 three times out of three on
+    a fixed document.
+
+    Asserting the JUDGE never runs, not merely that the result is None. A
+    version that judged a contaminated document and then discarded the number
+    would pass a weaker test while burning a 27B model for nothing.
+    """
+    import autoresearch_run
+    import autoresearch_tone_cycle as cycle
+
+    judged = []
+    monkeypatch.setattr(autoresearch_run, "_restart_word", lambda: None)
+    monkeypatch.setattr(autoresearch_run, "_stale_reason", lambda: "")
+    monkeypatch.setattr(autoresearch_run, "_log_length", lambda: 0)
+    monkeypatch.setattr(
+        autoresearch_run,
+        "_packs_that_served",
+        lambda _mark: {"gemma4-12b-qat-v1", "gemma4-e4b-qat-v1"},
+    )
+    monkeypatch.setattr(cycle.subprocess, "run", lambda *a, **k: judged.append(a))
+
+    percent, reason = cycle.measure("Friendly", Path("build/unused.log"))
+
+    assert percent is None
+    assert "more than one pack" in reason
+    assert "e4b" in reason
+    # The batch runs; the judge must not.
+    assert len(judged) <= 2
+
+
+def test_every_pack_that_served_is_reported_not_just_the_last(tmp_path, monkeypatch):
+    """`_served_pack` answers 'what is loaded now', which is the wrong question.
+
+    It returns the LAST pack it sees. In the retained log 33 of 629 requests
+    were served by the e4b and 596 by the 12b, and because the last was the 12b
+    the run reported as clean. A check that reports the final value rather than
+    whether anything varied is the defect shape that has cost this session most
+    of its wrong turns.
+    """
+    import autoresearch_run
+
+    log = tmp_path / "echo-link.log"
+    log.write_text(
+        "Polish plan pack=gemma4-12b-qat-v1 model=x backend=cuda\n"
+        "Polish plan pack=gemma4-e4b-qat-v1 model=y backend=cuda\n"
+        "Polish plan pack=gemma4-12b-qat-v1 model=x backend=cuda\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(autoresearch_run, "APP_LOG", log)
+
+    assert autoresearch_run._packs_that_served(0) == {
+        "gemma4-12b-qat-v1",
+        "gemma4-e4b-qat-v1",
+    }
+    # The old helper sees only the last, which is exactly why it could not
+    # catch this.
+    assert autoresearch_run._served_pack(0)[0] == "gemma4-12b-qat-v1"

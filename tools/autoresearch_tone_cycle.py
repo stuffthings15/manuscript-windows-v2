@@ -114,6 +114,7 @@ def measure(tone: str, log: Path) -> tuple[float | None, str]:
     stale = autoresearch_run._stale_reason()
     if stale:
         return None, f"stale app, {stale}"
+    mark = autoresearch_run._log_length()
     with log.open("w", encoding="utf-8") as stream:
         subprocess.run(
             [
@@ -123,6 +124,27 @@ def measure(tone: str, log: Path) -> tuple[float | None, str]:
             ],
             cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT, timeout=5400,
         )
+
+    # A run that two different packs served is not a measurement of either.
+    #
+    # The adaptive runtime silently swaps in the standby pack when the primary
+    # cannot answer in time. A ~4B model writes weaker rewrites, weaker rewrites
+    # fail the meaning guards, a failed guard falls back to deterministic rules,
+    # and rules cannot do tone at all - so the score tracks how many sections
+    # happened to be handed to the small model.
+    #
+    # That is not a theory. On 2026-09-01 the SAME source essay, the SAME judge
+    # and the SAME tone produced 35.7, 7.1 and 28.6 across three runs, while the
+    # judge itself returned 28.6 three times out of three on a fixed document.
+    # The judge is reproducible; the correction run was not.
+    #
+    # A crash, not a low score, for the reason this file already carries: an
+    # absent measurement is a claim about the run, a zero is a claim about the
+    # product.
+    packs = autoresearch_run._packs_that_served(mark)
+    if len(packs) > 1:
+        return None, f"more than one pack served this run: {sorted(packs)}"
+
     reason = _judged_run_completed(source.stem)
     if reason:
         return None, reason

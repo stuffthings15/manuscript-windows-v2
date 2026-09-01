@@ -287,6 +287,34 @@ def _git_head() -> str:
         return "unknown"
 
 
+def _packs_that_served(since_line: int) -> set[str]:
+    """EVERY pack that served a section after a mark, not just the last one.
+
+    `_served_pack` below returns the last pack it sees, which is the right
+    answer to "what is loaded now" and the wrong one to "what produced this
+    measurement". Measured 2026-09-01: 33 of 629 requests in one retained log
+    were served by gemma4-e4b-qat-v1 while 596 used the 12b, and the last one
+    was the 12b - so the run reported as clean.
+
+    That matters because the adaptive runtime silently swaps in the standby pack
+    when the primary cannot answer in time. A ~4B model writes weaker rewrites,
+    weaker rewrites fail the meaning guards, a failed guard falls back to
+    deterministic rules, and rules cannot do tone at all. The same essay then
+    scores 35.7, 7.1 or 28.6 depending only on GPU timing - which is exactly the
+    spread that made every tone verdict this session worthless.
+    """
+    try:
+        lines = APP_LOG.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return set()
+    packs = set()
+    for line in lines[since_line:]:
+        found = re.search(r"Polish plan pack=(\S+) model=", line)
+        if found and found.group(1) != "-":
+            packs.add(found.group(1))
+    return packs
+
+
 def _served_pack(since_line: int) -> tuple[str, str, str]:
     """What the app actually loaded, read from its own log after a mark.
 
