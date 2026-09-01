@@ -29,3 +29,13 @@ models/**/*.bin
 # run.log is already covered by *.log above.
 results.tsv
 progress.png
+
+# The bundled Polish host, placed here for DEV RUNS only.
+#
+# EchoLink.spec maps build/generated/polish-host -> resources/polish-host at
+# PACKAGE time, so a shipped install has it and a source checkout never does.
+# That meant every measurement taken from source exercised the ollama
+# compatibility path while customers get the bundled llama.cpp host - we were
+# not measuring what ships. Copying it here closes that gap; it is a 67 MB
+# build artefact and must never be committed.
+resources/polish-host/
