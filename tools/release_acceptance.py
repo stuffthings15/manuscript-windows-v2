@@ -181,8 +181,24 @@ def _run_was_truncated(row: dict) -> bool:
         # The HUD closing after the final press is how a finished document
         # ends, and it arrives here as "section M/M".
         return reached < total
-    # No progress marker and nothing else wrong: the run ended on its own terms.
-    return False
+    if not stopped:
+        # No reason recorded at all, and nothing else wrong: a clean run.
+        return False
+    # A STATED reason with no progress marker in it means the run stopped for
+    # something that was not completion, and completion was never confirmed.
+    #
+    # Measured 2026-09-01 by the first reliability run over
+    # test-corpus/document-shapes. Four of five documents carried a marker and
+    # were honestly judged. The fifth stopped with "the HUD was gone at press 5
+    # and three attempts to take focus back from another window failed", left
+    # four paragraphs unreviewed, and scored as COMPLETE, because a reason with
+    # no marker in it fell through to False. The metric reported 100 percent on
+    # a run that had visibly failed.
+    #
+    # A finished document always says "section M/M", because the HUD publishes
+    # its counter as it closes. Absence of that is absence of evidence, and for
+    # a reliability metric the honest default is to disbelieve.
+    return True
 
 
 def _incomplete_runs() -> list[dict[str, object]]:

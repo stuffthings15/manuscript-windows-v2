@@ -126,3 +126,40 @@ def test_the_old_rule_would_have_disagreed_on_the_case_that_matters():
     old_rule_says_incomplete = str(row.get("outcome") or "") != "complete"
     assert old_rule_says_incomplete is True
     assert _run_was_truncated(row) is False
+
+
+def test_a_stated_reason_with_no_progress_marker_is_truncated():
+    """Absence of evidence is not evidence of completion.
+
+    Found by the first reliability run over test-corpus/document-shapes on
+    2026-09-01. Four of five documents ended with "section M/M" and were judged
+    honestly. The fifth stopped with "the HUD was gone at press 5 and three
+    attempts to take focus back from another window failed", left four
+    paragraphs unreviewed, and scored as COMPLETE, because a reason carrying no
+    marker fell through to False. The metric reported 100 percent on a run that
+    had visibly failed, on its very first measurement.
+
+    A finished document always says "section M/M": the HUD publishes its
+    counter as it closes. A stated reason without one is a run that stopped for
+    something else.
+    """
+    row = {
+        "presses": 4,
+        "stalled_at": None,
+        "error": None,
+        "stopped_because": (
+            "the HUD was gone at press 5 and three attempts to take focus "
+            "back from another window failed"
+        ),
+    }
+    assert _run_was_truncated(row) is True
+
+
+def test_a_clean_run_is_still_complete_after_that_rule():
+    """The rule above must not swallow the ordinary case it sits next to."""
+    assert _run_was_truncated(
+        {"presses": 25, "stalled_at": None, "stopped_because": None, "error": None}
+    ) is False
+    assert _run_was_truncated(
+        {"presses": 25, "stalled_at": None, "stopped_because": "", "error": None}
+    ) is False
