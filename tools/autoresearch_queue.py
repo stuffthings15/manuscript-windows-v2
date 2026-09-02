@@ -384,6 +384,33 @@ def main(argv: list[str] | None = None) -> int:
                 "--describe",
                 description,
             ]
+        elif kind == "reliability":
+            # Completion rate over test-corpus/document-shapes. Added because
+            # the queue could dispatch only essays and tone, so the reliability
+            # metric built on 2026-09-01 had to be run by hand, one experiment
+            # per prompt - which is the exact thing this queue exists to stop.
+            command = [
+                sys.executable,
+                str(ROOT / "tools/autoresearch_reliability_cycle.py"),
+                "--slice",
+                slice_name,
+                "--describe",
+                description,
+            ]
+        elif kind.startswith("essays-"):
+            # A single error class: essays-grammar, essays-punctuation and so
+            # on. The correction cycle knows the metric; the slice name is
+            # still the essay numbers.
+            command = [
+                sys.executable,
+                str(ROOT / "tools/autoresearch_cycle.py"),
+                "--essays",
+                slice_name,
+                "--metric",
+                kind.split("-", 1)[1],
+                "--describe",
+                description,
+            ]
         else:
             command = [
                 sys.executable,

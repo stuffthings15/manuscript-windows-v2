@@ -51,7 +51,26 @@ RELS = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 BLANK_LINE = re.compile(r"\r?\n[ \t]*\r?\n")
 
 
-def blocks(raw: str) -> list[str]:
+def blocks(raw: str, *, line_per_paragraph: bool = False) -> list[str]:
+    """The blocks that become Word paragraphs.
+
+    By default a BLANK LINE separates paragraphs, which is what the
+    error-riddled corpus uses and which keeps its deliberate mid-paragraph line
+    breaks as line breaks rather than paragraph splits.
+
+    `line_per_paragraph` is for a corpus written with one paragraph per line and
+    no blank lines between them. `test-corpus/held-out` is written that way: 10
+    lines, 0 blank lines, so the default turns a whole essay into ONE Word
+    paragraph while the gated corpus essays carry 17 blank lines and become
+    about eighteen. Grading those two against each other would compare document
+    structure and call the difference overfitting.
+
+    A flag rather than a guess. Detecting "no blank lines" and silently changing
+    behaviour would eventually reshape a corpus nobody meant to reshape, and the
+    resulting number would look exactly like a real result.
+    """
+    if line_per_paragraph:
+        return [line for line in raw.splitlines() if line.strip()]
     return [block for block in BLANK_LINE.split(raw) if block.strip()]
 
 
@@ -70,8 +89,11 @@ def paragraph_xml(block: str) -> str:
     return f"<w:p>{''.join(runs)}</w:p>"
 
 
-def document_xml(raw: str) -> str:
-    body = "".join(paragraph_xml(block) for block in blocks(raw))
+def document_xml(raw: str, *, line_per_paragraph: bool = False) -> str:
+    body = "".join(
+        paragraph_xml(block)
+        for block in blocks(raw, line_per_paragraph=line_per_paragraph)
+    )
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         f'<w:document xmlns:w="{W}"><w:body>{body}'
@@ -79,18 +101,27 @@ def document_xml(raw: str) -> str:
     )
 
 
-def write_docx(raw: str, destination: Path) -> None:
+def write_docx(raw: str, destination: Path, *, line_per_paragraph: bool = False) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("[Content_Types].xml", CONTENT_TYPES)
         archive.writestr("_rels/.rels", RELS)
-        archive.writestr("word/document.xml", document_xml(raw))
+        archive.writestr(
+            "word/document.xml",
+            document_xml(raw, line_per_paragraph=line_per_paragraph),
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument(
+        "--line-per-paragraph",
+        action="store_true",
+        help="one paragraph per non-empty line, for a corpus written without "
+        "blank lines between paragraphs (test-corpus/held-out is)",
+    )
     args = parser.parse_args(argv)
 
     sources = sorted(
@@ -104,8 +135,9 @@ def main(argv: list[str] | None = None) -> int:
     for source in sources:
         raw = source.read_text(encoding="utf-8")
         destination = args.out / f"{source.stem}.docx"
-        write_docx(raw, destination)
-        print(f"{source.name} -> {destination.name} ({len(blocks(raw))} paragraphs)")
+        write_docx(raw, destination, line_per_paragraph=args.line_per_paragraph)
+        count = len(blocks(raw, line_per_paragraph=args.line_per_paragraph))
+        print(f"{source.name} -> {destination.name} ({count} paragraphs)")
 
     print(f"\nwrote {len(sources)} documents to {args.out}")
     return 0
