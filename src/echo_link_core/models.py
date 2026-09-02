@@ -82,6 +82,16 @@ class DictationSettings:
     show_echo_bar: bool = True
     echo_bar_x: int | None = None
     echo_bar_y: int | None = None
+    # Where the writing badge sits RELATIVE TO THE TEXT it was captured from,
+    # not on the screen: x from the anchor's right edge, y from its top. A
+    # screen position would be wrong the moment the writer scrolled or moved
+    # the window. None means the default placement, above and to the right.
+    # Set automatically whenever the badge is dragged, so moving it once is
+    # the whole of the preference.
+    hud_badge_offset_x: int | None = None
+    hud_badge_offset_y: int | None = None
+    # The default corner used until the badge is dragged.
+    hud_badge_position: str = "above-right"
     sound_enabled: bool = True
     pause_media_during_dictation: bool = True
     close_to_tray: bool = True

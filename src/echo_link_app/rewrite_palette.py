@@ -176,6 +176,29 @@ class TonePicker(QPushButton):
         self.currentTextChanged.emit(value)
 
 
+
+def _anchor_in_screen_points(
+    anchor: tuple[int, int, int, int], screen
+) -> tuple[int, int, int, int]:
+    """An accessibility anchor in the same units Qt positions windows in.
+
+    UI Automation reports physical pixels and Qt places windows in logical
+    points, so on a scaled display the two disagree by the device pixel ratio.
+    Shared by the placement and by the drag that records an offset, because if
+    those two measured differently the badge would jump the next time it was
+    shown.
+    """
+    left, top, right, bottom = anchor
+    if sys.platform != "win32" or screen is None:
+        return int(left), int(top), int(right), int(bottom)
+    scale = max(1.0, float(screen.devicePixelRatio()))
+    return (
+        round(left / scale),
+        round(top / scale),
+        round(right / scale),
+        round(bottom / scale),
+    )
+
 class RewritePalette(QDialog):
     """Progressive, focus-safe writing HUD for one captured selection."""
 
@@ -189,6 +212,9 @@ class RewritePalette(QDialog):
     applied = Signal()
     rejected = Signal()
     target_changed = Signal(int, int)
+    # (x, y) from the captured text's right edge and top, whenever the
+    # writer drags the badge. The window persists it to settings.
+    badge_offset_changed = Signal(int, int)
 
     _BADGE_SIZE = QSize(36, 36)
     _LOADING_SIZE = QSize(292, 108)
@@ -328,6 +354,9 @@ class RewritePalette(QDialog):
         self._badge_press_origin: QPoint | None = None
         self._badge_drag_offset: QPoint | None = None
         self._badge_dragged = False
+        # Remembered placement relative to the captured text, or None for
+        # the default. Loaded from settings and rewritten on every drag.
+        self._badge_offset: tuple[int, int] | None = None
         self._user_positioned = False
         # Placed once per capture, then left alone. The box used to be
         # re-positioned by every resize and every section change, and the card
@@ -576,6 +605,43 @@ class RewritePalette(QDialog):
             self._badge_drag_offset = None
             if self._badge_dragged:
                 self._clamp_current_position()
+                self._remember_badge_offset()
+
+    def set_badge_offset(self, offset: tuple[int, int] | None) -> None:
+        """Restore a remembered placement, or None for the default corner."""
+        self._badge_offset = (
+            (int(offset[0]), int(offset[1])) if offset is not None else None
+        )
+
+    def _remember_badge_offset(self) -> None:
+        """Record where the writer just dropped the badge, relative to the text.
+
+        Curtis, 2026-09-01: "you should always be able to move it, and the
+        system should remember wherever you move it in relation to the text
+        AUTOMATICALLY."
+
+        Relative to the anchor, never to the screen: a screen position is wrong
+        as soon as the document is scrolled, the window is moved, or the writer
+        works on a second monitor. Measured from the anchor's right edge and
+        top, which is the corner the default placement uses, so a badge that is
+        never dragged and one dragged back to where it started record the same
+        thing.
+        """
+        anchor = self._anchor
+        if anchor is None:
+            return
+        screen = QApplication.screenAt(self.pos()) or QApplication.primaryScreen()
+        _left, top, right, _bottom = _anchor_in_screen_points(anchor, screen)
+        offset = (self.x() - right, self.y() - top)
+        if offset == self._badge_offset:
+            return
+        self._badge_offset = offset
+        logger.info(
+            "Writing HUD badge position remembered offset=(%d,%d)",
+            offset[0],
+            offset[1],
+        )
+        self.badge_offset_changed.emit(offset[0], offset[1])
 
     def _build_loading_page(self) -> QWidget:
         page = QFrame()
@@ -1196,6 +1262,36 @@ class RewritePalette(QDialog):
         self.badge_button.setToolTip("Analyzing selected text locally.")
         self.badge_button.setAccessibleName("Manuscript is analyzing selected text locally")
 
+    def _show_nothing_to_correct(self) -> None:
+        """Say that a document needs nothing, instead of showing an empty card.
+
+        A review can be empty for one reason: every section has been through
+        the AI and come back unchanged. That is a real answer and the writer is
+        entitled to hear it. Silently opening a card with no sections gave them
+        a vanished badge and no explanation, three separate times on
+        2026-09-01, and it reads exactly like a crash.
+
+        The badge is kept rather than hidden. Suppressing it was tried on
+        2026-08-18 and is worse: it removes the only way back into a document.
+        """
+        logger.info(
+            "Writing HUD nothing to correct: every section came back unchanged"
+        )
+        self._set_badge_state_reviewed()
+        self._set_status("Nothing left to correct in this text.")
+        self._set_view("badge", activate=False, reposition=False)
+        # The automatic selection monitor is suspended while a review is open,
+        # and something has to release it. Showing the badge and stopping there
+        # left it suspended forever: after this fired at 13:50:38 the log
+        # recorded no focus event at all, so no badge appeared on ANY text box,
+        # in Word or anywhere else, until the app was restarted.
+        #
+        # `unchanged` is the existing signal for a review that ended with
+        # nothing to apply. It resumes the monitor, remembers the text as
+        # reviewed so it is not offered again unasked, and clears the review
+        # state - which is exactly what has happened here.
+        self.unchanged.emit()
+
     def _set_badge_state_reviewed(self) -> None:
         """The badge for a document that has already been reviewed once."""
         self.badge_button.setText("")
@@ -1221,6 +1317,19 @@ class RewritePalette(QDialog):
             self._finish_automatic_analysis()
         self._user_opened = True
         self._target_marking_enabled = True
+        if not self._review_suggestions:
+            # Every section has been through the AI and come back unchanged,
+            # so there is nothing to review. Falling through here opened a card
+            # with no sections in it, and Curtis reported that three times as
+            # "you click the small icon and it just disappears and does not
+            # come back" - the badge went away and nothing replaced it.
+            #
+            # The empty review itself is deliberate and older than this branch:
+            # presenting sections the AI left alone is what walked a writer
+            # through 22 empty sections. What was missing is this, the answer
+            # to the click. The badge stays, so there is still a way back in.
+            self._show_nothing_to_correct()
+            return
         if self._ai_proofread:
             # The review card was populated by fast local rules while it was
             # hidden behind the badge. Clear that placeholder before any AI
@@ -1581,6 +1690,13 @@ class RewritePalette(QDialog):
         self._ai_ready_messages[suggestion_id] = message
         self._update_series_progress()
         self._render_suggestions()
+        if not self._review_suggestions and self._view in {"card", "loading"}:
+            # The last outstanding section came back unchanged while the card
+            # was open, so there is nothing left to show. Without this the
+            # writer is left looking at the section they just resolved, or at
+            # an empty card, with no statement that the document is done.
+            self._show_nothing_to_correct()
+            return
         # Hiding a section that came back unchanged slides a DIFFERENT section
         # under the card, and that one may never have been asked for. Without
         # this the review simply stops requesting and the remaining sections
@@ -3852,15 +3968,19 @@ class RewritePalette(QDialog):
             target_x = QCursor.pos().x() - width // 2
             target_y = QCursor.pos().y() + 14
         else:
-            left, top, right, bottom = anchor
-            if sys.platform == "win32":
-                scale = max(1.0, float(screen.devicePixelRatio()))
-                left, top, right, bottom = (
-                    round(left / scale),
-                    round(top / scale),
-                    round(right / scale),
-                    round(bottom / scale),
-                )
+            left, top, right, bottom = _anchor_in_screen_points(anchor, screen)
+            if self._badge_offset is not None:
+                # Where the writer last put it, measured from the text rather
+                # than from the screen, so it survives scrolling and moving the
+                # window. Set by dragging; nothing else has to be configured.
+                offset_x, offset_y = self._badge_offset
+                target_x = right + offset_x
+                target_y = top + offset_y
+                x = min(max(target_x, area.left()), area.right() - width + 1)
+                y = min(max(target_y, area.top()), area.bottom() - height + 1)
+                self.move(x, y)
+                self._placed_for_capture = True
+                return
             # The badge sits to the right of the text it was captured from.
             #
             # Two earlier attempts got this wrong in ways worth recording.
@@ -3877,7 +3997,19 @@ class RewritePalette(QDialog):
             target_x = right + 8
             if target_x + width - 1 > area.right():
                 target_x = right - width - 8
-            target_y = top + ((bottom - top) - height) // 2
+            # Above the text, not level with it.
+            #
+            # Centring on the anchor put the badge beside the middle of the
+            # captured text, which is where the writing is. Curtis, 2026-09-01:
+            # "The small icon should appear to the right of the texture it is
+            # operating on, but also above it so it does not obscure it."
+            #
+            # When there is no room above - the text starts at the top of the
+            # screen - it goes below rather than being clamped into the text it
+            # is meant to stay clear of.
+            target_y = top - height - 8
+            if target_y < area.top():
+                target_y = bottom + 8
         x = min(max(target_x, area.left()), area.right() - width + 1)
         y = min(max(target_y, area.top()), area.bottom() - height + 1)
         self.move(x, y)

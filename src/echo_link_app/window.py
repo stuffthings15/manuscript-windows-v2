@@ -396,6 +396,12 @@ class EchoLinkWindow(QMainWindow):
         self.rewrite_palette.applied.connect(self._finish_palette_applied)
         self.rewrite_palette.rejected.connect(self._reject_palette_result)
         self.rewrite_palette.target_changed.connect(self._show_palette_target)
+        self.rewrite_palette.badge_offset_changed.connect(self._save_badge_offset)
+        # Restore the remembered placement before the badge is ever shown.
+        _offset_x = self.engine.settings.hud_badge_offset_x
+        _offset_y = self.engine.settings.hud_badge_offset_y
+        if _offset_x is not None and _offset_y is not None:
+            self.rewrite_palette.set_badge_offset((int(_offset_x), int(_offset_y)))
         # Pause on mouse-down. Waiting for clicked (mouse-up) lets the source
         # editor report focus loss and close the badge before the click lands.
         self.rewrite_palette.badge_button.pressed.connect(self._pause_selection_monitor)
@@ -2973,16 +2979,41 @@ class EchoLinkWindow(QMainWindow):
         )
 
     def _show_palette_target(self, start: int, end: int) -> None:
+        # Every failure here is silent, and the writer sees only that the red
+        # underline stopped appearing. Curtis reported exactly that on
+        # 2026-09-01 with nothing in the log to say which of the three ways it
+        # gives up had happened: no capture to measure against, a reader
+        # without the rectangle call, or a lookup that returned no rectangles.
+        # Offsets and a count only, never the text.
         record = self.selected_text_record
         if record is None or start < 0 or end <= start:
+            logger.info(
+                "Writing HUD target underline cleared: record=%s start=%d end=%d",
+                record is not None,
+                start,
+                end,
+            )
             self.target_underline.clear()
             return
         reader = WindowsSelectionReader(max_characters=500_000)
         rectangle_reader = getattr(reader, "text_rectangles", None)
         if not callable(rectangle_reader):
+            logger.warning(
+                "Writing HUD target underline unavailable: the selection reader "
+                "has no text_rectangles"
+            )
             self.target_underline.clear()
             return
         rectangles = rectangle_reader(record, start, end, scroll_into_view=True)
+        logger.info(
+            "Writing HUD target underline start=%d end=%d rectangles=%d "
+            "record_chars=%d scope=%s",
+            start,
+            end,
+            len(rectangles or ()),
+            len(str(record.text or "")),
+            record.scope,
+        )
         self.target_underline.show_rectangles(rectangles)
 
     def _check_palette_focus(self) -> None:
@@ -4564,6 +4595,20 @@ class EchoLinkWindow(QMainWindow):
     def _resume_selection_monitor(self) -> None:
         if self.selection_monitor is not None:
             self.selection_monitor.resume()
+
+    def _save_badge_offset(self, x: int, y: int) -> None:
+        """Persist where the writer dragged the badge, relative to the text.
+
+        Written on every drop rather than behind a preference, because the
+        preference IS the drop: "the system should remember wherever you move
+        it in relation to the text AUTOMATICALLY".
+        """
+        settings = self.store.get_settings()
+        settings.hud_badge_offset_x = int(x)
+        settings.hud_badge_offset_y = int(y)
+        self.store.save_settings(settings)
+        self.engine.settings.hud_badge_offset_x = int(x)
+        self.engine.settings.hud_badge_offset_y = int(y)
 
     def _save_echo_bar_position(self, x: int, y: int) -> None:
         settings = self.store.get_settings()

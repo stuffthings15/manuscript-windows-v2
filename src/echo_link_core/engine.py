@@ -32,6 +32,30 @@ from .transcription import LocalWhisperTranscriber
 
 
 logger = logging.getLogger(__name__)
+
+
+def _longest_character_run(text: str) -> int:
+    """The longest run of one repeated character, for diagnosing a stutter.
+
+    A number, never the text. Dictation returned "From fffirst-person" for
+    "From first-person" on 2026-09-01 and nothing in the log could say which
+    stage introduced it, because logging the text itself is forbidden here and
+    rightly so. A run length can be logged safely and answers the only question
+    that matters: whether the stutter is already in the transcription or is
+    added afterwards.
+
+    Ordinary English reaches 2 ("ll", "ss"), so a run of 3 or more letters is
+    the signal.
+    """
+    longest = 0
+    run = 0
+    previous = ""
+    for character in str(text or ""):
+        run = run + 1 if character == previous else 1
+        previous = character
+        if character.isalpha() and run > longest:
+            longest = run
+    return longest
 _LEASE_UNSET = object()
 
 _INSERTION_UNCERTAIN_MESSAGE = (
@@ -1059,10 +1083,28 @@ class DictationEngine:
                     refined = self.correction.correct(raw_text, DictationMode.REFINE)
                 # The refinement pass, timed at the point of use. Characters
                 # only - never the text itself.
+                # in AND out, because these were both reported as "characters"
+                # and were not the same measurement: this line logged the
+                # length going IN while the insertion line logs the length
+                # coming OUT, so a refinement that grew the text looked like
+                # two unrelated numbers. On 2026-09-01 the writer got
+                # "From fffirst-person" out of "From first-person" and the log
+                # showed 119 against 122 with nothing to say which stage added
+                # the characters.
+                #
+                # `_longest_character_run` counts the longest run of one
+                # repeated character. It is a number, never the text, so it can
+                # say whether the stutter is already in the transcription or is
+                # introduced by the refinement.
+                refined_text = str(getattr(refined, "text", "") or "")
                 logger.info(
-                    "Dictation refinement finished seconds=%.3f characters=%d",
+                    "Dictation refinement finished seconds=%.3f characters=%d "
+                    "refined_characters=%d longest_run_in=%d longest_run_out=%d",
                     time.monotonic() - refine_started,
                     len(str(raw_text or "")),
+                    len(refined_text),
+                    _longest_character_run(str(raw_text or "")),
+                    _longest_character_run(refined_text),
                 )
                 warning = _join_warning(warning, refined.warning)
             except Exception:
