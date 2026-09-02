@@ -101,6 +101,29 @@ def current_baseline(name: str, kind: str = "essays") -> float:
     return best
 
 
+def missing_baseline(name: str, kind: str, *, higher_is_better: bool = True) -> str:
+    """Why this slice cannot be experimented on yet, or "" if it can.
+
+    The queue has refused a slice with no baseline since essays 4 and 6 were
+    judged against 0.00 and escaped being wrong only because both happened to
+    score 100. The CYCLES never had that guard, so calling one directly on a
+    fresh slice keeps whatever it scores and writes a bar nothing supports -
+    which every later comparison on that slice then inherits.
+
+    Only for higher-is-better metrics. For a lower-is-better metric a zero
+    baseline is deliberately "no bar", because zero is not a floor to beat but
+    an impossible one; `decide` documents that.
+    """
+    if not higher_is_better:
+        return ""
+    if current_baseline(name, kind) > 0.0:
+        return ""
+    return (
+        f"no baseline for {kind} {name}. Measure it unchanged and record the "
+        f"row before running experiments on this slice."
+    )
+
+
 def decide(
     baseline: float, score: float | None, *, higher_is_better: bool = True
 ) -> str:
@@ -144,6 +167,65 @@ def record(commit: str, score: float | None, memory_gb: float, status: str,
         handle.write(
             f"{commit}\t{printed}\t{memory_gb:.1f}\t{status}\t{description}\n"
         )
+
+
+def void_row(commit: str, name: str, kind: str, score: float, reason: str) -> int:
+    """Retire a kept row that should never have set a bar. Returns rows changed.
+
+    `current_baseline` takes the MAX of kept scores on a slice, deliberately: the
+    bar is the best result kept so far, a ratchet, and taking the most recent
+    instead would let a regression lower it. That is right, and it is also why a
+    single wrong `keep` poisons a slice permanently - the max never comes back
+    down.
+
+    Measured 2026-09-01. The first reliability baseline recorded 100.0 on a batch
+    where one document had visibly failed, because the gate scored a stated stop
+    reason with no section marker as complete. The corrected 80.0 row was
+    appended below it and the bar stayed at 100.0, so the next experiment was
+    judged against a number nothing supported. It had to be fixed by hand-editing
+    results.tsv, which is not a thing the loop should ever require.
+
+    `decide` writes only keep, discard and crash, so `void` existed as a hand
+    annotation and nothing else. It is now writable, with the reason recorded in
+    the description where a reader will see it.
+
+    The row is rewritten in place rather than appended to, because an append
+    cannot lower a max. That is the one edit this loop makes to its own ledger,
+    and it is deliberately narrow: it changes a status and a description, never a
+    score, and it refuses unless it can name exactly ONE row.
+
+    The score is part of the identity for that reason. A commit and a slice are
+    not unique - the 2026-09-01 case had the wrong 100.0 and the corrected 80.0
+    on the SAME commit and the SAME slice, and a first version of this matched
+    both and would have voided the good row along with the bad one. Its own test
+    caught that. Returning 0 rather than voiding several is the safe direction:
+    a bar left too high wastes experiments, a corrected row silently retired
+    loses the measurement.
+    """
+    tag = slice_tag(name, kind)
+    printed = f"{score:.6f}"
+    try:
+        lines = RESULTS.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return 0
+    matches = [
+        index
+        for index, line in enumerate(lines)
+        for parts in [line.split("\t")]
+        if len(parts) >= 5
+        and parts[0] == commit
+        and parts[1] == printed
+        and parts[3] == "keep"
+        and parts[4].startswith(tag)
+    ]
+    if len(matches) != 1:
+        return 0
+    parts = lines[matches[0]].split("\t")
+    parts[3] = "void"
+    parts[4] = f"{parts[4]}, VOID: {reason}"
+    lines[matches[0]] = "\t".join(parts)
+    RESULTS.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return 1
 
 
 def main(argv: list[str] | None = None) -> int:

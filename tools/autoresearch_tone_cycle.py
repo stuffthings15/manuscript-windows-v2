@@ -243,6 +243,13 @@ def main(argv: list[str] | None = None) -> int:
     description = f"{tag} {arguments.describe}"
     before = autoresearch_cycle._git("rev-parse", "--short", "HEAD")
 
+    # Same guard as the queue. Five of six tones have no baseline, so without
+    # this a direct call would record a bar that nothing measured.
+    blocked = autoresearch_cycle.missing_baseline(arguments.tone, "tone")
+    if blocked:
+        print(f"NO BASELINE {blocked}")  # noqa: T201
+        return 2
+
     lint = subprocess.run(
         [sys.executable, "-m", "ruff", "check", "src", "tools"],
         cwd=ROOT, capture_output=True, text=True,
