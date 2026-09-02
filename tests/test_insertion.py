@@ -863,13 +863,22 @@ def test_direct_unicode_emits_utf16_key_down_and_up_events(monkeypatch):
     monkeypatch.setattr(insertion, "_DIRECT_CHARACTER_DELAY_SECONDS", 0)
     assert insertion._send_unicode_text("A\u00e9", expected_window=target) is True
 
-    assert len(batches) == 2
+    # One call, not one per character. Characters are batched into a single
+    # SendInput array, which Windows delivers atomically: per-character sending
+    # corrupted dictation in Windows 11 Notepad on 2026-09-01, repeating and
+    # dropping letters. What must not change is the events themselves, so this
+    # asserts the full ordered sequence rather than how many calls carry it.
     assert all(operation == "direct Unicode input" for _, operation in batches)
-    assert [[payload.union.ki.wScan for payload in payloads] for payloads, _ in batches] == [
-        [0x0041, 0x0041],
-        [0x00E9, 0x00E9],
+    events = [payload for payloads, _ in batches for payload in payloads]
+    assert [payload.union.ki.wScan for payload in events] == [
+        0x0041,
+        0x0041,
+        0x00E9,
+        0x00E9,
     ]
-    assert [payload.union.ki.dwFlags for payload in batches[-1][0]] == [
+    assert [payload.union.ki.dwFlags for payload in events] == [
+        insertion.KEYEVENTF_UNICODE,
+        insertion.KEYEVENTF_UNICODE | insertion.KEYEVENTF_KEYUP,
         insertion.KEYEVENTF_UNICODE,
         insertion.KEYEVENTF_UNICODE | insertion.KEYEVENTF_KEYUP,
     ]
@@ -901,26 +910,80 @@ def test_direct_unicode_uses_safe_shift_enter_for_newlines(monkeypatch):
 
     assert insertion._send_unicode_text("A\r\nB\nC", expected_window=target) is True
 
-    assert len(batches) == 5
-    newline_payloads = batches[1][0]
-    assert [payload.union.ki.wVk for payload in newline_payloads] == [
+    # Batched into one call now, so the newline is checked by its position in
+    # the event stream rather than by which call carried it. Shift+Enter is the
+    # point: a bare Enter can submit a form or send a message instead of
+    # breaking a line.
+    events = [payload for payloads, _ in batches for payload in payloads]
+    newline_events = [
+        payload for payload in events if payload.union.ki.wVk in (
+            insertion.VK_SHIFT,
+            insertion.VK_RETURN,
+        )
+    ]
+    assert [payload.union.ki.wVk for payload in newline_events[:4]] == [
         insertion.VK_SHIFT,
         insertion.VK_RETURN,
         insertion.VK_RETURN,
         insertion.VK_SHIFT,
     ]
-    assert [payload.union.ki.dwFlags for payload in newline_payloads] == [
+    assert [payload.union.ki.dwFlags for payload in newline_events[:4]] == [
         0,
         0,
         insertion.KEYEVENTF_KEYUP,
         insertion.KEYEVENTF_KEYUP,
     ]
+    # Both newlines, and nothing else, took the Shift+Enter route.
+    assert len(newline_events) == 8
+
+
+def test_direct_unicode_sends_a_sentence_in_few_calls_not_one_per_character(
+    monkeypatch,
+):
+    """Per-character SendInput is what corrupted Windows 11 Notepad.
+
+    On 2026-09-01 dictation produced "From fffirst-person" for "From
+    first-person", and then "The eeea.,rom ooooooooooooon   ler's" - letters
+    both repeated and dropped. Eighty-nine characters were being sent as
+    eighty-nine separate synthetic keystrokes a millisecond apart. It happened
+    in Notepad only: Word corrections take the COM path entirely, and Word's
+    dictation target is a classic Win32 control that keeps up.
+    """
+    target = WindowSnapshot(10, 20, "Editor")
+    batches = []
+    monkeypatch.setattr(insertion, "_target_is_active", lambda _window: True)
+    monkeypatch.setattr(insertion, "_DIRECT_CHARACTER_DELAY_SECONDS", 0)
+    monkeypatch.setattr(
+        insertion,
+        "_send_inputs",
+        lambda payloads, *, operation: batches.append((payloads, operation)),
+    )
+    sentence = "From a first-person point of view, this is a whole sentence."
+
+    assert insertion._send_unicode_text(sentence, expected_window=target) is True
+
+    # A sentence is a handful of calls, not one per character.
+    assert len(batches) <= 3
+    # And every character still arrives, in order, down and up.
+    events = [payload for payloads, _ in batches for payload in payloads]
+    assert len(events) == len(sentence) * 2
+    typed = "".join(
+        chr(payload.union.ki.wScan)
+        for payload in events
+        if payload.union.ki.dwFlags == insertion.KEYEVENTF_UNICODE
+    )
+    assert typed == sentence
 
 
 def test_direct_unicode_stops_if_focus_changes_between_batches(monkeypatch):
     target = WindowSnapshot(10, 20, "Editor")
     active = iter((True, False))
     batches = []
+    # One unit per batch, so focus is rechecked between the two characters.
+    # Characters are batched in production; this pins the batch so the
+    # partial-insertion accounting is still exercised deterministically, which
+    # is what this test is actually for.
+    monkeypatch.setattr(insertion, "_DIRECT_BATCH_UNITS", 1)
     monkeypatch.setattr(insertion, "_DIRECT_CHARACTER_DELAY_SECONDS", 0)
     monkeypatch.setattr(insertion, "_target_is_active", lambda _window: next(active))
     monkeypatch.setattr(
@@ -942,6 +1005,9 @@ def test_partial_sendinput_keeps_only_suffix_after_touched_character(monkeypatch
     target = WindowSnapshot(10, 20, "Editor")
     calls = 0
     monkeypatch.setattr(insertion, "_target_is_active", lambda _window: True)
+    # One unit per batch, so the second character is its own SendInput call and
+    # the half-sent-batch accounting below is exercised as it was written.
+    monkeypatch.setattr(insertion, "_DIRECT_BATCH_UNITS", 1)
     monkeypatch.setattr(insertion, "_DIRECT_CHARACTER_DELAY_SECONDS", 0)
 
     def fail_on_second_character(payloads, *, operation):

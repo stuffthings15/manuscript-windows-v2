@@ -30,6 +30,11 @@ VK_V = 0x56
 VK_Z = 0x5A
 MODIFIER_KEYS = (0x10, 0x11, 0x12, 0x5B, 0x5C)
 _DIRECT_CHARACTER_DELAY_SECONDS = 0.001
+# UTF-16 units per SendInput call. Sixty is a couple of typed words, small
+# enough that a focus change is noticed promptly and large enough that a
+# sentence is a handful of calls rather than a hundred. See _send_unicode_text
+# for the corruption that per-character sending caused in Windows 11 Notepad.
+_DIRECT_BATCH_UNITS = 60
 _CLIPBOARD_PASTE_BASE_SETTLE_SECONDS = 0.04
 _CLIPBOARD_PASTE_PER_CHARACTER_SECONDS = 0.0005
 _CLIPBOARD_PASTE_MAX_SETTLE_SECONDS = 0.3
@@ -1207,8 +1212,34 @@ def _send_unicode_text(text: str, *, expected_window: WindowSnapshot) -> bool:
             "Direct Unicode input cannot safely preserve supplementary characters such as "
             "emoji in every Windows app. Use Auto or Clipboard insertion for this text."
         )
+    # Sent in batches, not one SendInput call per character.
+    #
+    # Per-character sending is what corrupted dictation in Windows 11 Notepad
+    # on 2026-09-01: "From first-person" arrived as "From fffirst-person", and
+    # a later attempt as "The eeea.,rom ooooooooooooon   ler's" - characters
+    # both repeated and dropped. Eighty-nine characters meant eighty-nine
+    # separate synthetic keystrokes a millisecond apart, and Notepad, which is
+    # a modern WinUI application, does not keep up with that. It was Notepad
+    # only: Word takes the COM replacement path and its dictation target is a
+    # classic Win32 control.
+    #
+    # SendInput already takes an array and delivers it as one atomic block,
+    # which is the documented way to do this, so the batch cannot be
+    # interleaved or partially repeated by the receiving application.
+    #
+    # The focus check moves from every character to every batch. A batch is
+    # about sixty characters and takes well under a millisecond to send, so the
+    # window in which focus can change unnoticed is far shorter than the
+    # per-character sleep it replaces.
     sent_units = 0
-    for unit_count, payloads in _direct_input_steps(text):
+    batch: list[_Input] = []
+    batch_units = 0
+
+    def flush() -> bool:
+        """Send the pending batch. False means focus was lost before sending."""
+        nonlocal batch, batch_units, sent_units
+        if not batch:
+            return True
         if not _target_is_active(expected_window):
             if sent_units:
                 raise PartialTextInsertionError(
@@ -1218,9 +1249,9 @@ def _send_unicode_text(text: str, *, expected_window: WindowSnapshot) -> bool:
                 )
             return False
         try:
-            _send_inputs(payloads, operation="direct Unicode input")
+            _send_inputs(batch, operation="direct Unicode input")
         except SendInputError as exc:
-            touched_total = sent_units + (unit_count if exc.sent_events else 0)
+            touched_total = sent_units + (batch_units if exc.sent_events else 0)
             if touched_total:
                 raise PartialTextInsertionError(
                     text,
@@ -1228,9 +1259,21 @@ def _send_unicode_text(text: str, *, expected_window: WindowSnapshot) -> bool:
                     reason="Direct text insertion stopped partway through.",
                 ) from exc
             raise
-        sent_units += unit_count
-        if _DIRECT_CHARACTER_DELAY_SECONDS > 0:
-            time.sleep(_DIRECT_CHARACTER_DELAY_SECONDS)
+        sent_units += batch_units
+        batch = []
+        batch_units = 0
+        return True
+
+    for unit_count, payloads in _direct_input_steps(text):
+        if batch_units and batch_units + unit_count > _DIRECT_BATCH_UNITS:
+            if not flush():
+                return False
+            if _DIRECT_CHARACTER_DELAY_SECONDS > 0:
+                time.sleep(_DIRECT_CHARACTER_DELAY_SECONDS)
+        batch.extend(payloads)
+        batch_units += unit_count
+    if not flush():
+        return False
     return True
 
 
