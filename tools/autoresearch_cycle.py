@@ -232,6 +232,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--describe", required=True, help="what this experiment tries")
     parser.add_argument("--essays", default="8", help="the slice, one essay by default")
+    parser.add_argument(
+        "--metric",
+        default="total",
+        choices=("total", "spelling", "homophones", "punctuation", "grammar", "coherence"),
+        help="which grade_corpus term to judge on. `total` is the historic "
+        "behaviour and keeps every existing row comparable; a class measures "
+        "that term alone, on its own slice, with its own baseline.",
+    )
     arguments = parser.parse_args(argv)
 
     before = _git("rev-parse", "--short", "HEAD")
@@ -262,19 +270,30 @@ def main(argv: list[str] | None = None) -> int:
     )
     text = log.read_text(encoding="utf-8", errors="replace")
 
-    found = re.search(r"^score: +([0-9.]+)", text, re.MULTILINE)
+    # A class is judged on its own line and its own bar. An experiment that
+    # trades punctuation for grammar is a real result either way, and on the
+    # total alone it measured flat and was thrown away as a bad idea.
+    if arguments.metric == "total":
+        pattern = r"^score: +([0-9.]+)"
+    else:
+        pattern = rf"^class_{arguments.metric}: +([0-9.]+)"
+    found = re.search(pattern, text, re.MULTILINE)
     score = float(found.group(1)) if found else None
     vram = re.search(r"^peak_vram_mb: +([0-9.]+)", text, re.MULTILINE)
     memory_gb = (float(vram.group(1)) / 1024.0) if vram else 0.0
 
-    baseline = current_baseline(arguments.essays)
+    # A class gets its OWN slice, so its bar is a grammar bar and never the
+    # total's. Tagging both the same way would judge a grammar score of 18
+    # against a total of 100 and discard every experiment forever.
+    kind = "essays" if arguments.metric == "total" else f"essays-{arguments.metric}"
+    baseline = current_baseline(arguments.essays, kind)
     status = decide(baseline, score)
     record(
         commit,
         score,
         memory_gb,
         status,
-        f"{slice_tag(arguments.essays)} {arguments.describe}",
+        f"{slice_tag(arguments.essays, kind)} {arguments.describe}",
     )
 
     if status != "keep":
