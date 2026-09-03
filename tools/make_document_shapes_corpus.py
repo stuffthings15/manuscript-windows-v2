@@ -24,10 +24,26 @@ in structure the corpus has never contained:
 Neither is exotic. A numbered list and a trailing blank line are what a homework
 assignment looks like. They were simply absent from everything being measured.
 
-WHAT THIS WRITES. Documents carrying the same kinds of error the error-riddled
-corpus carries, in the structures the error-riddled corpus lacks: automatic
-numbering, automatic bullets, multi-level numbering, trailing blank paragraphs,
-and a non-breaking space. The errors are ordinary - subject-verb agreement,
+WHAT THIS WRITES. Twenty documents carrying the same kinds of error the
+error-riddled corpus carries, in the structures the error-riddled corpus lacks:
+automatic numbering, automatic bullets, multi-level numbering, trailing blank
+paragraphs, a non-breaking space, a table, tracked changes, a field result, a
+hyperlink, nested and mixed lists, a list that restarts, smart quotes, en and em
+dashes, soft hyphens, a long document, a wall of text, blank lines in the
+middle, a tab, and one document with several of these at once.
+
+TWENTY, not five, and the count is the point. Curtis, 2026-09-02: "enlarge the
+shapes corpus so one document isn't 20 points". With five documents the metric
+moved in 20-point steps, and four repeat runs of the same corpus scored 80, 80,
+60, 80 with a different document failing each time. A 20-point quantum sitting
+on top of that noise cannot separate a regression from a coin flip, so no
+experiment run against it was decidable. Twenty documents put the quantum at 5.
+
+Each added shape is also a candidate defect finder in its own right, which is
+how the automatic numbering earned its place: it was added as coverage and
+immediately exposed a defect that had made a whole assignment uncorrectable.
+
+The errors are ordinary - subject-verb agreement,
 homophones, run-together words, spacing before punctuation - so the existing
 grader scores them without any new scoring rule.
 
@@ -87,7 +103,13 @@ NUMBERING = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 </w:abstractNum>
 <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
 <w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>
+<w:num w:numId="3"><w:abstractNumId w:val="0"/></w:num>
 </w:numbering>"""
+
+# numId 3 shares abstract definition 0 with numId 1, which is how Word models a
+# SECOND list that restarts at 1. A document with two numbered lists is the case
+# where a label reconstruction that assumes one counter per document silently
+# produces the wrong labels for the second half.
 
 NONBREAKING_SPACE = " "
 
@@ -125,6 +147,71 @@ def write_docx(paragraphs: list[str], destination: Path) -> None:
         archive.writestr("word/_rels/document.xml.rels", DOCUMENT_RELS)
         archive.writestr("word/numbering.xml", NUMBERING)
         archive.writestr("word/document.xml", document_xml(paragraphs))
+
+
+def run_xml(text: str) -> str:
+    return f'<w:r><w:t xml:space="preserve">{escape(text)}</w:t></w:r>'
+
+
+def table(rows: list[list[str]]) -> str:
+    """A real Word table.
+
+    Word COM reports a cell end and a row end as BEL (U+0007) in Content.Text
+    and accessibility does not, so a table is the same class of coordinate
+    mismatch as the automatic list labels that made a whole assignment
+    uncorrectable. Nothing in any corpus has ever contained one.
+    """
+    grid = "".join('<w:gridCol w:w="4000"/>' for _ in rows[0])
+    body = ""
+    for cells in rows:
+        body += (
+            "<w:tr>"
+            + "".join(
+                f"<w:tc><w:tcPr/><w:p>{run_xml(cell)}</w:p></w:tc>" for cell in cells
+            )
+            + "</w:tr>"
+        )
+    return f"<w:tbl><w:tblPr/><w:tblGrid>{grid}</w:tblGrid>{body}</w:tbl>"
+
+
+def tracked(text: str, *, deleted: str = "") -> str:
+    """A paragraph carrying a tracked insertion and a tracked deletion.
+
+    A reviewed document is full of these and the capture has never seen one. A
+    deletion is still in the file, so whether the two readers agree it is part
+    of the text is exactly the question.
+    """
+    inserted = (
+        '<w:ins w:id="101" w:author="Reviewer" w:date="2026-09-02T00:00:00Z">'
+        f"{run_xml(text)}</w:ins>"
+    )
+    removed = (
+        '<w:del w:id="102" w:author="Reviewer" w:date="2026-09-02T00:00:00Z">'
+        f'<w:r><w:delText xml:space="preserve">{escape(deleted)}</w:delText></w:r>'
+        "</w:del>"
+        if deleted
+        else ""
+    )
+    return f"<w:p>{inserted}{removed}</w:p>"
+
+
+def field_paragraph(before: str, instruction: str, shown: str, after: str) -> str:
+    """A field result, which COM reports as text and accessibility may not."""
+    return (
+        f"<w:p>{run_xml(before)}"
+        f'<w:fldSimple w:instr="{escape(instruction)}">{run_xml(shown)}</w:fldSimple>'
+        f"{run_xml(after)}</w:p>"
+    )
+
+
+def anchored_link(before: str, text: str, after: str) -> str:
+    """An internal hyperlink. It needs no relationship part, unlike an external
+    one, so the document stays a single self-contained package."""
+    return (
+        f"<w:p>{run_xml(before)}"
+        f'<w:hyperlink w:anchor="top">{run_xml(text)}</w:hyperlink>'
+        f"{run_xml(after)}</w:p>"
+    )
 
 
 def numbered_assignment() -> list[str]:
@@ -236,13 +323,262 @@ def nonbreaking_space_prose() -> list[str]:
     ]
 
 
+def table_document() -> list[str]:
+    return [
+        paragraph("Field Measurements"),
+        paragraph("The readings below was taken over three days ."),
+        table(
+            [
+                ["Day", "Reading", "Note"],
+                ["Monday", "14.2", "the meter were recalibrated"],
+                ["Tuesday", "15.8", "no issues to report"],
+                ["Wednesday", "13.9", "their was light rain"],
+            ]
+        ),
+        paragraph("I will repeat these next week too confirm the trend."),
+        paragraph(""),
+    ]
+
+
+def tracked_changes_document() -> list[str]:
+    return [
+        paragraph("Draft With Comments"),
+        paragraph("This paragraph have not been reviewed yet ."),
+        tracked(
+            "The reviewer added this sentence and it contain an error.",
+            deleted="This sentence was removed by the reviewer.",
+        ),
+        paragraph("The conclusion still need work before it is submitted."),
+        paragraph(""),
+    ]
+
+
+def field_document() -> list[str]:
+    return [
+        paragraph("Report With Fields"),
+        field_paragraph(
+            "This report begins on page ", " PAGE ", "1", " of the bundle ."
+        ),
+        paragraph("The figures was checked twice, and they are consistant."),
+        paragraph(""),
+    ]
+
+
+def hyperlink_document() -> list[str]:
+    return [
+        paragraph("Linked Notes"),
+        anchored_link("See ", "the summary above", " for the full argument ."),
+        paragraph("Their are three points that still needs support."),
+        paragraph(""),
+    ]
+
+
+def nested_bullets() -> list[str]:
+    """Bullets with a sublevel, so the label width changes within one list."""
+    return [
+        paragraph("Nested Points"),
+        paragraph("A short list with sublevels, which i drafted quickly ."),
+        paragraph("The first main point, which need support.", num_id=2),
+        paragraph("A supporting detail that is not finished.", num_id=2, level=1),
+        paragraph("The second main point, witch is stronger.", num_id=2),
+        paragraph(""),
+    ]
+
+
+def mixed_lists() -> list[str]:
+    """A numbered list and a bulleted list in one document.
+
+    Two label shapes at once: a digit and a stop, then a bullet character. A
+    reconstruction that matches one pattern gets the other wrong.
+    """
+    return [
+        paragraph("Mixed Lists"),
+        paragraph("Numbered items followed by bulleted ones ."),
+        paragraph("The first numbered item have an error.", num_id=1),
+        paragraph("The second numbered item is fine."),
+        paragraph("A bulleted item that need a comma.", num_id=2),
+        paragraph("Another bullet, witch is misspelled.", num_id=2),
+        paragraph(""),
+    ]
+
+
+def restarted_numbering() -> list[str]:
+    """Two separate numbered lists, so the counter restarts mid-document."""
+    return [
+        paragraph("Two Separate Lists"),
+        paragraph("The first list covers causes ."),
+        paragraph("Rainfall, witch was heavier then usual.", num_id=1),
+        paragraph("Drainage that were already blocked.", num_id=1),
+        paragraph("The second list covers effects."),
+        paragraph("Flooding in the lower streets.", num_id=3),
+        paragraph("Damage that have not been costed.", num_id=3),
+        paragraph(""),
+    ]
+
+
+def smart_quotes() -> list[str]:
+    """Curly quotation marks, which the two readers may normalise differently."""
+    return [
+        paragraph("Quoted Material"),
+        paragraph(
+            "The author wrote “the evidence is thin” and i agree with "
+            "them ."
+        ),
+        paragraph("She called it ‘a first attempt’, witch seems fair."),
+        paragraph(""),
+    ]
+
+
+def dashes_document() -> list[str]:
+    """En and em dashes, which autocorrect produces and plain text does not."""
+    return [
+        paragraph("Punctuation Practice"),
+        paragraph(
+            "The range – roughly ten to twelve – were wider then "
+            "expected ."
+        ),
+        paragraph(
+            "One more case—the last one—still need to be considered."
+        ),
+        paragraph(""),
+    ]
+
+
+def soft_hyphens() -> list[str]:
+    """Soft hyphens, which a reader never sees and an offset count always does."""
+    return [
+        paragraph("Typesetting Notes"),
+        paragraph(
+            "This para­graph carries soft hy­phens that a reader never "
+            "sees ."
+        ),
+        paragraph("They should not effect how the sentence is corrected."),
+        paragraph(""),
+    ]
+
+
+def long_document() -> list[str]:
+    """Twenty paragraphs, to measure whether behaviour degrades with length.
+
+    Every earlier document is under ten sections, so nothing has ever measured
+    what happens on the fifteenth review card of one session.
+    """
+    blocks = [paragraph("A Longer Piece"), paragraph("An essay of some length ,")]
+    for index in range(1, 19):
+        blocks.append(
+            paragraph(
+                f"Paragraph {index} makes a point that need support, and it "
+                "contain at least one error witch should be corrected."
+            )
+        )
+    blocks.append(paragraph(""))
+    return blocks
+
+
+def wall_of_text() -> list[str]:
+    """One paragraph of many sentences, the shape sectioning has to split."""
+    return [
+        paragraph("One Long Paragraph"),
+        paragraph(
+            "This is a single paragraph that runs on for several sentences . "
+            "It have no breaks at all. Their is no white space to help a "
+            "reader. The corrector must still find each error in turn. Its a "
+            "shape that writers produce more often then anyone admits."
+        ),
+        paragraph(""),
+    ]
+
+
+def blank_lines_between() -> list[str]:
+    """Empty paragraphs in the MIDDLE, not only at the end.
+
+    `04_trailing_blank_lines` covers the end. An empty paragraph between two
+    full ones is a zero-length review unit in the middle of the run.
+    """
+    return [
+        paragraph("Spaced Out"),
+        paragraph("The first paragraph, witch is short ."),
+        paragraph(""),
+        paragraph(""),
+        paragraph("The second paragraph, after two empty ones."),
+        paragraph(""),
+        paragraph("The third, which have its own error."),
+        paragraph(""),
+    ]
+
+
+def tabs_and_spacing() -> list[str]:
+    """A real tab element and doubled spaces, which normalisation must not eat.
+
+    The tab is `<w:tab/>`, not a tab character inside `<w:t>`. Word does not
+    render the latter, so a literal tab would have produced a document that
+    looked like this shape and was not it.
+    """
+    tabbed = (
+        "<w:p><w:r><w:tab/>"
+        '<w:t xml:space="preserve">'
+        + escape("This one begins with a tab, witch is unusual.")
+        + "</w:t></w:r></w:p>"
+    )
+    return [
+        paragraph("Spacing"),
+        paragraph("This line  has  doubled  spaces and it need fixing ."),
+        tabbed,
+        paragraph(""),
+    ]
+
+
+def mixed_everything() -> list[str]:
+    """Every shape at once, because defects in this class compound.
+
+    The numbered-list defect only became visible when a list met a trailing
+    blank line in the same document.
+    """
+    return [
+        paragraph("Everything At Once"),
+        paragraph("A document that combines the shapes above ."),
+        paragraph("A numbered item that have an error.", num_id=1),
+        paragraph("A bulleted item, witch is misspelled.", num_id=2),
+        table([["Item", "Value"], ["First", "their are two"]]),
+        paragraph(
+            "A closing paragraph with a “quote” and a – dash "
+            "– that need checking."
+        ),
+        paragraph(""),
+        paragraph(""),
+    ]
+
+
 DOCUMENTS = {
     "01_numbered_assignment": numbered_assignment,
     "02_bulleted_notes": bulleted_notes,
     "03_multi_level_outline": multi_level_outline,
     "04_trailing_blank_lines": trailing_blank_lines,
     "05_nonbreaking_space": nonbreaking_space_prose,
+    "06_table": table_document,
+    "07_tracked_changes": tracked_changes_document,
+    "08_field_result": field_document,
+    "09_internal_hyperlink": hyperlink_document,
+    "10_nested_bullets": nested_bullets,
+    "11_mixed_lists": mixed_lists,
+    "12_restarted_numbering": restarted_numbering,
+    "13_smart_quotes": smart_quotes,
+    "14_dashes": dashes_document,
+    "15_soft_hyphens": soft_hyphens,
+    "16_long_document": long_document,
+    "17_wall_of_text": wall_of_text,
+    "18_blank_lines_between": blank_lines_between,
+    "19_tabs_and_spacing": tabs_and_spacing,
+    "20_mixed_everything": mixed_everything,
 }
+
+# Shapes deliberately NOT here, so their absence is a recorded decision rather
+# than an oversight. Each needs an OOXML part this single-file builder does not
+# write, and a half-built one would look like a shape and prove nothing:
+# footnotes and endnotes (footnotes.xml), headers and footers (header1.xml plus
+# a sectPr reference), comments (comments.xml), text boxes (a drawing with a
+# txbxContent), and an external hyperlink (a relationship in document.xml.rels).
+# They are A1, A2, A11 and A13 in the experiment plan and want their own commit.
 
 
 def main(argv: list[str] | None = None) -> int:
