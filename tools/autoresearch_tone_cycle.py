@@ -37,6 +37,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "tools") not in sys.path:
@@ -122,6 +123,61 @@ def _release_the_judge() -> None:
         pass
 
 
+def judge_is_resident() -> bool | None:
+    """Whether the 27B judge still holds the card. None when it cannot be read.
+
+    None rather than a guess: a machine that cannot answer should let the run
+    proceed and be refused by the prewarm guard, not stall forever.
+    """
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(
+            "http://127.0.0.1:11434/api/ps", timeout=30
+        ) as answer:
+            loaded = json.loads(answer.read().decode("utf-8"))
+    except Exception:  # noqa: BLE001 - ollama may be down or busy loading
+        return None
+    models = loaded.get("models")
+    if not isinstance(models, list):
+        return None
+    return any(
+        str(entry.get("model") or entry.get("name") or "").startswith(JUDGE_MODEL)
+        for entry in models
+        if isinstance(entry, dict)
+    )
+
+
+def _wait_for_the_judge_to_leave(timeout_seconds: float = 300.0) -> None:
+    """Block until the judge is off the card, or give up quietly.
+
+    The judge does not fit beside the pack it is judging. `gemma3:27b` is 17 GB
+    on a 16 GB card, so while it answers the correction pack is evicted, and the
+    unload that follows takes time the next tone did not wait for.
+
+    Measured 2026-09-02, five baselines in one sitting on a card that started
+    completely empty: Clear and Formal died with TWO packs serving one run,
+    because the judge was still unloading while the batch ran, and Shorten and
+    Friendly were refused at prewarm because the planner found no room and took
+    the ~4B standby. One tone in five produced a number.
+
+    Asks whether the JUDGE is resident rather than how much memory is free. A
+    free-memory threshold was written first and was wrong: the primary pack is
+    7.7 GB and is normally resident, so "wait for 9 GB free" would stall for the
+    whole timeout on a perfectly healthy card, every single run.
+
+    Gives up rather than raising. The prewarm guard immediately after is what
+    decides whether a run is trustworthy; this only removes the commonest reason
+    it has to refuse.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        resident = judge_is_resident()
+        if resident is None or not resident:
+            return
+        time.sleep(5.0)
+
+
 def measure(tone: str, log: Path) -> tuple[float | None, str]:
     """(pass percentage, reason it is missing). Never both.
 
@@ -144,6 +200,23 @@ def measure(tone: str, log: Path) -> tuple[float | None, str]:
     import autoresearch_run
 
     source, corrected = _essay_paths()
+    # Wait for the card before starting, because the judge does not fit beside
+    # the pack it is judging.
+    #
+    # `gemma3:27b` is 17 GB on a 16 GB card. While it judges, the correction
+    # pack is evicted and the GPU thrashes, and the eviction that follows takes
+    # time the next tone does not wait for. Measured 2026-09-02, five baselines
+    # in one sitting on a card that started completely empty: Clear and Formal
+    # died with TWO packs serving one run, because the judge was still unloading
+    # while the batch ran, and Shorten and Friendly were refused at prewarm
+    # because the planner found no room and took the ~4B standby.
+    #
+    # One tone in five produced a number. The guards were right to refuse the
+    # other four - those same conditions are what made the earlier 7.1 and 64.3
+    # figures void rather than real - but a measurement that refuses four times
+    # out of five is not a measurement pipeline.
+    _wait_for_the_judge_to_leave()
+    before_restart = autoresearch_run._log_length()
     autoresearch_run._restart_word()
     subprocess.run(
         [sys.executable, "-u", str(ROOT / "tools/restart_app_and_wait.py")],
@@ -164,8 +237,26 @@ def measure(tone: str, log: Path) -> tuple[float | None, str]:
     # when headroom is short, and headroom is short whenever another GPU
     # application is running - ChatGPT.exe was on the GPU during those runs.
     # So the condition is visible at prewarm, before a single essay opens.
+    # Read the prewarm from THIS restart, not from the whole log.
+    #
+    # `_served_pack` says in its own docstring that it must read after a mark,
+    # "because the log is append-only across restarts and the pack from an
+    # earlier session looks exactly like the pack from this one" - and both
+    # cycles then called it with 0, scanning the entire file and returning the
+    # LAST pack line in it.
+    #
+    # At prewarm that line belongs to the PREVIOUS tone's batch. Measured
+    # 2026-09-02: Clear's first run was served partly by the ~4B standby, and
+    # every run after it was then refused with "the app prewarmed
+    # gemma4-e4b-qat-v1" while the app log said, four times in a row,
+    # `prewarmed pack=gemma4-12b-qat-v1 loaded=True`. Four false refusals, and
+    # they read exactly like a real GPU problem.
+    #
+    # The mark has to be taken BEFORE the restart. Taking it after, which is
+    # where the old `mark` sat, is after the prewarm line has already been
+    # written, so the guard would find nothing and pass everything.
+    prewarmed = autoresearch_run._served_pack(before_restart)[0]
     mark = autoresearch_run._log_length()
-    prewarmed = autoresearch_run._served_pack(0)[0]
     if prewarmed not in ("unknown", REQUIRED_PACK):
         return None, (
             f"the app prewarmed {prewarmed}, not {REQUIRED_PACK}; "

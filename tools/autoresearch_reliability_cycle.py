@@ -93,6 +93,7 @@ def measure(log: Path) -> tuple[float | None, str]:
     if not documents:
         return None, f"no documents under {CORPUS}"
 
+    before_restart = autoresearch_run._log_length()
     autoresearch_run._restart_word()
     subprocess.run(
         [sys.executable, "-u", str(ROOT / "tools/restart_app_and_wait.py")],
@@ -106,8 +107,26 @@ def measure(log: Path) -> tuple[float | None, str]:
     # tone cycle learned this the expensive way on 2026-09-01: five of six
     # baselines were thrown away AFTER the runs, and two hours of measurement
     # produced one number.
+    # Read the prewarm from THIS restart, not from the whole log.
+    #
+    # `_served_pack` says in its own docstring that it must read after a mark,
+    # "because the log is append-only across restarts and the pack from an
+    # earlier session looks exactly like the pack from this one" - and both
+    # cycles then called it with 0, scanning the entire file and returning the
+    # LAST pack line in it.
+    #
+    # At prewarm that line belongs to the PREVIOUS tone's batch. Measured
+    # 2026-09-02: Clear's first run was served partly by the ~4B standby, and
+    # every run after it was then refused with "the app prewarmed
+    # gemma4-e4b-qat-v1" while the app log said, four times in a row,
+    # `prewarmed pack=gemma4-12b-qat-v1 loaded=True`. Four false refusals, and
+    # they read exactly like a real GPU problem.
+    #
+    # The mark has to be taken BEFORE the restart. Taking it after, which is
+    # where the old `mark` sat, is after the prewarm line has already been
+    # written, so the guard would find nothing and pass everything.
+    prewarmed = autoresearch_run._served_pack(before_restart)[0]
     mark = autoresearch_run._log_length()
-    prewarmed = autoresearch_run._served_pack(0)[0]
     if prewarmed not in ("unknown", REQUIRED_PACK):
         return None, (
             f"the app prewarmed {prewarmed}, not {REQUIRED_PACK}; "
