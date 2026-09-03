@@ -281,6 +281,28 @@ def _packs_that_served(since_line: int) -> set[str]:
     deterministic rules, and rules cannot do tone at all. The same essay then
     scores 35.7, 7.1 or 28.6 depending only on GPU timing - which is exactly the
     spread that made every tone verdict this session worthless.
+
+    SERVED, NOT ATTEMPTED. This reads `Accepted AI plan`, not `Polish plan`.
+    A `Polish plan` line is logged for every ATTEMPT, and the app retries down
+    the pack ladder when output fails validation:
+
+        12b  -> validation failed: residual missing sentence spacing
+        e4b  -> the same validation failure
+        e2b  -> the same validation failure
+        rules -> section returned unchanged
+
+    None of those smaller packs produced a correction anybody used, so counting
+    them says a run was served by three packs when it was served by one.
+    Measured on the 2026-09-02 baseline: 171 accepted plans, ALL on the 12b,
+    ZERO on e4b or e2b, and two cascades - and the run was refused. With twenty
+    documents rather than five, at least one cascade per run is close to
+    certain, so on the attempt reading this metric could essentially never
+    complete.
+
+    The guard keeps its teeth, because the failure it was built for is a pack
+    that actually ANSWERED. The 2026-09-01 case above is exactly that: 33 of 629
+    requests were served by e4b, those answers were accepted and scored, and
+    they still count here.
     """
     try:
         lines = APP_LOG.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -288,7 +310,7 @@ def _packs_that_served(since_line: int) -> set[str]:
         return set()
     packs = set()
     for line in lines[since_line:]:
-        found = re.search(r"Polish plan pack=(\S+) model=", line)
+        found = re.search(r"Accepted AI plan pack=(\S+) model=", line)
         if found and found.group(1) != "-":
             packs.add(found.group(1))
     return packs

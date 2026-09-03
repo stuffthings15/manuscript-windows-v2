@@ -218,14 +218,31 @@ def test_every_pack_that_served_is_reported_not_just_the_last(tmp_path, monkeypa
     the run reported as clean. A check that reports the final value rather than
     whether anything varied is the defect shape that has cost this session most
     of its wrong turns.
+
+    THE FIXTURE CHANGED ON 2026-09-03, THE PROPERTY DID NOT. It used to feed
+    `Polish plan` lines, which the app logs for every ATTEMPT. That is not what
+    this docstring describes: 33 requests were SERVED by the e4b, meaning their
+    answers were accepted and scored, and an accepted answer is logged as
+    `Accepted AI plan`. Reading attempts instead refused a run in which 171
+    corrections were accepted, all of them on the 12b, because two sections had
+    cascaded 12b -> e4b -> e2b -> rules on a validation failure and used none of
+    those answers. The scenario below is the same scenario, written the way the
+    app actually records it.
     """
     import autoresearch_run
 
     log = tmp_path / "echo-link.log"
     log.write_text(
+        # Both kinds of line, interleaved, because a real log carries both: the
+        # attempt, then the acceptance. _served_pack reads the attempts and
+        # _packs_that_served reads the acceptances, and the point of this test
+        # is that they answer different questions.
         "Polish plan pack=gemma4-12b-qat-v1 model=x backend=cuda\n"
+        "Accepted AI plan pack=gemma4-12b-qat-v1 model=x policy=6 reason=-\n"
         "Polish plan pack=gemma4-e4b-qat-v1 model=y backend=cuda\n"
-        "Polish plan pack=gemma4-12b-qat-v1 model=x backend=cuda\n",
+        "Accepted AI plan pack=gemma4-e4b-qat-v1 model=y policy=6 reason=-\n"
+        "Polish plan pack=gemma4-12b-qat-v1 model=x backend=cuda\n"
+        "Accepted AI plan pack=gemma4-12b-qat-v1 model=x policy=6 reason=-\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(autoresearch_run, "APP_LOG", log)
