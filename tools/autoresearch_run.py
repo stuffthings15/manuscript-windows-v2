@@ -611,6 +611,26 @@ def _run(argv: list[str] | None = None) -> int:
     print(f"build:            {build}")  # noqa: T201
     print(f"peak_vram_mb:     {watch.peak:.1f}")  # noqa: T201
     print(f"unknown:          {sum(r['unknown'] for r in graded)}")  # noqa: T201
+    # The per-class means, printed as well as the total.
+    #
+    # grade_corpus has always RETURNED these - spelling, homophones,
+    # punctuation, grammar and coherence are separate scaled terms - and this
+    # summary threw four of them away. Every correction experiment ever run was
+    # judged on the sum alone, so one that fixed punctuation while breaking
+    # grammar measured FLAT and was recorded as a bad idea.
+    #
+    # It also costs the loop its remaining headroom: nine of twelve measured
+    # essay slices sit at exactly 100 on the total and cannot improve under the
+    # strict-improvement rule, while a slice at 100 may still have real room on
+    # grammar. Curtis approved touching this file on 2026-09-01 for that reason;
+    # program.md otherwise calls it ground truth.
+    #
+    # Additive on purpose. The `score:` line above is unchanged and still means
+    # exactly what it meant, so every row already in results.tsv stays
+    # comparable with every row written after this.
+    for name in ("spelling", "homophones", "punctuation", "grammar", "coherence"):
+        mean = sum(row[name] for row in graded) / len(graded)
+        print(f"class_{name}:{' ' * (12 - len(name))}{mean:.6f}")  # noqa: T201
     _status(phase="done", last_result=f"{score:.2f}")
     return 0
 

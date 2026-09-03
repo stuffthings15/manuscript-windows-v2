@@ -258,6 +258,9 @@ class RewritePalette(QDialog):
         self._programmatic_resize = False
         self._user_view_sizes: dict[str, QSize] = {}
         self._busy = False
+        # Which command owns the busy flag, so a stranded one is
+        # distinguishable from a working one. See _stale_busy_reason.
+        self._busy_command = ""
         self._closing_after_choice = False
         self._suggestion_engine = suggestion_engine or WritingSuggestionEngine()
         # The review card used to offer only the regex rules, so a misspelling
@@ -1526,6 +1529,11 @@ class RewritePalette(QDialog):
 
     def set_busy(self, busy: bool, command: str = "") -> None:
         self._busy = bool(busy)
+        # Who owns the flag, so a stranded one can be told from a working one.
+        # `command` was always passed and never kept, which left no way to ask
+        # whether the thing that set busy is still running. See
+        # `_stale_busy_reason`.
+        self._busy_command = str(command) if busy else ""
         for button in self.command_buttons.values():
             button.setEnabled(not busy)
         self.language_edit.setEnabled(not busy)
@@ -2236,9 +2244,51 @@ class RewritePalette(QDialog):
         )
         return False
 
+    def _stale_busy_reason(self) -> str:
+        """Why the busy flag is stranded, or "" if it is genuinely working.
+
+        THE FOURTH FREEZE traced to this method, and the first one that was not
+        a stale request mark. Measured 2026-09-02 during a Shorten baseline: the
+        review applied 23 of 25 sections cleanly, each one logging `Replace Text
+        invoked busy=False` followed by an `adaptive Polish request`. After the
+        twenty-third, busy went true, NO request was ever logged, and the run sat
+        at "24 of 25" with two sections pending until it was killed twelve
+        minutes later.
+
+        The cause is the order in `_start_sentence_ai_request`: it calls
+        `set_busy(True)` and THEN emits `sentence_rewrite_requested`. Every path
+        that clears busy again lives on the answer - a result, an error, a
+        timeout, a cancel. So if the window declines the request silently, and
+        it can, nothing is left to clear the flag and the review is finished for
+        good.
+
+        Rather than chase each way a request can be declined, busy is treated as
+        evidence only while something is actually in flight - the same rule that
+        settled the stale request marks on 2026-09-01, and for the same reason:
+        nothing running means nothing is coming.
+
+        Only for an AI request. A command like Translate owns the flag through a
+        different path with no attempt id, and clearing that would abandon work
+        the writer asked for.
+        """
+        if not self._busy:
+            return ""
+        owner = self._busy_command
+        if owner not in ("AI proofread", "tone rewrite"):
+            return ""
+        if self._active_ai_attempt_id or self._ai_attempts:
+            return ""
+        return f"nothing is in flight and {owner or 'an AI request'} owns the flag"
+
     def _request_ai_proofread_current(self) -> bool:
         if not self._ai_proofread:
             return self._declined_ai_request("AI proofread is off")
+        stale = self._stale_busy_reason()
+        if stale:
+            logger.warning(
+                "Writing HUD clearing a stranded busy flag: %s", stale
+            )
+            self.set_busy(False)
         if self._busy:
             return self._declined_ai_request("the HUD is busy")
         if self._view not in {"card", "loading"}:

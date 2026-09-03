@@ -187,6 +187,13 @@ def test_a_run_served_by_two_packs_is_a_crash_not_a_score(monkeypatch):
     monkeypatch.setattr(autoresearch_run, "_restart_word", lambda: None)
     monkeypatch.setattr(autoresearch_run, "_stale_reason", lambda: "")
     monkeypatch.setattr(autoresearch_run, "_log_length", lambda: 0)
+    # Stubbed, or this reads the developer's REAL app log and the prewarm guard
+    # fires first. It was passing only because that file happened to end with a
+    # 12b line; after a run served by the standby it ended with e4b and this
+    # test failed for a reason that had nothing to do with what it asserts.
+    monkeypatch.setattr(
+        autoresearch_run, "_served_pack", lambda _since: (cycle.REQUIRED_PACK, "m", "cuda")
+    )
     monkeypatch.setattr(
         autoresearch_run,
         "_packs_that_served",
@@ -286,3 +293,52 @@ def test_an_unknown_pack_does_not_block_the_run(monkeypatch):
 
     # It proceeds past the pack check; it stops later for a different reason.
     assert "prewarmed" not in reason
+
+
+def test_the_prewarm_guard_reads_only_this_restart(tmp_path, monkeypatch):
+    """A leftover pack line from the previous run must not refuse this one.
+
+    `_served_pack` requires a mark, because the app log is append-only across
+    restarts. Both cycles called it with 0 and scanned the whole file, so at
+    prewarm they read the LAST pack line - which belongs to the previous tone's
+    batch.
+
+    Measured 2026-09-02: Clear's first run was served partly by the ~4B standby,
+    and the next four runs were refused with "the app prewarmed
+    gemma4-e4b-qat-v1" while the app log said `prewarmed
+    pack=gemma4-12b-qat-v1 loaded=True` four times in a row. Four false
+    refusals that read exactly like a real GPU problem.
+    """
+    import autoresearch_run
+
+    log = tmp_path / "echo-link.log"
+    previous_session = [
+        "Polish plan pack=gemma4-e4b-qat-v1 model=gemma4:e4b backend=cuda",
+        "Writing HUD section accepted",
+    ]
+    this_session = [
+        "Adaptive Polish model prewarmed pack=gemma4-12b-qat-v1 use_llm=True loaded=True",
+    ]
+    log.write_text("\n".join(previous_session + this_session), encoding="utf-8")
+    monkeypatch.setattr(autoresearch_run, "APP_LOG", log)
+
+    # Scanning the whole file returns the stale standby and would refuse.
+    assert autoresearch_run._served_pack(0)[0] == "gemma4-e4b-qat-v1"
+    # Marked at the restart, it sees this session's prewarm and allows the run.
+    assert autoresearch_run._served_pack(len(previous_session))[0] == (
+        "gemma4-12b-qat-v1"
+    )
+
+
+def test_both_cycles_mark_the_log_before_restarting():
+    """The mark must precede the restart, or the guard passes everything.
+
+    Taken after the restart it sits after the prewarm line has already been
+    written, so the guard finds nothing and never refuses.
+    """
+    for name in ("autoresearch_tone_cycle", "autoresearch_reliability_cycle"):
+        source = (TOOLS / f"{name}.py").read_text(encoding="utf-8")
+        mark = source.index("before_restart = autoresearch_run._log_length()")
+        restart = source.index("autoresearch_run._restart_word()")
+        assert mark < restart, f"{name} marks the log after restarting"
+        assert "_served_pack(0)" not in source, f"{name} still scans the whole log"
