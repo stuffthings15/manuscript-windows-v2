@@ -23,6 +23,7 @@ if str(ROOT / "tools") not in sys.path:
     sys.path.insert(0, str(ROOT / "tools"))
 
 import autoresearch_cycle  # noqa: E402
+import autoresearch_status  # noqa: E402
 import autoresearch_tone_cycle as tone_cycle  # noqa: E402
 
 
@@ -34,9 +35,19 @@ def main(argv: list[str] | None = None) -> int:
     commit = autoresearch_cycle._git("rev-parse", "--short", "HEAD")
     for tone in arguments.tones:
         print(f"=== baseline {tone}", flush=True)  # noqa: T201
-        percent, reason = tone_cycle.measure(
-            tone, ROOT / f"tone-baseline-{tone.lower()}.log"
-        )
+        # The panel shows for the whole measurement. Only the cycles used
+        # to publish it, so a baseline run showed nothing and looked
+        # exactly like no run at all.
+        with autoresearch_status.showing(
+            phase=f"tone {tone} baseline",
+            description="baseline",
+            essays=f"{tone_cycle.FIRST_ESSAY}-{tone_cycle.LAST_ESSAY}",
+            experiment=commit,
+            baseline="none",
+        ):
+            percent, reason = tone_cycle.measure(
+                tone, ROOT / f"tone-baseline-{tone.lower()}.log"
+            )
         tag = autoresearch_cycle.slice_tag(tone, kind="tone")
         if percent is None:
             # A crash row, not a zero. An absent measurement is a claim about

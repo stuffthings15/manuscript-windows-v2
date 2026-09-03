@@ -79,36 +79,15 @@ _MONITOR: subprocess.Popen | None = None
 
 
 def _start_monitor() -> None:
-    """Show the on-screen panel, if it is not already up.
+    """Show the on-screen panel. Delegates, so there is one implementation.
 
-    pythonw, not python, so no console window appears and nothing flashes into
-    the foreground. The panel itself refuses focus three different ways - see
-    autoresearch_monitor - because a window that steals focus mid-experiment
-    corrupts the very run it is reporting on.
+    This used to be the ONLY place the viewer was launched, which meant any
+    measurement that did not go through the essay runner wrote a correct status
+    file that nothing rendered. It now lives beside the status writer, where it
+    belongs: showing the panel is part of what a measurement is, not a side
+    effect of one command.
     """
-    # The guard here used to be "a status file exists, so a panel is already
-    # up", and it was wrong twice over. The status file has to be written before
-    # the panel starts - the panel quits after four missing reads - so that test
-    # was always true by the time it ran, and it suppressed the launch every
-    # time. It also could not tell a live panel from one left behind by a killed
-    # run. A module-level handle answers the only question worth asking: has
-    # THIS runner already started one.
-    global _MONITOR
-    if _MONITOR is not None and _MONITOR.poll() is None:
-        return
-    launcher = Path(sys.executable).with_name("pythonw.exe")
-    try:
-        _MONITOR = subprocess.Popen(  # noqa: S603 - a fixed path in this repository
-            [
-                str(launcher if launcher.exists() else sys.executable),
-                str(ROOT / "tools/autoresearch_monitor.py"),
-            ],
-            cwd=ROOT,
-            creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0)),
-        )
-    except OSError:
-        # The display is a convenience. Never lose an experiment over it.
-        pass
+    autoresearch_status.start_monitor()
 
 
 def _tally() -> dict[str, object]:

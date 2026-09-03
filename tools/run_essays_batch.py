@@ -600,6 +600,29 @@ def tone_row_error(
     return None
 
 
+def review_finished_since(since: int = 0) -> str:
+    """The app's own statement that the review completed, or "".
+
+    The HUD closes when a review is finished, which from the harness looks
+    exactly like the HUD disappearing - and those are opposite outcomes. The app
+    already distinguishes them in its log; nothing was reading it.
+
+    Returns the reported character count so the stop reason carries evidence
+    rather than an assertion.
+    """
+    try:
+        lines = LOG.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines[since:]):
+        found = re.search(
+            r"review finished; will not auto-offer this text again (.+)$", line
+        )
+        if found:
+            return found.group(1).strip()
+    return ""
+
+
 def commands_since(since: int = 0) -> dict[str, int]:
     """Which Polish commands the app actually ran, from its own log.
 
@@ -715,11 +738,35 @@ def recover_hud(stem: str, report: dict):
     screen came from another window, that is a failure and it is reported as
     one.
     """
+    # Name whatever is holding the foreground, on every failed attempt.
+    #
+    # This failure has been "the HUD was gone" for three runs and nobody has
+    # ever measured WHAT took the screen. More patience is already refuted -
+    # six attempts with a lengthening wait scored the same 80.0 as three flat
+    # ones, 2026-09-02 - so the question is no longer how long to wait but who
+    # to take it back from, and that cannot be answered without the name.
+    #
+    # Costs one Win32 call on a path that has already failed, and it is the
+    # difference between guessing at a fix and knowing which one to write.
+    def _foreground() -> str:
+        try:
+            from echo_link_core.insertion import active_window
+
+            window = active_window()
+            return f"{window.title!r} class={window.class_name!r} pid={window.process_id}"
+        except Exception:  # noqa: BLE001 - diagnosis must never break the run
+            return "unreadable"
+
     for _attempt in range(3):
         focus_named_word_window(stem)
         time.sleep(2.0)
         hud = hud_window(10.0)
         if hud is None:
+            print(
+                f"    recover_hud attempt {_attempt + 1}: no HUD, "
+                f"foreground is {_foreground()}",
+                flush=True,
+            )
             continue
         # No `since` offset on purpose. That offset exists so the check before
         # the first press cannot read a line left by the PREVIOUS essay, which
@@ -940,6 +987,29 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
         if hud is None:
             hud = recover_hud(path.stem, report)
         if hud is None:
+            # A finished review and a vanished one look identical from here,
+            # and they are opposite outcomes.
+            #
+            # Measured 2026-09-02 on 03_multi_level_outline: the app logged
+            # `section accepted ... pending 1 -> 0 completed=4 of 4` and then
+            # `review finished; will not auto-offer this text again`. Every
+            # section was applied and the HUD closed because it was DONE. The
+            # harness pressed once more, correctly found no HUD, and reported
+            # "the HUD was gone" - and because that message carries no
+            # `section M/M` marker, the completion rule scored a successful run
+            # as truncated. The whole reliability metric was under-reporting on
+            # the strength of it, and three runs of "the HUD was gone" were read
+            # as a focus fault that never happened: the foreground at every
+            # failed attempt was Word itself, with the right document open.
+            #
+            # The app says which one it is, so ask it rather than guess.
+            finished = review_finished_since(report.get("_log_start", 0))
+            if finished:
+                report["stopped_because"] = (
+                    f"the review finished after press {press - 1}; "
+                    f"section {press - 1}/{press - 1}, {finished}"
+                )
+                break
             report["stopped_because"] = (
                 f"the HUD was gone at press {press} and three attempts to take "
                 "focus back from another window failed"
