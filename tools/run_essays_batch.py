@@ -1396,21 +1396,27 @@ def main() -> int:
     for number in range(args.start, args.end + 1):
         if number > len(essays):
             break
-        # THE IDLE GATE, CHECKED BEFORE EVERY DOCUMENT, not once at the start.
+        # THE IDLE GATE, CHECKED ONLY BEFORE THE FIRST DOCUMENT.
         #
-        # Checking once is what the cycles did, and it is not enough: a batch
-        # runs for many minutes and the person only has to arrive partway
-        # through. Measured 2026-09-03, document 14 of 20 died with
-        # `the review on screen was captured from 'Claude', not from 14_dashes`
-        # because this session was interactive and being typed into while the
-        # run was on screen. Thirteen documents had already passed the
-        # start-of-run check.
+        # It was checked before EVERY document for one day, and that made a
+        # multi-document run impossible to finish. THE HARNESS ITSELF TYPES:
+        # it drives Word through SendInput, and GetLastInputInfo counts
+        # synthetic input exactly like a person's. Measured 2026-09-04 - one
+        # synthetic VK_SHIFT takes idle from 308 seconds to 0.
         #
-        # `program.md`: "typing in any other editable window redirects the HUD
-        # and crashes the run". So this stops the batch rather than recording
-        # the rest - every document after an interruption is measuring the
-        # interruption.
-        if args.require_idle > 0:
+        # So document one would run, the harness's own keystrokes would reset
+        # the timer, and document two would be refused as "somebody is at the
+        # keyboard". The loop attempted a baseline 120 times over four hours and
+        # stopped after exactly one document every time, writing nothing. The
+        # gate meant to protect the measurement made it unobtainable.
+        #
+        # Before the first document the question is meaningful: is a person
+        # using this machine right now. After that it cannot be asked this way.
+        # Mid-run interference is caught where it actually shows - the harness
+        # already fails a document with "the review on screen was captured from
+        # 'Claude'" when focus moves to another editable window, which is the
+        # real symptom and needs no timer.
+        if args.require_idle > 0 and number == args.start:
             idle = _idle_seconds()
             if idle < args.require_idle:
                 print(  # noqa: T201

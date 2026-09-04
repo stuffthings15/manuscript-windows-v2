@@ -196,9 +196,11 @@ def measure(
                 sys.executable, str(ROOT / "tools/run_essays_batch.py"),
                 "--from", "1", "--to", str(len(documents)),
                 "--corpus", str(corpus), "--as-a-writer",
-                # Passed THROUGH, because the cycle's own check happens once
-                # and a batch runs for minutes. Document 14 of 20 was corrupted
-                # on 2026-09-03 by someone arriving after the run began.
+                # Passed through so the batch makes the same check with the
+                # same threshold. It applies to the FIRST document only: the
+                # harness types through SendInput and GetLastInputInfo counts
+                # that, so a per-document check refuses everything after
+                # document one. See program.md, Idle gate.
                 "--require-idle", str(require_idle),
             ],
             cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT, timeout=7200,

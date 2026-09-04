@@ -232,11 +232,24 @@ Two consequences follow, and they are the whole shape of a run:
   documents on every idea.
 
 **Idle gate**: every measuring path passes `--require-idle`, not just
-`autoresearch_run.py`. On 2026-09-03 a reliability run failed with
-`captured from 'Claude'` because the agent was typing in this session while the
-run was on screen - the exact failure the gate exists to prevent, committed by
-the thing that wrote the gate. A measurement taken while anyone is at the
-keyboard is not evidence.
+`autoresearch_run.py`. A measurement started while somebody is at the keyboard
+is not evidence: on 2026-09-03 a reliability run failed with
+`captured from 'Claude'` because this session was being typed into while the run
+was on screen.
+
+CHECK IT ONCE, BEFORE THE RUN. Not before every document, however tempting that
+is. THE HARNESS ITSELF TYPES - it drives Word through `SendInput`, and
+`GetLastInputInfo` counts synthetic input exactly like a person's. Measured
+2026-09-04: one synthetic `VK_SHIFT` takes idle from 308 seconds to 0. A
+per-document check therefore passes for document one and refuses every document
+after it, forever. It was tried for one day: the loop attempted a baseline 120
+times over four hours, stopped after exactly one document every time, and wrote
+nothing. The gate meant to protect the measurement made it unobtainable.
+
+Mid-run interference needs a different signal, because idle time cannot carry
+it. The harness already has one: a document fails with `captured from 'Claude'`
+when focus moves to another editable window, which is the symptom itself rather
+than a proxy for it.
 
 **Every kept commit must pass** `tests/test_source_discipline.py`. Run the full
 suite before proposing a merge, not after every experiment.

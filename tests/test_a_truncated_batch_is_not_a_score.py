@@ -91,3 +91,30 @@ def test_the_cycle_refuses_a_batch_that_ran_fewer_documents_than_the_slice():
     assert "measured < len(documents)" in source
     assert "_STOPPED_FOR_IDLE" in source
     assert reliability._STOPPED_FOR_IDLE == 2
+
+
+def test_the_idle_gate_is_checked_once_and_not_per_document():
+    """THE HARNESS ITSELF TYPES, so idle time cannot police a run from inside.
+
+    It drives Word through SendInput and GetLastInputInfo counts synthetic input
+    exactly like a person's - measured 2026-09-04, one synthetic VK_SHIFT takes
+    idle from 308 seconds to 0. A per-document check therefore passes document
+    one and refuses every document after it, permanently.
+
+    That is not theory. The loop attempted a baseline 120 times over four hours,
+    stopped after exactly one document every time, wrote nothing, and then
+    refused the whole queue for having no baseline.
+    """
+    source = (ROOT / "tools" / "run_essays_batch.py").read_text(encoding="utf-8")
+    assert "number == args.start" in source, (
+        "the idle gate runs per document again, which no multi-document run can "
+        "survive"
+    )
+
+
+def test_the_specification_records_why_the_gate_is_checked_once():
+    """The next agent will find a per-document check obviously better, exactly
+    as I did. The reason it cannot work has to be written down."""
+    program = (ROOT / "program.md").read_text(encoding="utf-8")
+    assert "CHECK IT ONCE, BEFORE THE RUN" in program
+    assert "THE HARNESS ITSELF TYPES" in program
