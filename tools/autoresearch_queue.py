@@ -460,7 +460,7 @@ def main(argv: list[str] | None = None) -> int:
         if kind == "essays":
             slice_name = arguments.essays or slice_name
         print(f"=== {index} ({kind} {slice_name}): {description}", flush=True)  # noqa: T201
-        if autoresearch_cycle.current_baseline(slice_name, kind) <= 0.0:
+        if autoresearch_cycle.missing_baseline(slice_name, kind):
             # No baseline row for this slice means the bar is zero and the next
             # result is kept whatever it scores. That has already happened twice:
             # essays 4 and 6 were judged against 0.00, and only escaped being

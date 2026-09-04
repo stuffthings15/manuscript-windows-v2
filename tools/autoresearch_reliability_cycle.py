@@ -67,6 +67,9 @@ def corpus_for(name: str) -> Path:
 # than an opt-in. An opt-in gate is how this path went without one: the flag
 # existed, nothing here passed it, and nothing failed to say so.
 _DEFAULT_REQUIRE_IDLE = 300.0
+# run_essays_batch returns this when it stopped before a document because
+# somebody was using the machine.
+_STOPPED_FOR_IDLE = 2
 SUMMARY = ROOT / "build" / "batch-summary.json"
 
 # The pack a measurement must be served by, end to end. Anything smaller is a
@@ -188,7 +191,7 @@ def measure(
 
     SUMMARY.unlink(missing_ok=True)
     with log.open("w", encoding="utf-8") as stream:
-        subprocess.run(
+        batch = subprocess.run(
             [
                 sys.executable, str(ROOT / "tools/run_essays_batch.py"),
                 "--from", "1", "--to", str(len(documents)),
@@ -199,6 +202,33 @@ def measure(
                 "--require-idle", str(require_idle),
             ],
             cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT, timeout=7200,
+        )
+
+    # A BATCH THAT STOPPED EARLY IS NOT A SCORE, checked two ways because this
+    # already produced a false baseline once.
+    #
+    # On 2026-09-03 the idle gate cut the hard slice after 1 of 3 documents, and
+    # `completion_rate` averaged that single partial document into 0.0, which
+    # was then recorded as the slice's baseline. Every experiment afterwards
+    # would have been compared against a number describing an interruption.
+    #
+    # The return code is the direct signal. The row count is the independent
+    # one, and it catches every other way a batch can end short - a crash, a
+    # timeout, an app that would not start - none of which say so in an exit
+    # code that reaches here.
+    if batch.returncode == _STOPPED_FOR_IDLE:
+        return None, (
+            "someone is at the keyboard; the batch stopped part way and "
+            "measured nothing about the product"
+        )
+    try:
+        measured = len(json.loads(SUMMARY.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        measured = 0
+    if measured < len(documents):
+        return None, (
+            f"the batch ran {measured} of {len(documents)} documents, so there "
+            f"is no score for this slice"
         )
 
     # A run two packs served is not a measurement of either. Same rule as tone,

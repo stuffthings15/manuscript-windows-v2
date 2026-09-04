@@ -101,6 +101,32 @@ def current_baseline(name: str, kind: str = "essays") -> float:
     return best
 
 
+def has_baseline(name: str, kind: str = "essays") -> bool:
+    """Is there a kept row for this slice at all, whatever it scored?
+
+    Separate from `current_baseline` because the two questions are different and
+    conflating them cost a night. `current_baseline` returns 0.0 both when a
+    slice has never been measured AND when it was measured and genuinely scored
+    zero - and for a completion metric zero is an ordinary result, not an
+    absence.
+
+    On 2026-09-03 the three-document reliability slice baselined at 0.0 because
+    all three documents fail today. That is the correct number and a perfectly
+    usable bar: any completion at all beats it. The queue refused to run a
+    single experiment on it, because "no bar" and "a bar of zero" looked
+    identical.
+    """
+    tag = slice_tag(name, kind)
+    try:
+        for line in RESULTS.read_text(encoding="utf-8").splitlines()[1:]:
+            parts = line.split("	")
+            if len(parts) >= 5 and parts[3] == "keep" and parts[4].startswith(tag):
+                return True
+    except OSError:
+        return False
+    return False
+
+
 def missing_baseline(name: str, kind: str, *, higher_is_better: bool = True) -> str:
     """Why this slice cannot be experimented on yet, or "" if it can.
 
@@ -116,7 +142,10 @@ def missing_baseline(name: str, kind: str, *, higher_is_better: bool = True) -> 
     """
     if not higher_is_better:
         return ""
-    if current_baseline(name, kind) > 0.0:
+    # Presence of a row, not its value. A slice that was measured and scored
+    # zero has a bar; a slice never measured has none, and they are not the
+    # same thing however identical current_baseline makes them look.
+    if has_baseline(name, kind):
         return ""
     return (
         f"no baseline for {kind} {name}. Measure it unchanged and record the "

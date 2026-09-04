@@ -1392,6 +1392,7 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     summary: list[dict] = []
+    stopped_for_idle = False
     for number in range(args.start, args.end + 1):
         if number > len(essays):
             break
@@ -1419,6 +1420,13 @@ def main() -> int:
                     f"here would be about the product.",
                     flush=True,
                 )
+                # An EXIT CODE, not just a break. Stopping quietly is how a
+                # truncated batch became a score: on 2026-09-03 the gate cut the
+                # hard slice after 1 of 3 documents, the cycle scored 0 of 1 as
+                # 0.0, and recorded it as a baseline. A caller cannot tell a
+                # slice that failed from a slice that was never measured unless
+                # this says so.
+                stopped_for_idle = True
                 break
         source = essays[number - 1]
         target = work / source.name
@@ -1590,7 +1598,12 @@ def main() -> int:
     if not args.as_a_writer:
         close_word()
     print(f"\nsummary: {ROOT / 'build' / 'batch-summary.json'}")
-    return 0
+    # 2 means come back later, the specification word for a tick that
+    # measured nothing. The summary is still written, because the documents
+    # that DID run are real, but the caller must not average them into a
+    # score for the slice - that is how 1 of 3 documents became a 0.0
+    # baseline on 2026-09-03.
+    return 2 if stopped_for_idle else 0
 
 
 if __name__ == "__main__":
