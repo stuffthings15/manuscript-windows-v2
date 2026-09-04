@@ -51,6 +51,8 @@ _SKIP_WAIT_SECONDS = 600.0
 SPELLING = "src/echo_link_core/polish_spelling.py"
 CLASSIFIER = "src/echo_link_core/polish_classifier.py"
 INSERTION = "src/echo_link_core/insertion.py"
+POLISH = "src/echo_link_core/polish.py"
+HARDWARE = "src/echo_link_core/polish_hardware.py"
 HUD = "src/echo_link_app/window.py"
 QUALITY = "src/echo_link_core/polish_quality.py"
 
@@ -407,6 +409,527 @@ QUEUE: tuple[tuple[str, str, tuple[tuple[str, str], ...], str], ...] = (
         (("_RECAPTURE_SUPPRESS_SECONDS = 3.0", "_RECAPTURE_SUPPRESS_SECONDS = 6.0"),),
         "hard",
         "reliability",
+    ),
+
+    # --------------------------------------------------- generated 2026-09-04
+    # Every remaining single-constant experiment this codebase supports, with
+    # each anchor verified to appear exactly once before any of it was written.
+    #
+    # The reliability entries run on document-shapes-hard, which has the only
+    # large headroom left: the slice scores near zero and the three documents
+    # all fail today. The quality entries run on essays 8, 12 and 17, the ONLY
+    # essay slices not already at 100 - nine others are pinned there, where the
+    # keep rule is a strict improvement and an experiment is a guaranteed
+    # discard before it starts.
+    #
+    # Both directions of every constant, because a bound is a claim in two
+    # directions and only one of them has ever been tested. Half of these will
+    # be discards; that is the point, and a discard costs five minutes and
+    # leaves a row.
+    #
+    # WHAT IS NOT HERE, and why the list stops at 88 rather than 150: the rest
+    # of the experiment plan is not expressible as a substitution. Reconstruct
+    # footnote reference marks, refuse a document containing a text box, cache
+    # the capture's canonical form, two-pass proofread-then-tone - each is code
+    # somebody has to write, and encoding them as one-line edits would either
+    # not compile or measure something other than the idea. Padding this list to
+    # 150 with narrower slices of the same constants would produce rows, not
+    # knowledge.
+    (
+        "half again as many keystrokes per SendInput call",
+        INSERTION,
+        (("_DIRECT_BATCH_UNITS = 60", "_DIRECT_BATCH_UNITS = 120"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "as few SendInput calls as the array will hold",
+        INSERTION,
+        (("_DIRECT_BATCH_UNITS = 60", "_DIRECT_BATCH_UNITS = 400"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "three times the pause between keystroke batches",
+        INSERTION,
+        (("_DIRECT_CHARACTER_DELAY_SECONDS = 0.001", "_DIRECT_CHARACTER_DELAY_SECONDS = 0.003"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "ten times the pause, for an app that cannot keep up",
+        INSERTION,
+        (("_DIRECT_CHARACTER_DELAY_SECONDS = 0.001", "_DIRECT_CHARACTER_DELAY_SECONDS = 0.01"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "give up on a refusing target sooner",
+        INSERTION,
+        (("_TARGET_INSERT_ATTEMPTS = 3", "_TARGET_INSERT_ATTEMPTS = 2"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "keep trying a refusing target far longer",
+        INSERTION,
+        (("_TARGET_INSERT_ATTEMPTS = 3", "_TARGET_INSERT_ATTEMPTS = 8"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "retry an insert almost immediately",
+        INSERTION,
+        (("_TARGET_INSERT_RETRY_SECONDS = 0.05", "_TARGET_INSERT_RETRY_SECONDS = 0.02"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "let the target settle a long time between inserts",
+        INSERTION,
+        (("_TARGET_INSERT_RETRY_SECONDS = 0.05", "_TARGET_INSERT_RETRY_SECONDS = 0.5"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "barely wait for Word after a replacement",
+        INSERTION,
+        (("_OFFICE_REPLACEMENT_SETTLE_SECONDS = 0.5", "_OFFICE_REPLACEMENT_SETTLE_SECONDS = 0.05"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "wait four times as long for Word to settle",
+        INSERTION,
+        (("_OFFICE_REPLACEMENT_SETTLE_SECONDS = 0.5", "_OFFICE_REPLACEMENT_SETTLE_SECONDS = 2.0"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "stop restoring the selection sooner",
+        INSERTION,
+        (("_SELECTION_RESTORE_ATTEMPTS = 3", "_SELECTION_RESTORE_ATTEMPTS = 2"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "restore the selection far more persistently",
+        INSERTION,
+        (("_SELECTION_RESTORE_ATTEMPTS = 3", "_SELECTION_RESTORE_ATTEMPTS = 8"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "retry the selection restore almost immediately",
+        INSERTION,
+        (("_SELECTION_RESTORE_RETRY_SECONDS = 0.06", "_SELECTION_RESTORE_RETRY_SECONDS = 0.02"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "leave longer between selection restore attempts",
+        INSERTION,
+        (("_SELECTION_RESTORE_RETRY_SECONDS = 0.06", "_SELECTION_RESTORE_RETRY_SECONDS = 0.2"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "only the narrowest unreported list label counts",
+        INSERTION,
+        (("_MAX_UNREPORTED_LABEL_CHARACTERS = 4", "_MAX_UNREPORTED_LABEL_CHARACTERS = 2"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "allow a very wide unreported label",
+        INSERTION,
+        (("_MAX_UNREPORTED_LABEL_CHARACTERS = 4", "_MAX_UNREPORTED_LABEL_CHARACTERS = 16"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "paste settles almost immediately",
+        INSERTION,
+        (("_CLIPBOARD_PASTE_BASE_SETTLE_SECONDS = 0.04", "_CLIPBOARD_PASTE_BASE_SETTLE_SECONDS = 0.01"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "three times the base settle after a paste",
+        INSERTION,
+        (("_CLIPBOARD_PASTE_BASE_SETTLE_SECONDS = 0.04", "_CLIPBOARD_PASTE_BASE_SETTLE_SECONDS = 0.12"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "cap the paste settle at half",
+        INSERTION,
+        (("_CLIPBOARD_PASTE_MAX_SETTLE_SECONDS = 0.3", "_CLIPBOARD_PASTE_MAX_SETTLE_SECONDS = 0.15"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "let a long paste settle twice as long",
+        INSERTION,
+        (("_CLIPBOARD_PASTE_MAX_SETTLE_SECONDS = 0.3", "_CLIPBOARD_PASTE_MAX_SETTLE_SECONDS = 0.6"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "return the writer's clipboard sooner",
+        INSERTION,
+        (("_CLIPBOARD_RESTORE_DELAY_SECONDS = 0.2", "_CLIPBOARD_RESTORE_DELAY_SECONDS = 0.05"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "leave the clipboard alone longer before restoring",
+        INSERTION,
+        (("_CLIPBOARD_RESTORE_DELAY_SECONDS = 0.2", "_CLIPBOARD_RESTORE_DELAY_SECONDS = 0.5"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "recapture after a single failed apply",
+        HUD,
+        (("_APPLY_RETRY_BEFORE_RECAPTURE = 2", "_APPLY_RETRY_BEFORE_RECAPTURE = 1"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "try six applies before asking for a fresh capture",
+        HUD,
+        (("_APPLY_RETRY_BEFORE_RECAPTURE = 2", "_APPLY_RETRY_BEFORE_RECAPTURE = 6"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "allow a recapture almost at once",
+        HUD,
+        (("_RECAPTURE_SUPPRESS_SECONDS = 3.0", "_RECAPTURE_SUPPRESS_SECONDS = 0.5"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "suppress recapture for far longer",
+        HUD,
+        (("_RECAPTURE_SUPPRESS_SECONDS = 3.0", "_RECAPTURE_SUPPRESS_SECONDS = 10.0"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "stop retrying a cold model sooner",
+        HUD,
+        (("_WARM_RETRY_ATTEMPTS = 4", "_WARM_RETRY_ATTEMPTS = 2"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "retry a cold model twice as many times",
+        HUD,
+        (("_WARM_RETRY_ATTEMPTS = 4", "_WARM_RETRY_ATTEMPTS = 8"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "retry a cold model twice as often",
+        HUD,
+        (("_WARM_RETRY_DELAY_SECONDS = 20.0", "_WARM_RETRY_DELAY_SECONDS = 10.0"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "leave twice as long between warm retries",
+        HUD,
+        (("_WARM_RETRY_DELAY_SECONDS = 20.0", "_WARM_RETRY_DELAY_SECONDS = 40.0"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "forgive a failed pack after one minute, not five",
+        POLISH,
+        (("_FAILED_PACK_TTL_SECONDS = 300.0", "_FAILED_PACK_TTL_SECONDS = 60.0"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "remember a failed pack for fifteen minutes",
+        POLISH,
+        (("_FAILED_PACK_TTL_SECONDS = 300.0", "_FAILED_PACK_TTL_SECONDS = 900.0"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "forget a validation failure almost at once",
+        POLISH,
+        (("_VALIDATION_FAILURE_TTL_SECONDS = 0.25", "_VALIDATION_FAILURE_TTL_SECONDS = 0.05"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "remember a validation failure four times as long",
+        POLISH,
+        (("_VALIDATION_FAILURE_TTL_SECONDS = 0.25", "_VALIDATION_FAILURE_TTL_SECONDS = 1.0"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "give up on a model after two bad answers",
+        POLISH,
+        (("_INVALID_RESPONSE_STREAK = 3", "_INVALID_RESPONSE_STREAK = 2"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "tolerate five bad answers before falling back",
+        POLISH,
+        (("_INVALID_RESPONSE_STREAK = 3", "_INVALID_RESPONSE_STREAK = 5"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "only count failures inside a ten second window",
+        POLISH,
+        (("_FAILURE_STREAK_WINDOW_SECONDS = 30.0", "_FAILURE_STREAK_WINDOW_SECONDS = 10.0"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "count failures across a ninety second window",
+        POLISH,
+        (("_FAILURE_STREAK_WINDOW_SECONDS = 30.0", "_FAILURE_STREAK_WINDOW_SECONDS = 90.0"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "re-check which model is loaded four times as often",
+        HARDWARE,
+        (("_LOADED_MODEL_CACHE_SECONDS = 120.0", "_LOADED_MODEL_CACHE_SECONDS = 30.0"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "trust the loaded-model cache for five minutes",
+        HARDWARE,
+        (("_LOADED_MODEL_CACHE_SECONDS = 120.0", "_LOADED_MODEL_CACHE_SECONDS = 300.0"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "allow a closer compound split",
+        SPELLING,
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 2", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 1"),),
+        "8",
+    ),
+    (
+        "allow a closer compound split",
+        SPELLING,
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 2", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 1"),),
+        "12",
+    ),
+    (
+        "allow a closer compound split",
+        SPELLING,
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 2", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 1"),),
+        "17",
+    ),
+    (
+        "demand a wider separation before splitting a compound",
+        SPELLING,
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 2", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 3"),),
+        "8",
+    ),
+    (
+        "demand a wider separation before splitting a compound",
+        SPELLING,
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 2", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 3"),),
+        "12",
+    ),
+    (
+        "demand a wider separation before splitting a compound",
+        SPELLING,
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 2", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 3"),),
+        "17",
+    ),
+    (
+        "let a weaker frequency lead break a tie",
+        SPELLING,
+        (("_DOMINANT_FREQUENCY_RATIO = 30", "_DOMINANT_FREQUENCY_RATIO = 20"),),
+        "8",
+    ),
+    (
+        "let a weaker frequency lead break a tie",
+        SPELLING,
+        (("_DOMINANT_FREQUENCY_RATIO = 30", "_DOMINANT_FREQUENCY_RATIO = 20"),),
+        "12",
+    ),
+    (
+        "let a weaker frequency lead break a tie",
+        SPELLING,
+        (("_DOMINANT_FREQUENCY_RATIO = 30", "_DOMINANT_FREQUENCY_RATIO = 20"),),
+        "17",
+    ),
+    (
+        "demand a stronger frequency lead",
+        SPELLING,
+        (("_DOMINANT_FREQUENCY_RATIO = 30", "_DOMINANT_FREQUENCY_RATIO = 45"),),
+        "8",
+    ),
+    (
+        "demand a stronger frequency lead",
+        SPELLING,
+        (("_DOMINANT_FREQUENCY_RATIO = 30", "_DOMINANT_FREQUENCY_RATIO = 45"),),
+        "12",
+    ),
+    (
+        "demand a stronger frequency lead",
+        SPELLING,
+        (("_DOMINANT_FREQUENCY_RATIO = 30", "_DOMINANT_FREQUENCY_RATIO = 45"),),
+        "17",
+    ),
+    (
+        "let a weaker lead override a probable name",
+        SPELLING,
+        (("_DOMINANT_FREQUENCY_RATIO_NAMED = 50", "_DOMINANT_FREQUENCY_RATIO_NAMED = 35"),),
+        "8",
+    ),
+    (
+        "let a weaker lead override a probable name",
+        SPELLING,
+        (("_DOMINANT_FREQUENCY_RATIO_NAMED = 50", "_DOMINANT_FREQUENCY_RATIO_NAMED = 35"),),
+        "12",
+    ),
+    (
+        "let a weaker lead override a probable name",
+        SPELLING,
+        (("_DOMINANT_FREQUENCY_RATIO_NAMED = 50", "_DOMINANT_FREQUENCY_RATIO_NAMED = 35"),),
+        "17",
+    ),
+    (
+        "protect probable names more strongly",
+        SPELLING,
+        (("_DOMINANT_FREQUENCY_RATIO_NAMED = 50", "_DOMINANT_FREQUENCY_RATIO_NAMED = 70"),),
+        "8",
+    ),
+    (
+        "protect probable names more strongly",
+        SPELLING,
+        (("_DOMINANT_FREQUENCY_RATIO_NAMED = 50", "_DOMINANT_FREQUENCY_RATIO_NAMED = 70"),),
+        "12",
+    ),
+    (
+        "protect probable names more strongly",
+        SPELLING,
+        (("_DOMINANT_FREQUENCY_RATIO_NAMED = 50", "_DOMINANT_FREQUENCY_RATIO_NAMED = 70"),),
+        "17",
+    ),
+    (
+        "call a word mangled on weaker evidence",
+        SPELLING,
+        (("_MANGLED_CASE_RATIO = 0.7", "_MANGLED_CASE_RATIO = 0.55"),),
+        "8",
+    ),
+    (
+        "call a word mangled on weaker evidence",
+        SPELLING,
+        (("_MANGLED_CASE_RATIO = 0.7", "_MANGLED_CASE_RATIO = 0.55"),),
+        "12",
+    ),
+    (
+        "call a word mangled on weaker evidence",
+        SPELLING,
+        (("_MANGLED_CASE_RATIO = 0.7", "_MANGLED_CASE_RATIO = 0.55"),),
+        "17",
+    ),
+    (
+        "demand stronger evidence before calling a word mangled",
+        SPELLING,
+        (("_MANGLED_CASE_RATIO = 0.7", "_MANGLED_CASE_RATIO = 0.85"),),
+        "8",
+    ),
+    (
+        "demand stronger evidence before calling a word mangled",
+        SPELLING,
+        (("_MANGLED_CASE_RATIO = 0.7", "_MANGLED_CASE_RATIO = 0.85"),),
+        "12",
+    ),
+    (
+        "demand stronger evidence before calling a word mangled",
+        SPELLING,
+        (("_MANGLED_CASE_RATIO = 0.7", "_MANGLED_CASE_RATIO = 0.85"),),
+        "17",
+    ),
+    (
+        "allow a three letter head in a run-together split",
+        SPELLING,
+        (("_RUN_TOGETHER_HEAD = 4", "_RUN_TOGETHER_HEAD = 3"),),
+        "8",
+    ),
+    (
+        "allow a three letter head in a run-together split",
+        SPELLING,
+        (("_RUN_TOGETHER_HEAD = 4", "_RUN_TOGETHER_HEAD = 3"),),
+        "12",
+    ),
+    (
+        "allow a three letter head in a run-together split",
+        SPELLING,
+        (("_RUN_TOGETHER_HEAD = 4", "_RUN_TOGETHER_HEAD = 3"),),
+        "17",
+    ),
+    (
+        "demand a five letter head",
+        SPELLING,
+        (("_RUN_TOGETHER_HEAD = 4", "_RUN_TOGETHER_HEAD = 5"),),
+        "8",
+    ),
+    (
+        "demand a five letter head",
+        SPELLING,
+        (("_RUN_TOGETHER_HEAD = 4", "_RUN_TOGETHER_HEAD = 5"),),
+        "12",
+    ),
+    (
+        "demand a five letter head",
+        SPELLING,
+        (("_RUN_TOGETHER_HEAD = 4", "_RUN_TOGETHER_HEAD = 5"),),
+        "17",
+    ),
+    (
+        "narrow the context ranker margin again",
+        CLASSIFIER,
+        (("_MARGIN = 0.008", "_MARGIN = 0.005"),),
+        "8",
+    ),
+    (
+        "narrow the context ranker margin again",
+        CLASSIFIER,
+        (("_MARGIN = 0.008", "_MARGIN = 0.005"),),
+        "12",
+    ),
+    (
+        "narrow the context ranker margin again",
+        CLASSIFIER,
+        (("_MARGIN = 0.008", "_MARGIN = 0.005"),),
+        "17",
+    ),
+    (
+        "widen the ranker margin back out",
+        CLASSIFIER,
+        (("_MARGIN = 0.008", "_MARGIN = 0.012"),),
+        "8",
+    ),
+    (
+        "widen the ranker margin back out",
+        CLASSIFIER,
+        (("_MARGIN = 0.008", "_MARGIN = 0.012"),),
+        "12",
+    ),
+    (
+        "widen the ranker margin back out",
+        CLASSIFIER,
+        (("_MARGIN = 0.008", "_MARGIN = 0.012"),),
+        "17",
     ),
 )
 
