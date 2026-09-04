@@ -273,6 +273,19 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         autoresearch_status.clear_status()
 
+    # A SKIP IS NOT A CRASH, and here it must also not be a DISCARD. The
+    # experiment's commit is already made at this point, so recording a row and
+    # resetting would throw away an idea nobody measured and log it as a failure
+    # - the loop would work through the whole queue while somebody typed, and
+    # every entry would read as refuted.
+    #
+    # program.md: "do NOT write it to results.tsv, because nothing was measured
+    # and a skipped tick is not a crash."
+    if rate is None and "someone is at the keyboard" in reason:
+        autoresearch_cycle._git("reset", "--hard", before)
+        print(f"SKIPPED {reason}")  # noqa: T201
+        return 2
+
     status = autoresearch_cycle.decide(baseline, rate)
     autoresearch_cycle.record(commit, rate, 0.0, status, description)
     if status != "keep":

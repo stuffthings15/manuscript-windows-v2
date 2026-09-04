@@ -138,3 +138,47 @@ def test_the_suite_does_not_run_between_experiments():
 def test_the_loop_does_not_stop_to_ask():
     """Upstream: "do NOT pause to ask the human"."""
     assert "NEVER STOP" in PROGRAM
+
+
+def test_a_skip_writes_no_row_and_exits_two():
+    """program.md: "do NOT write it to results.tsv, because nothing was
+    measured and a skipped tick is not a crash."
+
+    Without this, an overnight loop waiting for the keyboard to go quiet fills
+    the ledger with crashes that describe the room. A later reader sees a
+    product falling over all night.
+    """
+    for name in ("reliability_baselines.py", "autoresearch_reliability_cycle.py"):
+        source = (ROOT / "tools" / name).read_text(encoding="utf-8")
+        assert "someone is at the keyboard" in source, f"{name} cannot detect a skip"
+        assert "return 2" in source, f"{name} does not signal come-back-later"
+
+
+def test_a_skipped_experiment_is_retried_not_burned():
+    """A skip must not consume the idea.
+
+    A skip records no row, so an entry the queue moved past would not even be
+    marked as tried - it would be gone, and a night's run would report having
+    tested nothing while looking like it worked.
+    """
+    source = (ROOT / "tools" / "autoresearch_queue.py").read_text(encoding="utf-8")
+    assert "_SKIPPED_NOBODY_HOME" in source
+    assert "pending.insert(0, index)" in source, (
+        "the queue drops a skipped entry instead of retrying it"
+    )
+
+
+def test_an_experiment_slice_is_small_enough_to_measure_in_the_budget():
+    """The corpus an EXPERIMENT runs on must fit five minutes.
+
+    Twenty documents is 2000 seconds. That is the shape of run that made the
+    loop manage 1.6 experiments an hour.
+    """
+    hard = ROOT / "test-corpus" / "document-shapes-hard"
+    if not hard.is_dir():
+        return
+    documents = sorted(hard.glob("*.docx"))
+    assert documents, "the experiment corpus is empty"
+    assert len(documents) * SECONDS_PER_DOCUMENT <= EXPERIMENT_BUDGET_SECONDS, (
+        f"{len(documents)} documents is past the five-minute budget"
+    )

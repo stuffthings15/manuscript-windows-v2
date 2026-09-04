@@ -34,6 +34,7 @@ import argparse
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -41,6 +42,11 @@ if str(Path(__file__).resolve().parent) not in sys.path:
 import autoresearch_cycle  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# The cycles return this when nobody measured anything because a person is
+# using the machine. program.md: treat it as "come back later".
+_SKIPPED_NOBODY_HOME = 2
+_SKIP_WAIT_SECONDS = 600.0
 
 SPELLING = "src/echo_link_core/polish_spelling.py"
 CLASSIFIER = "src/echo_link_core/polish_classifier.py"
@@ -443,9 +449,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     arguments = parser.parse_args(argv)
 
-    for index, entry in enumerate(QUEUE):
-        if index < arguments.start:
-            continue
+    pending = [i for i in range(len(QUEUE)) if i >= arguments.start]
+    while pending:
+        index = pending.pop(0)
+        entry = QUEUE[index]
         description, _relative, _edits, slice_name = entry[:4]
         # "essays" unless the entry says otherwise, so every entry written
         # before tones existed keeps its exact meaning.
@@ -551,9 +558,24 @@ def main(argv: list[str] | None = None) -> int:
             timeout=7200,
         )
         print((done.stdout or "").strip() or "no output", flush=True)  # noqa: T201
-        # No branching on the result on purpose. The cycle has already kept or
-        # reset the branch, so the next entry starts from whatever the evidence
-        # left behind, and the queue keeps running either way.
+        # ONE branch, and only one: exit 2 means the cycle measured NOTHING
+        # because somebody is at the keyboard. It is not a result.
+        #
+        # Without this the queue would march through the entire list while a
+        # person worked, and every entry would come back unmeasured. Because a
+        # skip records no row, the ideas would not even be marked as tried -
+        # they would simply be gone, and the loop would report a night's work
+        # having tested nothing.
+        #
+        # So wait for the machine to go quiet and RETRY THE SAME ENTRY. The
+        # spec's own words for exit 2 are "come back later".
+        if done.returncode == _SKIPPED_NOBODY_HOME:
+            print(  # noqa: T201
+                f"WAITING {_SKIP_WAIT_SECONDS:.0f}s, then retrying {index}",
+                flush=True,
+            )
+            time.sleep(_SKIP_WAIT_SECONDS)
+            pending.insert(0, index)
     return 0
 
 

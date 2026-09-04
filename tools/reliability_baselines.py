@@ -79,6 +79,15 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if rate is None:
+        # A SKIP IS NOT A CRASH. program.md: "do NOT write it to
+        # results.tsv, because nothing was measured and a skipped tick is
+        # not a crash." Without this an overnight loop waiting for the
+        # keyboard to go quiet would fill the ledger with crashes that
+        # describe the room, and a later reader would see a product
+        # falling over all night.
+        if "someone is at the keyboard" in reason:
+            print(f"SKIPPED {reason}", flush=True)  # noqa: T201
+            return 2
         autoresearch_cycle.record(
             commit, None, 0.0, "crash", f"{tag} {arguments.describe}"
         )
