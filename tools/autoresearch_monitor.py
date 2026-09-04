@@ -90,8 +90,29 @@ def main() -> int:
 
     state = {"misses": 0}
 
+    def _is_stale(status: dict) -> bool:
+        """Has the writer stopped updating this file?
+
+        A run killed part way cannot clear its own status file, so the panel
+        went on announcing "reliability hard baseline" for hours after the run
+        died. That is worse than showing nothing: an empty screen says nothing,
+        and a stale panel claims work is happening.
+
+        Curtis saw exactly this on 2026-09-04.
+        """
+        from datetime import datetime
+
+        try:
+            written = datetime.fromisoformat(str(status.get("stamp", "")))
+        except ValueError:
+            return False
+        age = (datetime.now() - written).total_seconds()
+        return age > autoresearch_status.STALE_AFTER_SECONDS
+
     def refresh() -> None:
         status = autoresearch_status.read_status()
+        if status is not None and _is_stale(status):
+            status = None
         if status is None:
             state["misses"] += 1
             if state["misses"] >= _MISSES_BEFORE_CLOSING:

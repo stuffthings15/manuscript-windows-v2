@@ -63,7 +63,10 @@ def main(argv: list[str] | None = None) -> int:
 
     commit = autoresearch_cycle._git("rev-parse", "--short", "HEAD")
     tag = autoresearch_cycle.slice_tag(arguments.slice, kind="reliability")
-    documents = len(reliability._documents())
+    # The SLICE's corpus, not the default one. The panel said 'essays 1-20'
+    # while measuring a three-document slice, which is a third wrong claim
+    # on a display whose whole job is to say what is happening.
+    documents = len(reliability._documents(reliability.corpus_for(arguments.slice)))
 
     with autoresearch_status.showing(
         phase=f"reliability {arguments.slice} baseline",

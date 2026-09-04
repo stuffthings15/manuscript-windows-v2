@@ -151,6 +151,54 @@ class showing:
         return False
 
 
+# How old a status file may be before the panel stops believing it. A writer
+# killed mid-run cannot clear the file, so without this the panel keeps showing
+# a phase that finished hours ago - which is worse than showing nothing, because
+# it is a claim that work is happening.
+STALE_AFTER_SECONDS = 180.0
+
+
+def tally(results: Path | None = None, since_line: int = 0) -> dict[str, int]:
+    """kept / discarded / crashed from the ledger, which is the only record.
+
+    Counted from results.tsv rather than tracked in memory, because the ledger
+    is what a person can check afterwards. A counter kept in a variable and a
+    row written to disk are two things that can disagree, and the panel would be
+    the one nobody could audit.
+
+    Curtis, 2026-09-04: "it is not being updated with the results and does not
+    indicate that it is working correctly." He was right, and it was not a
+    display bug: NOTHING in the apparatus had ever written these three keys, so
+    the monitor rendered its own defaults from the day it was built.
+    """
+    path = results or Path(__file__).resolve().parents[1] / "results.tsv"
+    counts = {"kept": 0, "discarded": 0, "crashed": 0}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return counts
+    for line in lines[max(since_line, 0):]:
+        parts = line.split("	")
+        if len(parts) != 5:
+            continue
+        if parts[3] == "keep":
+            counts["kept"] += 1
+        elif parts[3] == "discard":
+            counts["discarded"] += 1
+        elif parts[3] == "crash":
+            counts["crashed"] += 1
+    return counts
+
+
+def ledger_length(results: Path | None = None) -> int:
+    """Rows now, so a later tally can count only this run's own results."""
+    path = results or Path(__file__).resolve().parents[1] / "results.tsv"
+    try:
+        return len(path.read_text(encoding="utf-8").splitlines())
+    except OSError:
+        return 0
+
+
 def read_status() -> dict | None:
     """The current status, or None when nothing is running.
 

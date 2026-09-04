@@ -40,6 +40,7 @@ if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import autoresearch_cycle  # noqa: E402
+import autoresearch_status  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -973,6 +974,13 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
 
     pending = [i for i in range(len(QUEUE)) if i >= arguments.start]
+    total = len(pending)
+    # Where the ledger stood when this run began, so the panel counts THIS
+    # night's results rather than every experiment ever recorded.
+    started_at = autoresearch_status.ledger_length()
+    last_result = "-"
+    autoresearch_status.start_monitor()
+
     while pending:
         index = pending.pop(0)
         entry = QUEUE[index]
@@ -983,6 +991,30 @@ def main(argv: list[str] | None = None) -> int:
         if kind == "essays":
             slice_name = arguments.essays or slice_name
         print(f"=== {index} ({kind} {slice_name}): {description}", flush=True)  # noqa: T201
+        # THE PANEL, UPDATED PER ENTRY.
+        #
+        # Curtis, 2026-09-04: "it is not being updated with the results and does
+        # not indicate that it is working correctly." Nothing had ever written
+        # kept, discarded or crashed, so the monitor rendered its own zeroes from
+        # the day it was built, and a working loop was indistinguishable from a
+        # stuck one.
+        #
+        # Counts come from the ledger, not from a variable, because the ledger is
+        # what anybody can check afterwards. A count held in memory and a row
+        # written to disk are two things that can disagree, and the panel would
+        # be the one nobody could audit.
+        completed = total - len(pending) - 1
+        autoresearch_status.write_status(
+            {
+                "phase": f"{kind} {slice_name}   entry {completed + 1} of {total}",
+                "description": description,
+                "essays": slice_name,
+                "experiment": autoresearch_cycle._git("rev-parse", "--short", "HEAD"),
+                "baseline": f"{autoresearch_cycle.current_baseline(slice_name, kind):.1f}",
+                "last_result": last_result,
+                **autoresearch_status.tally(since_line=started_at),
+            }
+        )
         if autoresearch_cycle.missing_baseline(slice_name, kind):
             # No baseline row for this slice means the bar is zero and the next
             # result is kept whatever it scores. That has already happened twice:
@@ -1080,7 +1112,14 @@ def main(argv: list[str] | None = None) -> int:
             # one state this loop must never produce.
             timeout=7200,
         )
-        print((done.stdout or "").strip() or "no output", flush=True)  # noqa: T201
+        printed = (done.stdout or "").strip()
+        print(printed or "no output", flush=True)  # noqa: T201
+        # The cycle prints exactly one result line: KEEP 94.5, DISCARD 94.0 or
+        # CRASH dead. That line is what a person wants to see on the panel.
+        for line in reversed(printed.splitlines()):
+            if line.split(" ")[0] in ("KEEP", "DISCARD", "CRASH", "SKIPPED"):
+                last_result = f"{line[:34]}  ({slice_name})"
+                break
         # ONE branch, and only one: exit 2 means the cycle measured NOTHING
         # because somebody is at the keyboard. It is not a result.
         #
@@ -1099,6 +1138,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             time.sleep(_SKIP_WAIT_SECONDS)
             pending.insert(0, index)
+    # The panel disappears when the work does. No file, no window.
+    autoresearch_status.clear_status()
     return 0
 
 
