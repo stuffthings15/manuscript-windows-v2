@@ -45,6 +45,11 @@ import autoresearch_cycle  # noqa: E402
 import autoresearch_status  # noqa: E402
 
 CORPUS = ROOT / "test-corpus" / "document-shapes"
+
+# The same 300 seconds `program.md` gives autoresearch_run, and a DEFAULT rather
+# than an opt-in. An opt-in gate is how this path went without one: the flag
+# existed, nothing here passed it, and nothing failed to say so.
+_DEFAULT_REQUIRE_IDLE = 300.0
 SUMMARY = ROOT / "build" / "batch-summary.json"
 
 # The pack a measurement must be served by, end to end. Anything smaller is a
@@ -79,7 +84,9 @@ def completion_rate() -> tuple[float | None, str]:
     return 100.0 * finished / len(rows), ""
 
 
-def measure(log: Path) -> tuple[float | None, str]:
+def measure(
+    log: Path, *, require_idle: float = _DEFAULT_REQUIRE_IDLE
+) -> tuple[float | None, str]:
     """(completion rate, reason it is missing). Never both.
 
     Restarts Word and the app first and refuses a stale build, for the reason
@@ -92,6 +99,31 @@ def measure(log: Path) -> tuple[float | None, str]:
     documents = _documents()
     if not documents:
         return None, f"no documents under {CORPUS}"
+
+    # THE IDLE GATE, which this path did not have until 2026-09-03.
+    #
+    # `program.md` requires it and only `autoresearch_run.py` implemented it, so
+    # every reliability number ever taken was measured with somebody possibly at
+    # the keyboard. That night it finally showed: 14_dashes died with
+    # `the review on screen was captured from 'Claude', not from 14_dashes`
+    # because the agent was typing in its own session while the run was on
+    # screen - the exact failure the gate exists to prevent, committed by the
+    # process that wrote the gate.
+    #
+    # It also puts a name to the reliability metric's supposed noise floor. Four
+    # runs of one corpus scored 80, 80, 60, 80 with a different document failing
+    # each time, and that was recorded as randomness. A run interrupted by
+    # whoever happens to be typing produces exactly that pattern.
+    #
+    # Returning a REASON rather than a score, because an interrupted run is a
+    # claim about the room and never about the product.
+    if require_idle > 0:
+        idle = autoresearch_run.idle_seconds()
+        if idle < require_idle:
+            return None, (
+                f"someone is at the keyboard ({idle:.0f}s idle, "
+                f"{require_idle:.0f}s required)"
+            )
 
     before_restart = autoresearch_run._log_length()
     autoresearch_run._restart_word()
@@ -140,6 +172,10 @@ def measure(log: Path) -> tuple[float | None, str]:
                 sys.executable, str(ROOT / "tools/run_essays_batch.py"),
                 "--from", "1", "--to", str(len(documents)),
                 "--corpus", str(CORPUS), "--as-a-writer",
+                # Passed THROUGH, because the cycle's own check happens once
+                # and a batch runs for minutes. Document 14 of 20 was corrupted
+                # on 2026-09-03 by someone arriving after the run began.
+                "--require-idle", str(require_idle),
             ],
             cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT, timeout=7200,
         )
@@ -158,6 +194,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--slice", default="shapes")
     parser.add_argument("--describe", required=True, help="what this experiment tries")
+    parser.add_argument(
+        "--require-idle",
+        type=float,
+        default=_DEFAULT_REQUIRE_IDLE,
+        help="only measure when nobody has touched the machine for this "
+        "many seconds. 0 disables the gate, which makes the run evidence "
+        "about the room rather than the product.",
+    )
     arguments = parser.parse_args(argv)
 
     tag = autoresearch_cycle.slice_tag(arguments.slice, kind="reliability")
@@ -200,7 +244,10 @@ def main(argv: list[str] | None = None) -> int:
         }
     )
     try:
-        rate, reason = measure(ROOT / f"reliability-run-{arguments.slice}.log")
+        rate, reason = measure(
+            ROOT / f"reliability-run-{arguments.slice}.log",
+            require_idle=arguments.require_idle,
+        )
     finally:
         autoresearch_status.clear_status()
 

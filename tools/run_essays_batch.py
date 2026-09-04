@@ -1305,6 +1305,24 @@ def score(before_text: str, after_text: str, dictionary) -> dict:
     }
 
 
+
+def _idle_seconds() -> float:
+    """Seconds since anyone touched the machine.
+
+    Delegates to autoresearch_run rather than re-implementing GetLastInputInfo,
+    so the two paths cannot drift on what "idle" means. Its rule matters and is
+    inherited: an idle check that CANNOT answer returns 0.0, meaning assume
+    somebody is here, because a check that cannot answer must never grant
+    permission to seize the screen.
+    """
+    try:
+        import autoresearch_run
+
+        return autoresearch_run.idle_seconds()
+    except Exception:  # noqa: BLE001 - a missing import must not free the gate
+        return 0.0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--from", dest="start", type=int, default=2)
@@ -1314,6 +1332,15 @@ def main() -> int:
         type=int,
         default=1,
         help="runs per essay; one run is a hypothesis, not a result",
+    )
+    parser.add_argument(
+        "--require-idle",
+        type=float,
+        default=0.0,
+        help="stop before a document if somebody has touched the machine "
+        "within this many seconds. program.md requires it of every measuring "
+        "path; typing in another editable window redirects the HUD and the "
+        "run then measures the interruption.",
     )
     parser.add_argument(
         "--no-restart",
@@ -1368,6 +1395,30 @@ def main() -> int:
     for number in range(args.start, args.end + 1):
         if number > len(essays):
             break
+        # THE IDLE GATE, CHECKED BEFORE EVERY DOCUMENT, not once at the start.
+        #
+        # Checking once is what the cycles did, and it is not enough: a batch
+        # runs for many minutes and the person only has to arrive partway
+        # through. Measured 2026-09-03, document 14 of 20 died with
+        # `the review on screen was captured from 'Claude', not from 14_dashes`
+        # because the agent was typing in its own session while the run was on
+        # screen. Thirteen documents had already passed the start-of-run check.
+        #
+        # `program.md`: "typing in any other editable window redirects the HUD
+        # and crashes the run". So this stops the batch rather than recording
+        # the rest - every document after an interruption is measuring the
+        # interruption.
+        if args.require_idle > 0:
+            idle = _idle_seconds()
+            if idle < args.require_idle:
+                print(  # noqa: T201
+                    f"\nSTOPPING before {essays[number - 1].name}: somebody is "
+                    f"at the keyboard ({idle:.0f}s idle, "
+                    f"{args.require_idle:.0f}s required). Nothing measured from "
+                    f"here would be about the product.",
+                    flush=True,
+                )
+                break
         source = essays[number - 1]
         target = work / source.name
         before_text = str(corpus_text[number - 1])

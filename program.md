@@ -209,8 +209,34 @@ a low one:
 - `captured from 'Claude'` - the harness captured the wrong window
 - `COMError (-2146233083)` - Word fell over
 
-**Timeout**: an experiment is about 5 minutes per essay. Past 10 minutes per
-essay, kill it and treat it as a failure.
+**Time budget**: an experiment gets a FIXED FIVE MINUTES of wall clock
+measurement, not five minutes per document. Past 10 minutes, kill it and treat
+it as a failure.
+
+This line used to read "about 5 minutes per essay", and that mistranslation of
+the upstream spec cost more than every defect in this file. Upstream fixes the
+budget - "a fixed time budget of 5 minutes (wall clock training time, excluding
+startup/compilation)" - and gets roughly 12 experiments an hour from it. Read as
+per-document it licensed a 20-document run at 36 minutes, which is 1.6
+experiments an hour, and 150 experiments went from one night to four days.
+Nobody noticed because 36 minutes looked compliant against the wrong sentence.
+
+Two consequences follow, and they are the whole shape of a run:
+
+- MEASURE ONLY WHAT HAS HEADROOM. The same principle as `--essays 8,10` above,
+  applied to every slice. At roughly 100 seconds a document, five minutes is
+  three documents. Choose the three that are failing; a document already at 100
+  cannot improve and spends the budget proving it.
+- A BASELINE IS NOT AN EXPERIMENT. Verification over the whole corpus is a
+  different job with a different budget, run rarely. Do not pay for twenty
+  documents on every idea.
+
+**Idle gate**: every measuring path passes `--require-idle`, not just
+`autoresearch_run.py`. On 2026-09-03 a reliability run failed with
+`captured from 'Claude'` because the agent was typing in this session while the
+run was on screen - the exact failure the gate exists to prevent, committed by
+the thing that wrote the gate. A measurement taken while anyone is at the
+keyboard is not evidence.
 
 **Every kept commit must pass** `tests/test_source_discipline.py`. Run the full
 suite before proposing a merge, not after every experiment.

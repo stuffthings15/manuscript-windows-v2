@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import logging
+import re
 import sys
 import threading
 import time
@@ -452,6 +453,23 @@ def _word_automatic_list_labels(
     return labels
 
 
+_LIST_LABEL_OPENING = re.compile(
+    r"^\s*(?:\d+|[A-Za-z]|[ivxIVX]+)[.)]\s|^\s*[•○o\-\*·]\s"
+)
+
+
+def _opens_with_a_list_label(text: str) -> bool:
+    """Does this rewrite begin with something shaped like a list label?
+
+    Used only to decide whether a rewrite that did NOT echo Word's label is
+    safe to write over the sentence. It errs toward saying yes, because the two
+    outcomes are not symmetric: a false yes declines one correction, and a false
+    no writes a second label into the document where the writer has to find it
+    by eye.
+    """
+    return bool(_LIST_LABEL_OPENING.match(str(text or "")))
+
+
 def _word_visible_text_and_spans(
     text: str,
     labels: dict[int, str] | None = None,
@@ -731,11 +749,49 @@ def _replace_word_document_range(
             and _is_label(absolute_start + leading)
         ):
             leading += 1
-        if leading and expected_text[:leading] == new_text[:leading]:
-            start += leading
-            absolute_start += leading
-            expected_text = expected_text[leading:]
-            new_text = new_text[leading:]
+        if leading:
+            # THE LABEL IS WORD'S, NOT THE WRITER'S.
+            #
+            # Accessibility reports it, so the capture contains it, so every
+            # list item's section BEGINS with characters the writer never typed
+            # and Word re-supplies on its own. The original rule trimmed the
+            # label only when the rewrite echoed it character for character,
+            # which made every correction inside a list contingent on the model
+            # copying "a. " exactly.
+            #
+            # Measured 2026-09-03 on 03_multi_level_outline, driving the real
+            # replacement against a fake Word:
+            #
+            #   'a. State the question in plain terms.'  -> applied
+            #   'State the question in plain terms.'     -> REFUSED
+            #   'A. State the question in plain terms.'  -> REFUSED
+            #
+            # A rewrite that drops the label has not proposed deleting
+            # anything. It returned the sentence, which is all it was ever
+            # entitled to change.
+            label_text = expected_text[:leading]
+            rewrite_head = new_text[:leading]
+            if rewrite_head == label_text:
+                trim_from_rewrite = leading
+            elif rewrite_head.casefold() == label_text.casefold():
+                # The same label shouted. Strip it rather than writing it into
+                # the document, which would leave "a. A. State the question".
+                trim_from_rewrite = leading
+            elif _opens_with_a_list_label(new_text):
+                # A DIFFERENT label. The document would read "a. 1. State the
+                # question" and the writer would have to find it by eye, so
+                # this is left to the refusal below. One declined correction is
+                # cheap; a duplicated label is not.
+                trim_from_rewrite = -1
+            else:
+                # No label at all, which is the common case and the one that
+                # was being thrown away.
+                trim_from_rewrite = 0
+            if trim_from_rewrite >= 0:
+                start += leading
+                absolute_start += leading
+                expected_text = expected_text[leading:]
+                new_text = new_text[trim_from_rewrite:]
 
         trailing = 0
         while (

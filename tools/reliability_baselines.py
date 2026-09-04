@@ -48,6 +48,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--slice", default="shapes")
     parser.add_argument(
+        "--require-idle",
+        type=float,
+        default=reliability._DEFAULT_REQUIRE_IDLE,
+        help="only measure when nobody has touched the machine for this "
+        "many seconds.",
+    )
+    parser.add_argument(
         "--describe",
         default="baseline",
         help="what this baseline records, for the results.tsv description",
@@ -66,7 +73,8 @@ def main(argv: list[str] | None = None) -> int:
         baseline="none",
     ):
         rate, reason = reliability.measure(
-            ROOT / f"reliability-run-{arguments.slice}.log"
+            ROOT / f"reliability-run-{arguments.slice}.log",
+            require_idle=arguments.require_idle,
         )
 
     if rate is None:
