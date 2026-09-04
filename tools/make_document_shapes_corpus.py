@@ -100,12 +100,23 @@ NUMBERING = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/>
 <w:lvlText w:val="&#8226;"/><w:lvlJc w:val="left"/>
 <w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl>
+<w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="bullet"/>
+<w:lvlText w:val="o"/><w:lvlJc w:val="left"/>
+<w:pPr><w:ind w:left="1440" w:hanging="360"/></w:pPr></w:lvl>
 </w:abstractNum>
 <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
 <w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>
 <w:num w:numId="3"><w:abstractNumId w:val="0"/></w:num>
 </w:numbering>"""
 
+# The bullet definition gained ilvl 1 on 2026-09-03. It previously defined only
+# ilvl 0 while 10_nested_bullets used level 1, and Word returns an EMPTY label
+# for a level its numbering defines no template for. That is not what Word
+# produces for a real nested bullet list, so the document was testing a
+# malformed file rather than the shape it is named for. It did expose a real
+# product gap on the way - see the empty-label branch in
+# _word_automatic_list_labels - which is fixed separately and stays fixed.
+#
 # numId 3 shares abstract definition 0 with numId 1, which is how Word models a
 # SECOND list that restarts at 1. A document with two numbered lists is the case
 # where a label reconstruction that assumes one counter per document silently

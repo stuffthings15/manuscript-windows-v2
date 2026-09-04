@@ -42,6 +42,11 @@ _OFFICE_REPLACEMENT_SETTLE_SECONDS = 0.5
 _CLIPBOARD_RESTORE_DELAY_SECONDS = 0.2
 _CLIPBOARD_RESTORE_RETRY_SECONDS = 0.05
 _CLIPBOARD_RESTORE_TIMEOUT_SECONDS = 0.8
+# How many characters a list label Word does not report may occupy in the
+# capture. A bullet or number plus its separator is one or two; four leaves room
+# for a wider template without letting a large gap - which would mean the
+# paragraphs no longer tile the text - be mistaken for a label.
+_MAX_UNREPORTED_LABEL_CHARACTERS = 4
 _TARGET_INSERT_ATTEMPTS = 3
 _TARGET_INSERT_RETRY_SECONDS = 0.05
 _SELECTION_RESTORE_ATTEMPTS = 3
@@ -59,7 +64,16 @@ _WORD_COM_NOT_APPLICABLE = object()
 # read as 5204 characters through COM and 5203 through UI Automation, so the
 # two never matched, every offset after it was out by one, and Replace Text
 # refused a document the writer had not touched.
-_WORD_UIA_OMITTED_CHARACTERS = frozenset({chr(0x01)})
+# U+0007 is Word's cell mark and row mark inside a table. Measured on the
+# 2026-09-03 shapes baseline, where the arithmetic is exact rather than
+# inferred: 06_table has 12 cell ends and 4 row ends, and COM read 264
+# characters against the capture's 248, a difference of exactly 16.
+# 20_mixed_everything has 4 cell ends and 2 row ends, and read 250 against 244,
+# a difference of exactly 6. Nothing was substituted for them on the
+# accessibility side, so they are dropped here rather than mapped to a
+# separator: any substitute would put the length back out by one per cell.
+# Both documents failed every correction before this.
+_WORD_UIA_OMITTED_CHARACTERS = frozenset({chr(0x01), chr(0x07)})
 # A non-breaking space used to be deleted here too, on the assumption that
 # accessibility never reports one. It does, and Word is not consistent about
 # it: see windows_selection.normalize_captured_text. Deleting it moved every
@@ -75,7 +89,17 @@ _WORD_NONBREAKING_SPACE = chr(0xA0)
 # "0 of 0". The span builder above already skips both characters, so the
 # offsets are right either way; this set decides only what is unsafe to
 # overwrite.
-_WORD_OBJECT_ANCHORS = frozenset({chr(0x01)})
+# U+0007 is here for a different reason than U+0001, and a stronger one.
+# Skipping it above makes the offsets agree, which is what lets a table be
+# corrected at all. But a range that SPANS a cell mark or a row mark covers the
+# boundary itself, and assigning text across it does not rewrite two cells - it
+# merges them, destroying the table. That is unrecoverable through undo in the
+# writer's mental model, so a range crossing a boundary is refused outright.
+#
+# This costs nothing in practice: every cell is its own paragraph, so a review
+# section lies inside one cell. It only bites on an edit that genuinely cannot
+# be expressed as a range, which is exactly what this set is for.
+_WORD_OBJECT_ANCHORS = frozenset({chr(0x01), chr(0x07)})
 
 
 class _LastInputInfo(ctypes.Structure):
@@ -384,6 +408,44 @@ def _word_automatic_list_labels(
                 separator = ""
             labels[offset] = f"{label}{separator}"
             capture_offset = found + len(label) + len(separator)
+        else:
+            # Word reports NO label, and the capture still holds characters here.
+            #
+            # Measured on 10_nested_bullets, 2026-09-03: COM 198 against the
+            # capture's 199, first difference at 113 where COM began the
+            # sub-item's "A" and the capture held a space. Two labels had been
+            # reconstructed for the two top-level bullets and none for the
+            # nested one, because `ListString` is empty for a level the
+            # document's numbering defines no template for - and accessibility
+            # still emitted one character for it.
+            #
+            # Nothing was corrupted: the text check downstream refused the edit.
+            # But it refused a correction it could have kept, and a document
+            # from any producer can carry a list level Word has no template for.
+            #
+            # The gap is READ from the capture, exactly as the separator above
+            # is, because the capture is the only authority on what the capture
+            # contains. This branch is deliberately additive: when the paragraph
+            # cannot be located it changes nothing and leaves the old behaviour,
+            # so a capture that covers a selection rather than the whole
+            # document cannot start refusing what it accepts today.
+            canonical_head = (
+                text.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
+            )
+            if canonical_head:
+                at = captured.find(canonical_head, capture_offset)
+                if at >= 0:
+                    gap = captured[capture_offset:at]
+                    # A newline in the gap is a paragraph break, not a label.
+                    # Swallowing one would hide a whole empty paragraph inside a
+                    # zero-width span and put every later offset out by its
+                    # length, which is this defect again with a different cause.
+                    if (
+                        0 < len(gap) <= _MAX_UNREPORTED_LABEL_CHARACTERS
+                        and "\n" not in gap
+                    ):
+                        labels[offset] = gap
+                        capture_offset = at
         canonical = text.replace("\r\n", "\n").replace("\r", "\n")
         offset += len(text)
         capture_offset += len(canonical)
