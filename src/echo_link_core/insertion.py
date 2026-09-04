@@ -761,9 +761,37 @@ def _replace_word_document_range(
             # A label inside the edit, not at its edges. Word owns those
             # characters; they are not in the document text and cannot be
             # replaced through a range.
+            #
+            # The detail below exists because this line cost a measurement.
+            # On 2026-09-03 it refused section 4 of 03_multi_level_outline and
+            # said only that a label was covered - not which positions, not
+            # whether the edit had left the label alone, not whether the trim
+            # above had even been attempted. The reconstruction was then proved
+            # correct for that document offline (labels at 66, 106, 144, 181,
+            # rebuilt text equal to the capture character for character), which
+            # means the cause is here and the old message could not distinguish
+            # a section that spans a label from a rewrite that edited one.
+            #
+            # Positions and lengths only. Never the writer's text.
+            inside = [
+                position
+                for position in range(absolute_start, absolute_end)
+                if _is_label(position)
+            ]
             logger.warning(
                 "Word COM range replacement refused a range covering an "
-                "automatic list label"
+                "automatic list label (range=%d..%d label_positions=%s "
+                "at_start=%s at_end=%s edit_chars=%d new_chars=%d "
+                "edges_unchanged=%s)",
+                absolute_start,
+                absolute_end,
+                inside[:8],
+                bool(inside) and inside[0] == absolute_start,
+                bool(inside) and inside[-1] == absolute_end - 1,
+                len(expected_text),
+                len(new_text),
+                expected_text[:1] == new_text[:1]
+                and expected_text[-1:] == new_text[-1:],
             )
             return False
         raw_start = spans[absolute_start][0]
