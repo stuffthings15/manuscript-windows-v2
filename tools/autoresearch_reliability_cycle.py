@@ -46,6 +46,23 @@ import autoresearch_status  # noqa: E402
 
 CORPUS = ROOT / "test-corpus" / "document-shapes"
 
+# One corpus per slice, so an EXPERIMENT and a BASELINE can cost different
+# amounts. program.md fixes an experiment at five minutes, which at roughly 100
+# seconds a document is three documents, and the spec's own reason for choosing
+# essays 8 and 10 applies here: a document that already completes cannot improve
+# and spends the budget proving it. "hard" holds the list documents that fail.
+# "shapes" keeps all twenty for the baseline, where resolution is the point and
+# the run is rare.
+CORPORA = {
+    "shapes": CORPUS,
+    "hard": ROOT / "test-corpus" / "document-shapes-hard",
+}
+
+
+def corpus_for(name: str) -> Path:
+    return CORPORA.get(name, CORPUS)
+
+
 # The same 300 seconds `program.md` gives autoresearch_run, and a DEFAULT rather
 # than an opt-in. An opt-in gate is how this path went without one: the flag
 # existed, nothing here passed it, and nothing failed to say so.
@@ -57,8 +74,8 @@ SUMMARY = ROOT / "build" / "batch-summary.json"
 REQUIRED_PACK = "gemma4-12b-qat-v1"
 
 
-def _documents() -> list[Path]:
-    return sorted(CORPUS.glob("*.docx"))
+def _documents(corpus: Path | None = None) -> list[Path]:
+    return sorted((corpus or CORPUS).glob("*.docx"))
 
 
 def completion_rate() -> tuple[float | None, str]:
@@ -85,7 +102,10 @@ def completion_rate() -> tuple[float | None, str]:
 
 
 def measure(
-    log: Path, *, require_idle: float = _DEFAULT_REQUIRE_IDLE
+    log: Path,
+    *,
+    require_idle: float = _DEFAULT_REQUIRE_IDLE,
+    corpus: Path | None = None,
 ) -> tuple[float | None, str]:
     """(completion rate, reason it is missing). Never both.
 
@@ -96,9 +116,10 @@ def measure(
     """
     import autoresearch_run
 
-    documents = _documents()
+    corpus = corpus or CORPUS
+    documents = _documents(corpus)
     if not documents:
-        return None, f"no documents under {CORPUS}"
+        return None, f"no documents under {corpus}"
 
     # THE IDLE GATE, which this path did not have until 2026-09-03.
     #
@@ -106,9 +127,9 @@ def measure(
     # every reliability number ever taken was measured with somebody possibly at
     # the keyboard. That night it finally showed: 14_dashes died with
     # `the review on screen was captured from 'Claude', not from 14_dashes`
-    # because the agent was typing in its own session while the run was on
-    # screen - the exact failure the gate exists to prevent, committed by the
-    # process that wrote the gate.
+    # because this session was interactive and Curtis was typing into it while
+    # the run was on screen. The agent does not generate input events; the
+    # fault was starting a measurement during a live conversation at all.
     #
     # It also puts a name to the reliability metric's supposed noise floor. Four
     # runs of one corpus scored 80, 80, 60, 80 with a different document failing
@@ -171,7 +192,7 @@ def measure(
             [
                 sys.executable, str(ROOT / "tools/run_essays_batch.py"),
                 "--from", "1", "--to", str(len(documents)),
-                "--corpus", str(CORPUS), "--as-a-writer",
+                "--corpus", str(corpus), "--as-a-writer",
                 # Passed THROUGH, because the cycle's own check happens once
                 # and a batch runs for minutes. Document 14 of 20 was corrupted
                 # on 2026-09-03 by someone arriving after the run began.
@@ -247,6 +268,7 @@ def main(argv: list[str] | None = None) -> int:
         rate, reason = measure(
             ROOT / f"reliability-run-{arguments.slice}.log",
             require_idle=arguments.require_idle,
+            corpus=corpus_for(arguments.slice),
         )
     finally:
         autoresearch_status.clear_status()

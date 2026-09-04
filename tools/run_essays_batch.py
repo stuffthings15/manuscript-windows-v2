@@ -1401,8 +1401,9 @@ def main() -> int:
         # runs for many minutes and the person only has to arrive partway
         # through. Measured 2026-09-03, document 14 of 20 died with
         # `the review on screen was captured from 'Claude', not from 14_dashes`
-        # because the agent was typing in its own session while the run was on
-        # screen. Thirteen documents had already passed the start-of-run check.
+        # because this session was interactive and being typed into while the
+        # run was on screen. Thirteen documents had already passed the
+        # start-of-run check.
         #
         # `program.md`: "typing in any other editable window redirects the HUD
         # and crashes the run". So this stops the batch rather than recording

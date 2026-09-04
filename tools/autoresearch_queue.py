@@ -44,6 +44,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 SPELLING = "src/echo_link_core/polish_spelling.py"
 CLASSIFIER = "src/echo_link_core/polish_classifier.py"
+INSERTION = "src/echo_link_core/insertion.py"
+HUD = "src/echo_link_app/window.py"
 QUALITY = "src/echo_link_core/polish_quality.py"
 
 # The lookup inside `suggestion`, NOT the one inside `has_close_candidate`.
@@ -288,8 +290,119 @@ QUEUE: tuple[tuple[str, str, tuple[tuple[str, str], ...], str], ...] = (
         "Friendly",
         "tone",
     ),
-)
 
+    # ---------------------------------------------------------------- shapes
+    # RELIABILITY, measured on test-corpus/document-shapes-hard: the three list
+    # documents that fail. program.md fixes an experiment at five minutes and
+    # three documents at ~100s each is exactly that, so each of these costs one
+    # budget rather than the twenty-document 36 minutes that made the loop run
+    # at 1.6 experiments an hour.
+    #
+    # None of these has ever been run. The twelve entries above are all in
+    # results.tsv already, which is why starting this queue unchanged would have
+    # repeated the lot.
+    #
+    # Every one is a single constant, because a constant is the only kind of
+    # change whose effect the completion metric can actually attribute. The
+    # ideas are the B and C blocks of the experiment plan: insertion timing and
+    # batching, then the HUD's retry and recapture behaviour.
+    (
+        "send keystrokes in larger batches, 60 units to 200",
+        INSERTION,
+        (("_DIRECT_BATCH_UNITS = 60", "_DIRECT_BATCH_UNITS = 200"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "send keystrokes in smaller batches, 60 units to 20",
+        INSERTION,
+        (("_DIRECT_BATCH_UNITS = 60", "_DIRECT_BATCH_UNITS = 20"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "no delay between keystroke batches at all",
+        INSERTION,
+        ((
+            "_DIRECT_CHARACTER_DELAY_SECONDS = 0.001",
+            "_DIRECT_CHARACTER_DELAY_SECONDS = 0.0",
+        ),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "five attempts to insert into the target, not three",
+        INSERTION,
+        (("_TARGET_INSERT_ATTEMPTS = 3", "_TARGET_INSERT_ATTEMPTS = 5"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "wait longer between insert attempts, 0.05s to 0.2s",
+        INSERTION,
+        (("_TARGET_INSERT_RETRY_SECONDS = 0.05", "_TARGET_INSERT_RETRY_SECONDS = 0.2"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "let Word settle for less after a replacement, 0.5s to 0.2s",
+        INSERTION,
+        ((
+            "_OFFICE_REPLACEMENT_SETTLE_SECONDS = 0.5",
+            "_OFFICE_REPLACEMENT_SETTLE_SECONDS = 0.2",
+        ),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "let Word settle for longer after a replacement, 0.5s to 1.0s",
+        INSERTION,
+        ((
+            "_OFFICE_REPLACEMENT_SETTLE_SECONDS = 0.5",
+            "_OFFICE_REPLACEMENT_SETTLE_SECONDS = 1.0",
+        ),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "five attempts to restore the selection, not three",
+        INSERTION,
+        (("_SELECTION_RESTORE_ATTEMPTS = 3", "_SELECTION_RESTORE_ATTEMPTS = 5"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "allow a wider unreported list label, 4 characters to 8",
+        INSERTION,
+        ((
+            "_MAX_UNREPORTED_LABEL_CHARACTERS = 4",
+            "_MAX_UNREPORTED_LABEL_CHARACTERS = 8",
+        ),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "four apply attempts before asking for a fresh capture, not two",
+        HUD,
+        (("_APPLY_RETRY_BEFORE_RECAPTURE = 2", "_APPLY_RETRY_BEFORE_RECAPTURE = 4"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "suppress recapture for half as long, 3.0s to 1.5s",
+        HUD,
+        (("_RECAPTURE_SUPPRESS_SECONDS = 3.0", "_RECAPTURE_SUPPRESS_SECONDS = 1.5"),),
+        "hard",
+        "reliability",
+    ),
+    (
+        "suppress recapture for twice as long, 3.0s to 6.0s",
+        HUD,
+        (("_RECAPTURE_SUPPRESS_SECONDS = 3.0", "_RECAPTURE_SUPPRESS_SECONDS = 6.0"),),
+        "hard",
+        "reliability",
+    ),
+)
 
 def apply(entry, root: Path) -> bool:
     """Make this entry's change. True when something actually changed.

@@ -75,6 +75,7 @@ def main(argv: list[str] | None = None) -> int:
         rate, reason = reliability.measure(
             ROOT / f"reliability-run-{arguments.slice}.log",
             require_idle=arguments.require_idle,
+            corpus=reliability.corpus_for(arguments.slice),
         )
 
     if rate is None:
