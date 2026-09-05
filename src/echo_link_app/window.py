@@ -195,6 +195,50 @@ def _unique_document_text(document: str, expected: str) -> str | None:
     return matches[0] if len(matches) == 1 else None
 
 
+
+def _is_the_same_capture(current, incoming) -> bool:
+    """Is this focus signal about the same work as the review already in hand?
+
+    THE SAME DOCUMENT WITH A MOVED CARET IS NOT A NEW CAPTURE. This used to be
+    `current == record`, comparing whole SelectionRecords - which include the
+    caret anchor. So an identical document reported again with the caret one
+    character further along compared unequal, the guard did not fire, and the
+    prepared review was thrown away and rebuilt from nothing.
+
+    Measured across 98 automated runs of two documents on 2026-09-04 and 05.
+    Twenty-two runs accepted NOTHING at all, and the separation is total:
+
+        succeeded (76): the next focus signal arrived 22.6s to 57.5s later
+        failed    (22): it arrived 3.3s to 4.7s later
+
+    In all 22 failures the replacing capture was the same size as the one it
+    replaced, and in all 22 the caret anchor had moved - x from 801 to 915 or
+    993, y identical. Nothing had been typed. The review was discarded because
+    the caret had shifted inside an unchanged document.
+
+    That race is why the same corpus and the same product code scored 66.7 on
+    one baseline run and 33.3 on the next, and why 36 experiments in a row
+    discarded at 33.3 against a bar of 66.7 - the metric was measuring a coin
+    flip, and every one of those discards was noise.
+
+    Compared here: the window, the scope, the text, and the digest when both
+    carry one. Not the anchor, and not the selection offsets, because those
+    describe where the writer is rather than what there is to correct.
+    """
+    if current is None or incoming is None:
+        return False
+    if current.text != incoming.text or current.scope != incoming.scope:
+        return False
+    if (
+        current.window.handle != incoming.window.handle
+        or current.window.process_id != incoming.window.process_id
+    ):
+        return False
+    if current.document_digest and incoming.document_digest:
+        return current.document_digest == incoming.document_digest
+    return True
+
+
 def _normalized_document_text(value: str) -> str:
     """One spelling of a document's text, for comparing two captures of it.
 
@@ -1732,7 +1776,8 @@ class EchoLinkWindow(QMainWindow):
         # UI Automation can report the same focused range on every poll. Do
         # not rebuild the badge for that duplicate signal: replacing its page
         # between mouse-down and mouse-up cancels a real click on Windows.
-        if self._badge_clear_timer is not None and self.selected_text_record == record:
+        unchanged = _is_the_same_capture(self.selected_text_record, record)
+        if self._badge_clear_timer is not None and unchanged:
             # The capture that was about to be cleared came straight back
             # (Word focus flap); keep the existing badge untouched.
             self._badge_clear_timer.stop()
@@ -1741,8 +1786,13 @@ class EchoLinkWindow(QMainWindow):
             palette_visible
             and self.rewrite_palette.automatic
             and self.rewrite_palette.view == "badge"
-            and self.selected_text_record == record
+            and unchanged
         ):
+            # The caret may have moved even though nothing was typed, so the
+            # record is refreshed WITHOUT rebuilding the review. The badge then
+            # still follows the caret, which is the only thing the anchor is
+            # for.
+            self.selected_text_record = record
             return
         self.selected_text_record = record
         self.writing_source.setPlainText(record.text)
