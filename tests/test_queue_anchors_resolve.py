@@ -67,18 +67,66 @@ def test_quality_experiments_only_target_slices_with_headroom():
             )
 
 
-def test_no_runnable_entry_repeats_a_description_already_measured():
-    """Curtis, 2026-09-03: we should not repeat experiments."""
-    done = set()
-    ledger = ROOT / "results.tsv"
-    if ledger.is_file():
-        for line in ledger.read_text(encoding="utf-8").splitlines():
-            parts = line.split("\t")
-            if len(parts) == 5:
-                done.add(parts[4].split(":", 1)[-1].strip())
-    repeats = [
-        f"{index}: {entry[0]}"
-        for index, entry in enumerate(autoresearch_queue.QUEUE)
-        if index >= FIRST_RUNNABLE and entry[0] in done
-    ]
-    assert not repeats, "already measured:\n" + "\n".join(repeats)
+def test_a_measured_entry_is_recognised_and_an_unmeasured_one_is_not(
+    tmp_path, monkeypatch
+):
+    """Curtis, 2026-09-03: we should not repeat experiments.
+
+    This test used to assert that no queued entry appeared in results.tsv, which
+    was true only until the queue ran. Eleven entries were measured on
+    2026-09-04 and it then failed for exactly the right reason: restarting at
+    the same index would have re-measured all eleven, an hour spent writing rows
+    that already existed.
+
+    A queue gets restarted often - a night is interrupted, a defect is fixed,
+    the machine is wanted back - so the queue itself now skips what the ledger
+    holds, and the property worth asserting is that skipping rather than the
+    absence of history.
+    """
+    import autoresearch_cycle
+
+    tag = autoresearch_cycle.slice_tag("hard", "reliability")
+    ledger = tmp_path / "results.tsv"
+    ledger.write_text(
+        "commit\tval\tmem\tstatus\tdescription\n"
+        f"abc1234\t0.0\t0.0\tdiscard\t{tag} an idea that was tried\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(autoresearch_cycle, "RESULTS", ledger)
+
+    assert autoresearch_queue.already_measured(
+        "an idea that was tried", "hard", "reliability"
+    )
+    assert not autoresearch_queue.already_measured(
+        "an idea nobody has tried", "hard", "reliability"
+    )
+    # The same idea on a different slice is a different experiment.
+    assert not autoresearch_queue.already_measured(
+        "an idea that was tried", "8", "essays"
+    )
+
+
+def test_a_voided_row_does_not_count_as_measured(tmp_path, monkeypatch):
+    """Voiding withdraws a number precisely because it was not a measurement,
+    so the experiment still needs running."""
+    import autoresearch_cycle
+
+    tag = autoresearch_cycle.slice_tag("hard", "reliability")
+    ledger = tmp_path / "results.tsv"
+    ledger.write_text(
+        "commit\tval\tmem\tstatus\tdescription\n"
+        f"abc1234\t0.0\t0.0\tvoid\t{tag} an idea whose run was thrown away\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(autoresearch_cycle, "RESULTS", ledger)
+    assert not autoresearch_queue.already_measured(
+        "an idea whose run was thrown away", "hard", "reliability"
+    )
+
+
+def test_the_queue_skips_rather_than_repeats():
+    """The live ledger: eleven entries are measured, and the queue must not
+    offer them again."""
+    source = (ROOT / "tools" / "autoresearch_queue.py").read_text(encoding="utf-8")
+    assert "already_measured(description, slice_name, kind)" in source
+    assert "already measured" in source

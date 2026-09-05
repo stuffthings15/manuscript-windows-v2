@@ -962,6 +962,32 @@ def apply(entry, root: Path) -> bool:
     return changed
 
 
+def already_measured(description: str, slice_name: str, kind: str) -> bool:
+    """Is there already a row in the ledger for this exact experiment?
+
+    Curtis, 2026-09-03: we should not repeat experiments. Without this, every
+    restart of the queue re-runs everything it already did - and the queue gets
+    restarted often, because a night gets interrupted, a defect gets fixed, or
+    the machine gets used. Eleven entries had been measured when this was added,
+    and starting again at the same index would have spent an hour re-measuring
+    them.
+
+    Matched on the slice tag AND the description, so the same idea measured on a
+    different slice is a different experiment and still runs.
+    """
+    tag = autoresearch_cycle.slice_tag(slice_name, kind)
+    try:
+        lines = autoresearch_cycle.RESULTS.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    wanted = f"{tag} {description}"
+    for line in lines[1:]:
+        parts = line.split("	")
+        if len(parts) == 5 and parts[3] != "void" and parts[4].startswith(wanted):
+            return True
+    return False
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--start", type=int, default=0, help="skip earlier entries")
@@ -990,6 +1016,13 @@ def main(argv: list[str] | None = None) -> int:
         kind = entry[4] if len(entry) > 4 else "essays"
         if kind == "essays":
             slice_name = arguments.essays or slice_name
+        if already_measured(description, slice_name, kind):
+            # A row exists, so this question has an answer. Re-running it would
+            # spend five minutes to write the same row twice.
+            print(  # noqa: T201
+                f"--- {index} already measured: {description}", flush=True
+            )
+            continue
         print(f"=== {index} ({kind} {slice_name}): {description}", flush=True)  # noqa: T201
         # THE PANEL, UPDATED PER ENTRY.
         #

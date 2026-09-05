@@ -337,14 +337,23 @@ def test_word_range_adapter_preserves_embedded_object_anchor(monkeypatch):
         hashlib.sha256(source.encode("utf-8")).hexdigest(),
     )
 
-    assert insertion._replace_word_document_range(
+    # A whole-document capture is REFRESHED after an edit now, so this
+    # returns the updated record rather than a bare True. It used to keep
+    # its original pre-edit text for the whole review, and every applied
+    # correction pushed the live document further from it until the
+    # list-label reconstruction gave up and refused everything after it.
+    # Measured on 03_multi_level_outline, 2026-09-04: three sections
+    # applied, then paragraphs 4 to 7 came back unchanged.
+    updated = insertion._replace_word_document_range(
         record,
         expected_document_text=captured,
         start=start,
         end=len(source),
         expected_text="Second bad sentence.",
         new_text="Second corrected sentence.",
-    ) is True
+    )
+    assert isinstance(updated, insertion.SelectionRecord)
+    assert "Second corrected sentence." in updated.text
     assert state["assigned"] == [
         (
             raw_start,
@@ -1456,7 +1465,16 @@ def test_word_range_replacement_allows_a_non_breaking_space(monkeypatch):
     state = _word_range_fake(
         monkeypatch, "First bad sentence.\rSecond bad\xa0sentence.\r"
     )
-    assert _replace_second_sentence(state) is True
+    # A whole-document capture is REFRESHED after an edit now, so this
+    # returns the updated record rather than a bare True. It used to keep
+    # its original pre-edit text for the whole review, and every applied
+    # correction pushed the live document further from it until the
+    # list-label reconstruction gave up and refused everything after it.
+    # Measured on 03_multi_level_outline, 2026-09-04: three sections
+    # applied, then paragraphs 4 to 7 came back unchanged.
+    updated = _replace_second_sentence(state)
+    assert isinstance(updated, SelectionRecord)
+    assert "Second corrected sentence." in updated.text
     assert state["assigned"], "the corrected sentence was never written back"
     assert "Second corrected sentence." in state["text"]
 

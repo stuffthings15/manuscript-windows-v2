@@ -869,39 +869,70 @@ def _replace_word_document_range(
             content_start + raw_start,
             content_start + raw_end,
         ).Text = replacement
-        if not record_covers_entire_document(record):
-            updated_text = (
-                captured_text[:start]
-                + _canonical_word_text(new_text)
-                + captured_text[end:]
-            )
-            # Recomputed, not reused: applying an edit can renumber a list,
-            # and a digest taken with the old labels would refuse the next
-            # correction for the very reason this function exists.
-            #
-            # Aligned against `updated_text`, the capture as it is AFTER this
-            # edit, never against `captured_text`. Using the pre-edit capture
-            # walked the new document while matching the old text, so the
-            # labels were rejected and the digest written here did not describe
-            # the document. Measured 2026-09-01: sections 1 and 2 applied, then
-            # the third was refused with the live text 102 characters longer
-            # than a record whose two edits had added six.
-            updated_content = document.Content
-            updated_document_text, _updated_spans = _word_visible_text_and_spans(
-                updated_content.Text,
-                _word_automatic_list_labels(
-                    document, updated_content, updated_text
-                ),
-            )
-            return replace(
-                record,
-                text=updated_text,
-                document_digest=hashlib.sha256(
-                    updated_document_text.encode("utf-8")
-                ).hexdigest(),
-                selection_end=range_start + len(updated_text),
-            )
-        return True
+        # THE RECORD IS REFRESHED FOR EVERY SCOPE, INCLUDING A WHOLE DOCUMENT.
+        #
+        # This used to read `if not record_covers_entire_document(record)`, and
+        # returned a bare True otherwise - so a document-scope capture, which is
+        # what the HUD actually takes, kept its ORIGINAL pre-edit text for the
+        # whole review. Every applied correction pushed the live document
+        # further from that stale capture.
+        #
+        # It survives a few edits because the label lookup re-synchronises at
+        # each label and tolerates a drift of len(label) + 2. Then it does not.
+        # Measured on 03_multi_level_outline, 2026-09-04:
+        #
+        #   Word automatic list labels not reconstructed: label 2 is not in the
+        #   captured text near offset 111
+        #   ... refused changed document text (range_chars=288 captured=300)
+        #
+        # 288 against 300 is exactly the twelve characters of four labels: the
+        # reconstruction had given up entirely and returned nothing. Three
+        # sections applied, then paragraphs 4, 5, 6 and 7 came back unchanged
+        # and the run stalled at 5 of 7. Every reliability experiment measured
+        # 0.0 against a 0.0 baseline because of this, so eleven experiments
+        # tested timing constants against a document that could not finish for
+        # a reason no constant touches.
+        #
+        # The comment below records this being found and fixed for SELECTIONS on
+        # 2026-09-01. The document branch was left behind, which is the more
+        # common one.
+        updated_text = (
+            captured_text[:start]
+            + _canonical_word_text(new_text)
+            + captured_text[end:]
+        )
+        # Recomputed, not reused: applying an edit can renumber a list, and a
+        # digest taken with the old labels would refuse the next correction for
+        # the very reason this function exists.
+        #
+        # Aligned against `updated_text`, the capture as it is AFTER this edit,
+        # never against `captured_text`. Using the pre-edit capture walked the
+        # new document while matching the old text, so the labels were rejected
+        # and the digest written here did not describe the document. Measured
+        # 2026-09-01: sections 1 and 2 applied, then the third was refused with
+        # the live text 102 characters longer than a record whose two edits had
+        # added six.
+        updated_content = document.Content
+        updated_document_text, _updated_spans = _word_visible_text_and_spans(
+            updated_content.Text,
+            _word_automatic_list_labels(document, updated_content, updated_text),
+        )
+        # A whole-document capture may carry no offsets at all, and the record
+        # refuses to hold one without the other - "Selection offsets must both
+        # be present or both be absent". Moving the end on its own is exactly
+        # the half-set state that invariant exists to forbid, so the offsets are
+        # only touched when there were offsets to begin with.
+        moved: dict[str, object] = {}
+        if record.selection_start is not None and record.selection_end is not None:
+            moved["selection_end"] = range_start + len(updated_text)
+        return replace(
+            record,
+            text=updated_text,
+            document_digest=hashlib.sha256(
+                updated_document_text.encode("utf-8")
+            ).hexdigest(),
+            **moved,
+        )
     except Exception:
         logger.warning("Word COM range replacement failed", exc_info=True)
         return False
@@ -1277,6 +1308,22 @@ class WindowsTextInserter:
             new_text=new_text,
         )
         if isinstance(result, SelectionRecord):
+            # A whole-document replacement used to return True and fall through
+            # to the bookkeeping below, which is what `undo_last` reads. It now
+            # returns a refreshed record like every other scope, so without this
+            # the app's undo would quietly stop working for Word documents -
+            # a user-visible loss smuggled in behind a correctness fix.
+            #
+            # Only for the scope that had it before. Selections have never been
+            # tracked here and this is not the change to start.
+            if record_covers_entire_document(record):
+                with self._lock:
+                    self._last_record = InsertionRecord(
+                        new_text,
+                        record.window,
+                        last_input_tick(),
+                        time.monotonic(),
+                    )
             return result
         if result is not True:
             return None
