@@ -198,7 +198,14 @@ def record(commit: str, score: float | None, memory_gb: float, status: str,
         )
 
 
-def void_row(commit: str, name: str, kind: str, score: float, reason: str) -> int:
+def void_row(
+    commit: str,
+    name: str,
+    kind: str,
+    score: float,
+    reason: str,
+    status: str = "keep",
+) -> int:
     """Retire a kept row that should never have set a bar. Returns rows changed.
 
     `current_baseline` takes the MAX of kept scores on a slice, deliberately: the
@@ -230,6 +237,15 @@ def void_row(commit: str, name: str, kind: str, score: float, reason: str) -> in
     caught that. Returning 0 rather than voiding several is the safe direction:
     a bar left too high wastes experiments, a corrected row silently retired
     loses the measurement.
+
+    `status` defaults to "keep" because that is the poisoning case and the
+    caller should have to ask for anything else. A DISCARD can need retiring
+    too, for a different reason: it was judged against a bar that turned out not
+    to be a measurement. On 2026-09-04 eleven experiments were discarded at 0.0
+    against a baseline of 0.0 that the stale-capture defect had produced, so
+    they tested nothing - and because the queue skips what the ledger holds,
+    those rows would have blocked the re-runs forever. Retiring them is what
+    lets the questions be asked again.
     """
     tag = slice_tag(name, kind)
     printed = f"{score:.6f}"
@@ -244,7 +260,7 @@ def void_row(commit: str, name: str, kind: str, score: float, reason: str) -> in
         if len(parts) >= 5
         and parts[0] == commit
         and parts[1] == printed
-        and parts[3] == "keep"
+        and parts[3] == status
         and parts[4].startswith(tag)
     ]
     if len(matches) != 1:
