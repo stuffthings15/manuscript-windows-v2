@@ -59,7 +59,49 @@ def main(argv: list[str] | None = None) -> int:
         default="baseline",
         help="what this baseline records, for the results.tsv description",
     )
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="measure the unchanged tree this many times and report the "
+        "spread. program.md asks for three runs before a metric's first "
+        "experiment, and this slice never got them.",
+    )
     arguments = parser.parse_args(argv)
+
+    # THE SPREAD IS THE POINT, and it has to be measured before the bar is set.
+    #
+    # `current_baseline` takes the MAX of kept rows - a ratchet, deliberately -
+    # so three runs recorded blind would quietly set the bar to the luckiest of
+    # them. That is not hypothetical: on 2026-09-05 an unchanged tree baselined
+    # at 66.7 and then 33.3, the bar held at 66.7, and 36 experiments in a row
+    # discarded at 33.3 against it. Every one of those discards was a coin flip
+    # recorded as a refuted idea.
+    #
+    # So each run is recorded honestly and numbered, and the spread is printed
+    # at the end for a person to act on. Choosing the bar stays a decision.
+    scores: list[float] = []
+    for attempt in range(1, max(1, arguments.repeat) + 1):
+        label = (
+            arguments.describe
+            if arguments.repeat == 1
+            else f"{arguments.describe}, spread run {attempt} of {arguments.repeat}"
+        )
+        code = _measure_once(arguments, label, scores)
+        if code:
+            return code
+    if len(scores) > 1:
+        low, high = min(scores), max(scores)
+        print(  # noqa: T201
+            f"SPREAD {high - low:.1f} points across {len(scores)} runs "
+            f"(low {low:.1f}, high {high:.1f}, "
+            f"scores {' '.join(f'{s:.1f}' for s in scores)})",
+            flush=True,
+        )
+    return 0
+
+
+def _measure_once(arguments, describe: str, scores: list[float]) -> int:
 
     commit = autoresearch_cycle._git("rev-parse", "--short", "HEAD")
     tag = autoresearch_cycle.slice_tag(arguments.slice, kind="reliability")
@@ -70,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
 
     with autoresearch_status.showing(
         phase=f"reliability {arguments.slice} baseline",
-        description=arguments.describe,
+        description=describe,
         essays=f"1-{documents}",
         experiment=commit,
         baseline="none",
@@ -92,14 +134,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"SKIPPED {reason}", flush=True)  # noqa: T201
             return 2
         autoresearch_cycle.record(
-            commit, None, 0.0, "crash", f"{tag} {arguments.describe}"
+            commit, None, 0.0, "crash", f"{tag} {describe}"
         )
         print(f"CRASH {reason}")  # noqa: T201
         return 1
 
-    autoresearch_cycle.record(
-        commit, rate, 0.0, "keep", f"{tag} {arguments.describe}"
-    )
+    autoresearch_cycle.record(commit, rate, 0.0, "keep", f"{tag} {describe}")
+    scores.append(rate)
     print(f"BASELINE {rate:.1f}")  # noqa: T201
     return 0
 
