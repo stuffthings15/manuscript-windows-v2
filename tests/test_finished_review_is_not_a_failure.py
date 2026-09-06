@@ -87,3 +87,34 @@ def test_a_genuinely_vanished_hud_still_scores_truncated():
         ),
     }
     assert release_acceptance._run_was_truncated(row) is True
+
+
+def test_final_accept_reads_completion_before_trying_to_recover_a_closed_hud(tmp_path, monkeypatch):
+    log = tmp_path / "echo-link.log"
+    log.write_text("start\n" + FINISHED + "\n", encoding="utf-8")
+    monkeypatch.setattr(run_essays_batch, "LOG", log)
+    report = {"_log_start": 1, "presses": 7}
+    assert run_essays_batch.record_review_completion(report, 7)
+    assert report["stopped_because"].startswith("the review finished after press 7")
+    assert report["completion_acknowledgement"] == "chars=263 remembered=3"
+
+
+def test_previous_document_completion_cannot_acknowledge_this_one(tmp_path, monkeypatch):
+    log = tmp_path / "echo-link.log"
+    log.write_text(FINISHED + "\nstart\n", encoding="utf-8")
+    monkeypatch.setattr(run_essays_batch, "LOG", log)
+    report = {"_log_start": 1}
+    assert not run_essays_batch.record_review_completion(report, 7)
+    assert "stopped_because" not in report
+
+
+def test_repeated_review_still_emits_completion(caplog):
+    import logging
+    from types import SimpleNamespace
+    from echo_link_app.window import EchoLinkWindow
+    stub = SimpleNamespace(selected_text_record=SimpleNamespace(text="Already reviewed."),
+                           _reviewed_texts=["Already reviewed."])
+    with caplog.at_level(logging.INFO, logger="echo_link_app.window"):
+        EchoLinkWindow._remember_reviewed_text(stub)
+    assert "Writing HUD review finished;" in caplog.text
+    assert stub._reviewed_texts == ["Already reviewed."]

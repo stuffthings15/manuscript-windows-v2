@@ -525,10 +525,10 @@ class DocumentEditorPanel(QWidget):
                 | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Save,
             )
-            if answer is QMessageBox.StandardButton.Save:
+            if answer == QMessageBox.StandardButton.Save:
                 if not self.save_document():
                     return
-            elif answer is QMessageBox.StandardButton.Discard:
+            elif answer == QMessageBox.StandardButton.Discard:
                 self._load_document(self.current_document_id)
             else:
                 return
@@ -659,7 +659,7 @@ class DocumentEditorPanel(QWidget):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
-            if answer is not QMessageBox.StandardButton.Yes:
+            if answer != QMessageBox.StandardButton.Yes:
                 return
             restored = self.workspace.restore_revision(
                 self.current_document_id,
@@ -970,9 +970,9 @@ class DocumentEditorPanel(QWidget):
             | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Save,
         )
-        if answer is QMessageBox.StandardButton.Save:
+        if answer == QMessageBox.StandardButton.Save:
             return self.save_document()
-        return answer is QMessageBox.StandardButton.Discard
+        return answer == QMessageBox.StandardButton.Discard
 
     def _set_document_controls(self, enabled: bool) -> None:
         self.export_button.setEnabled(enabled)

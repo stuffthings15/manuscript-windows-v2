@@ -176,6 +176,6 @@ class LearningManagerDialog(QDialog):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
-        if answer is QMessageBox.StandardButton.Yes:
+        if answer == QMessageBox.StandardButton.Yes:
             self.store.clear_learned_corrections()
             self._refresh()

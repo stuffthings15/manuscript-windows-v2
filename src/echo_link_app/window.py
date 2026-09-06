@@ -3377,9 +3377,12 @@ class EchoLinkWindow(QMainWindow):
         if record is None:
             return
         text = _normalized_document_text(record.text)
-        if not text or text in self._reviewed_texts:
+        if not text:
             return
-        self._reviewed_texts.append(text)
+        if text not in self._reviewed_texts:
+            self._reviewed_texts.append(text)
+        # A repeated review still completed. Suppress duplicate cache entries,
+        # never the completion acknowledgement used by the user-test harness.
         logger.info(
             "Writing HUD review finished; will not auto-offer this text again "
             "chars=%d remembered=%d",
@@ -4227,7 +4230,7 @@ class EchoLinkWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
-        if answer is QMessageBox.StandardButton.Yes:
+        if answer == QMessageBox.StandardButton.Yes:
             self.store.clear_recovery_items()
             self._refresh_recovery()
 
@@ -4455,7 +4458,7 @@ class EchoLinkWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
-        if answer is QMessageBox.StandardButton.Yes:
+        if answer == QMessageBox.StandardButton.Yes:
             stop_audio_playback()
             self.store.clear_speech_improvement_logs()
             self._refresh_speech_logs()
@@ -4475,7 +4478,7 @@ class EchoLinkWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
-        if answer is QMessageBox.StandardButton.Yes:
+        if answer == QMessageBox.StandardButton.Yes:
             self.store.clear_history()
             self._refresh_history(update_dictate=True)
 

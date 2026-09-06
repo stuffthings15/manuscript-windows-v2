@@ -163,7 +163,7 @@ def test_no_baseline_means_no_bar_for_a_lower_is_better_metric():
     assert decide(0.0, 18.0, higher_is_better=False) == "keep"
 
 
-def test_a_run_served_by_two_packs_is_a_crash_not_a_score(monkeypatch):
+def test_a_run_served_by_two_packs_is_a_crash_not_a_score(monkeypatch, tmp_path):
     """The cause of the tone spread that made every verdict this session void.
 
     The adaptive runtime silently swaps in the standby pack when the primary
@@ -201,7 +201,7 @@ def test_a_run_served_by_two_packs_is_a_crash_not_a_score(monkeypatch):
     )
     monkeypatch.setattr(cycle.subprocess, "run", lambda *a, **k: judged.append(a))
 
-    percent, reason = cycle.measure("Friendly", Path("build/unused.log"))
+    percent, reason = cycle.measure("Friendly", tmp_path / "unused.log")
 
     assert percent is None
     assert "more than one pack" in reason
@@ -284,7 +284,7 @@ def test_a_downgraded_pack_is_refused_before_the_batch_runs(monkeypatch):
     assert not any("run_essays_batch" in str(a) for a in ran)
 
 
-def test_an_unknown_pack_does_not_block_the_run(monkeypatch):
+def test_an_unknown_pack_does_not_block_the_run(monkeypatch, tmp_path):
     """A log that cannot be read must not become a permanent refusal.
 
     `_served_pack` returns "unknown" when it cannot find a plan line, which
@@ -306,7 +306,7 @@ def test_an_unknown_pack_does_not_block_the_run(monkeypatch):
     )
     monkeypatch.setattr(cycle.subprocess, "run", lambda *a, **k: None)
 
-    percent, reason = cycle.measure("Friendly", Path("build/unused.log"))
+    percent, reason = cycle.measure("Friendly", tmp_path / "unused.log")
 
     # It proceeds past the pack check; it stops later for a different reason.
     assert "prewarmed" not in reason

@@ -843,7 +843,7 @@ class SettingsDialog(QDialog):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
-        if answer is not QMessageBox.StandardButton.Yes:
+        if answer != QMessageBox.StandardButton.Yes:
             return
         self.import_model_button.setEnabled(False)
         self.remove_model_button.setEnabled(False)

@@ -1,0 +1,75 @@
+{
+  "recorded_utc": "2026-09-06T19:52:59.249013+00:00",
+  "release_ready": false,
+  "python_assertions": {
+    "passed": 2703,
+    "skipped": 2,
+    "process_exit_clean": false
+  },
+  "website": {
+    "tests_passed": 36,
+    "build": "passed",
+    "typecheck": "passed",
+    "lint": "passed",
+    "published": false
+  },
+  "word_outline_runs": [
+    {
+      "attempt": 1,
+      "accepts": 7,
+      "seconds": 87.0,
+      "explicit_completion": "the review finished after press 7; section 7/7, chars=296 remembered=1",
+      "error": null,
+      "sha256": "c70f7e976537cbc7617d684eac9c90db34bdbc013be01cd155a423af4a4a6557",
+      "hash_verified": true,
+      "paragraph_numbering_matches_source": true
+    },
+    {
+      "attempt": 2,
+      "accepts": 7,
+      "seconds": 74.1,
+      "explicit_completion": "the review finished after press 7; section 7/7, chars=296 remembered=1",
+      "error": null,
+      "sha256": "817626046135c51e3acf1c53782939dd948e8905549f3197c9e90082096ae852",
+      "hash_verified": true,
+      "paragraph_numbering_matches_source": true
+    },
+    {
+      "attempt": 3,
+      "accepts": 7,
+      "seconds": 74.2,
+      "explicit_completion": "the review finished after press 7; section 7/7, chars=296 remembered=1",
+      "error": null,
+      "sha256": "eec1b4890e73e972223934d2a5e7e45aff2982b475962c63559934c18c025c79",
+      "hash_verified": true,
+      "paragraph_numbering_matches_source": true
+    }
+  ],
+  "installed_release_tested": false,
+  "logs": [
+    {
+      "name": "manuscript-final-suite.log",
+      "sha256": "92c8db561a58066c103f079dc70e1fa97bba13dd10b9783955ee3610303521fe"
+    },
+    {
+      "name": "manuscript-shutdown-probe2.log",
+      "sha256": "87364876b965074aa918bd82c4b846c62ba3c492e7d5fb238aaf97e0113ed6b4"
+    },
+    {
+      "name": "manuscript-website-final.log",
+      "sha256": "3cf5299ff20b9ff851475471672e65727573f8186b9146d55b447a000030eb73"
+    },
+    {
+      "name": "manuscript-website-types.log",
+      "sha256": "302304dae6dfa71f31211837c732c0510177504fe6b5063786b269c5e1fef2ec"
+    },
+    {
+      "name": "manuscript-website-lint.log",
+      "sha256": "8bb01bb99dfecfc4b833007b43ca24bbf6afffc1fab990b9aef771a357dc4c90"
+    },
+    {
+      "name": "manuscript-production-preflight.log",
+      "sha256": "a52940bbebe65df0a404e3f9f4cde4f4fd1784da32fa45b9545c6348cfdd3e9b"
+    }
+  ]
+}

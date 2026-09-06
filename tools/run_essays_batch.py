@@ -15,6 +15,7 @@ Writes build/corrected/<name>.review.md per essay and a summary table.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,7 @@ import shutil
 import sys
 import time
 import traceback
+from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
 for entry in (ROOT / "src", ROOT / "tools"):
@@ -457,14 +459,8 @@ def release_document(path) -> None:
 
 
 def close_word() -> None:
-    import subprocess
-
-    subprocess.run(
-        ["taskkill", "/IM", "WINWORD.EXE", "/F"],
-        capture_output=True,
-        check=False,
-    )
-    time.sleep(2.0)
+    """Legacy global termination is forbidden: unrelated work may be unsaved."""
+    raise RuntimeError("Refusing to terminate Word; release only the disposable test document")
 
 
 def restart_app() -> bool:
@@ -621,6 +617,19 @@ def review_finished_since(since: int = 0) -> str:
         if found:
             return found.group(1).strip()
     return ""
+
+
+def record_review_completion(report: dict, presses: int) -> bool:
+    """Recognize the app acknowledgement before treating its closed HUD as lost."""
+    finished = review_finished_since(report.get("_log_start", 0))
+    if not finished or presses <= 0:
+        return False
+    report["stopped_because"] = (
+        f"the review finished after press {presses}; "
+        f"section {presses}/{presses}, {finished}"
+    )
+    report["completion_acknowledgement"] = finished
+    return True
 
 
 def commands_since(since: int = 0) -> dict[str, int]:
@@ -788,19 +797,7 @@ def recover_hud(stem: str, report: dict):
 
 
 def open_in_word(path: Path):
-    """Open one essay and leave exactly that essay open.
-
-    Every other document is closed first. Leaving the previous essay open is
-    what made three batch runs measure the wrong file: --as-a-writer keeps Word
-    running, essay 1's window kept the foreground, and essay 2's hotkey press
-    captured essay 1 - "review prepared sections=10 atomic=0 characters=5065"
-    on 2026-08-17, ten more corrections applied to an essay that was already
-    finished, while essay 2 came back byte-identical to its source.
-
-    The app is not at fault for that and must not be "fixed" for it: it
-    correctly reviews the document in front of the writer. The harness was
-    leaving the wrong one there.
-    """
+    """Open and activate a disposable essay without closing other documents."""
     import comtypes.client
 
     # Attach to the Word that is already running rather than starting another.
@@ -818,22 +815,7 @@ def open_in_word(path: Path):
         time.sleep(2.0)
     word.Visible = True
     target = str(path.resolve())
-    for open_document in list(word.Documents):
-        try:
-            if str(open_document.FullName) == target:
-                continue
-        except Exception:  # noqa: BLE001 - Word raises assorted COM errors
-            continue
-        try:
-            # Positional, not SaveChanges=0. The keyword form silently did
-            # nothing through the dynamic COM wrapper, which is why three
-            # documents were still open after a loop written to close them,
-            # and why the failure has to be printed rather than swallowed: a
-            # close that quietly does not happen is what leaves the wrong
-            # window in front for the next essay.
-            open_document.Close(0)
-        except Exception as exc:  # noqa: BLE001 - Word raises assorted COM errors
-            print(f"   warning: could not close a document: {exc}", flush=True)
+    # Other windows may contain unsaved user work. Activate only our copy.
     document = word.Documents.Open(target)
     try:
         # Activate explicitly rather than trusting the open to raise the
@@ -845,16 +827,6 @@ def open_in_word(path: Path):
     except Exception:  # noqa: BLE001 - Word raises assorted COM errors
         pass
     time.sleep(3.0)
-    remaining = []
-    try:
-        remaining = [str(item.Name) for item in word.Documents]
-    except Exception:  # noqa: BLE001 - Word raises assorted COM errors
-        pass
-    if len(remaining) > 1:
-        print(
-            f"   warning: {len(remaining)} documents open, expected 1: {remaining}",
-            flush=True,
-        )
     return word
 
 
@@ -1191,7 +1163,11 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
             break
         report["presses"] = press
         time.sleep(6.0)
+        if record_review_completion(report, press):
+            break
         hud = hud_window(8.0)
+        if hud is None and record_review_completion(report, press):
+            break
         if hud is None:
             hud = recover_hud(path.stem, report)
         if hud is None:
@@ -1270,13 +1246,23 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
                 )
                 break
 
-    document = word.ActiveDocument
-    try:
-        document.Save()
-    except Exception:  # noqa: BLE001 - report the text we can still read
-        pass
-    report["after"] = str(document.Content.Text or "")
+    save_review_document(word, path, report)
     return report
+
+
+def save_review_document(word, path: Path, report: dict) -> None:
+    """Save/read back only the disposable target, even after focus changes."""
+    try:
+        document = word.ActiveDocument
+        if Path(str(document.FullName)).resolve() != path.resolve():
+            report["error"] = "Word target changed before save; no document saved"
+            return
+        document.Save()
+        if not document.Saved:
+            report["error"] = "Word still reports unsaved changes after Save"
+        report["after"] = str(document.Content.Text or "")
+    except Exception as exc:  # noqa: BLE001 - preserve explicit COM save/readback failure
+        report["error"] = f"Word save/readback failed: {type(exc).__name__}: {exc}"
 
 
 def score(before_text: str, after_text: str, dictionary) -> dict:
@@ -1371,6 +1357,8 @@ def main() -> int:
             "actually works. Implies --no-restart and never kills Word."
         ),
     )
+    parser.add_argument("--output-root", type=Path, default=ROOT / "build",
+                        help="isolated directory for batch documents and evidence")
     args = parser.parse_args()
     # Killing Word and restarting the app between essays is isolation, not use.
     # It exists because the HUD carried one document's review into the next, and
@@ -1386,9 +1374,12 @@ def main() -> int:
 
     essays = _essay_files(args.corpus)
     corpus_text = [str(item.get("text", "")) for item in load_essays(args.corpus)]
-    work = ROOT / "build" / "batch"
+    work = args.output_root / "batch"
     work.mkdir(parents=True, exist_ok=True)
-    out_dir = ROOT / "build" / "corrected"
+    session_tag = uuid4().hex[:12]
+    working = args.output_root / "working"
+    working.mkdir(parents=True, exist_ok=True)
+    out_dir = args.output_root / "corrected"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     summary: list[dict] = []
@@ -1435,21 +1426,15 @@ def main() -> int:
                 stopped_for_idle = True
                 break
         source = essays[number - 1]
-        target = work / source.name
+        # Word disallows opening two files with the same basename from different
+        # folders. A unique disposable name also makes focus checks unambiguous.
+        target = working / f"{session_tag}-{source.name}"
         before_text = str(corpus_text[number - 1])
 
         outcomes: list[str] = []
         for attempt in range(1, max(1, args.repeat) + 1):
-            # Release the previous run's lock before copying. A writer never
-            # does this, so --as-a-writer leaves Word alone and relies on
-            # word_essay_session closing the document it opened and waiting out
-            # a busy Word instead of killing it.
-            if not args.as_a_writer:
-                close_word()
-            else:
-                # Word still holds the last copy of this document, and a fresh
-                # source cannot be written over a file Word has open.
-                release_document(target)
+            # Release only this disposable output, never another document or Word.
+            release_document(target)
             shutil.copy2(source, target)  # every run starts from the original
             if not args.no_restart and not restart_app():
                 # The app did not come up. Every essay after this one will
@@ -1546,6 +1531,19 @@ def main() -> int:
             row["error"] = row["error"] or tone_row_error(
                 args.tone, row["tone_selected"], row["commands"]
             )
+            # Retain each attempt before the next one replaces the working copy.
+            attempt_dir = args.output_root / "attempts" / f"{number:02d}-{attempt}-{uuid4().hex[:8]}"
+            attempt_dir.mkdir(parents=True, exist_ok=False)
+            if target.is_file():
+                # Canonical output names remain compatible with existing graders.
+                shutil.copy2(target, work / source.name)
+                saved = attempt_dir / source.name
+                shutil.copy2(target, saved)
+                row["saved_document"] = str(saved)
+                row["saved_sha256"] = hashlib.sha256(saved.read_bytes()).hexdigest()
+            else:
+                row["error"] = row["error"] or "saved document missing"
+            row["completion_acknowledgement"] = result.get("completion_acknowledgement", "")
             row["outcome"] = outcome(row)
             outcomes.append(row["outcome"])
             summary.append(row)
@@ -1597,13 +1595,11 @@ def main() -> int:
             "\n".join(lines), encoding="utf-8"
         )
 
-    (ROOT / "build" / "batch-summary.json").write_text(
+    (args.output_root / "batch-summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    # Leave the writer's Word where they left it.
-    if not args.as_a_writer:
-        close_word()
-    print(f"\nsummary: {ROOT / 'build' / 'batch-summary.json'}")
+    # Never terminate Word or close unrelated documents on completion.
+    print(f"\nsummary: {args.output_root / 'batch-summary.json'}")
     # 2 means come back later, the specification word for a tick that
     # measured nothing. The summary is still written, because the documents
     # that DID run are real, but the caller must not average them into a
