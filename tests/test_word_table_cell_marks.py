@@ -91,7 +91,20 @@ def _table_word(state):
 
     class _Range:
         def __init__(self, start, end):
-            self.start, self.end = start, end
+            # Word Range positions count CR+BEL as one position, even
+            # though Content.Text returns both characters.
+            def raw_offset(position):
+                native = 0
+                raw = 0
+                while native < position:
+                    if state["text"][raw:raw + 2] == "\r\x07":
+                        raw += 2
+                        native += 1
+                    else:
+                        native += insertion._utf16_unit_count(state["text"][raw])
+                        raw += 1
+                return raw
+            self.start, self.end = raw_offset(start), raw_offset(end)
 
         @property
         def Text(self):
@@ -184,3 +197,42 @@ def test_a_range_spanning_a_cell_boundary_is_refused(monkeypatch, caplog):
     assert result is False
     assert state["assigned"] == [], "a cell boundary was overwritten"
     assert state["text"] == TABLE_DOCUMENT
+
+
+def test_real_uia_cell_terminators_match_com_paragraph_cell_pairs():
+    from echo_link_core.windows_selection import normalize_captured_text, _text_digest
+    raw = "Title\rDay\r\x07Reading\r\x07\r\x07After table.\r"
+    uia = raw.replace("\r\x07", "\x07")
+    visible, _ = insertion._word_visible_text_and_spans(raw)
+    captured = normalize_captured_text(uia).replace("\r", "\n").rstrip("\n")
+    assert len(normalize_captured_text(uia)) == len(uia)
+    assert captured == visible
+    assert _text_digest(uia) == hashlib.sha256(visible.encode()).hexdigest()
+
+
+def test_captured_uia_table_can_correct_one_cell_without_removing_boundaries(monkeypatch):
+    from echo_link_core.windows_selection import normalize_captured_text
+    raw = "Title\rDay\r\x07their was rain\r\x07\r\x07After table.\r"
+    state = {"text": raw, "assigned": []}
+    monkeypatch.setattr(insertion, "_active_word_application", lambda: _table_word(state))
+    uia = raw.replace("\r\x07", "\x07")
+    captured = normalize_captured_text(uia).replace("\r", "\n").rstrip("\n")
+    at = captured.index("their was rain")
+    assert insertion._replace_word_document_range(
+        _record_for(captured), expected_document_text=captured, start=at,
+        end=at + len("their was rain"), expected_text="their was rain", new_text="there was rain",
+    ) is not False
+    assert state["text"].count(CELL) == raw.count(CELL)
+    assert "there was rain" in state["text"]
+
+
+def test_native_offsets_count_cell_pairs_once_and_unicode_as_utf16():
+    raw = "A\r\x07😀B"
+    assert insertion._word_native_offset(raw, raw.index("B")) == 4
+
+
+def test_a_cell_terminator_span_includes_both_protected_characters():
+    raw = "A\r\x07B"
+    visible, spans = insertion._word_visible_text_and_spans(raw)
+    assert visible == "A\nB"
+    assert raw[slice(*spans[1])] == "\r\x07"

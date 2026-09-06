@@ -1029,7 +1029,11 @@ def normalize_captured_text(text: str) -> str:
     sees, the digest that identifies the document, and the live read that
     verifies it are all the same string.
     """
-    return str(text or "").replace(_NONBREAKING_SPACE, " ")
+    # Word UIA reports a table cell/row terminator as U+0007, whereas
+    # COM reports CR plus U+0007. The COM span builder skips U+0007 and
+    # keeps CR as a newline. Map the UIA terminator one-for-one to the
+    # same newline so cell boundaries and every later offset agree.
+    return str(text or "").replace(_NONBREAKING_SPACE, " ").replace("\x07", "\n")
 
 
 def _text_digest(text: str) -> str:

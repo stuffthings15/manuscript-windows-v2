@@ -282,6 +282,7 @@ def _canonical_word_text(text: str, *, remove_final_mark: bool = False) -> str:
         # The substitution the capture already made; see
         # windows_selection.normalize_captured_text.
         .replace(_WORD_NONBREAKING_SPACE, " ")
+        .replace("\x07", "\n")
     )
     if remove_final_mark and value.endswith("\n"):
         value = value[:-1]
@@ -492,7 +493,7 @@ def _word_visible_text_and_spans(
             continue
         if character == "\r":
             raw_end = index + 1
-            if raw_end < len(raw) and raw[raw_end] == "\n":
+            if raw_end < len(raw) and raw[raw_end] in ("\n", "\x07"):
                 raw_end += 1
             visible.append("\n")
             spans.append((index, raw_end))
@@ -504,6 +505,11 @@ def _word_visible_text_and_spans(
     value = "".join(visible)
     trimmed_length = len(value.rstrip("\n"))
     return value[:trimmed_length], tuple(spans[:trimmed_length])
+
+
+def _word_native_offset(raw: str, offset: int) -> int:
+    """Word expands each one-position cell terminator to CR+BEL in Text."""
+    return _utf16_unit_count(raw[:offset].replace("\r\x07", "\r"))
 
 
 def _set_foreground_window(user32, handle: int) -> bool:
@@ -865,10 +871,17 @@ def _replace_word_document_range(
         word.Activate()
         content_start = int(getattr(content, "Start", 0) or 0)
         replacement = _canonical_word_text(new_text).replace("\n", "\r")
-        document.Range(
-            content_start + raw_start,
-            content_start + raw_end,
-        ).Text = replacement
+        raw_document = str(content.Text or "")
+        target_range = document.Range(
+            content_start + _word_native_offset(raw_document, raw_start),
+            content_start + _word_native_offset(raw_document, raw_end),
+        )
+        # Verify native endpoints before writing. A representation mismatch
+        # must refuse the edit, never change a neighbouring cell or character.
+        if str(target_range.Text or "") != raw_range:
+            logger.warning("Word COM native range text disagreed before replacement")
+            return False
+        target_range.Text = replacement
         # THE RECORD IS REFRESHED FOR EVERY SCOPE, INCLUDING A WHOLE DOCUMENT.
         #
         # This used to read `if not record_covers_entire_document(record)`, and
@@ -1175,7 +1188,8 @@ class WindowsTextInserter:
             )
         if selected == marker or not str(selected).strip():
             raise RuntimeError(_no_selection_message(window))
-        return SelectionRecord(str(selected), window, "selection")
+        text = _canonical_word_text(str(selected)) if _is_word_document(window) else str(selected)
+        return SelectionRecord(text, window, "selection")
 
     def replace_selection(self, record: SelectionRecord, new_text: str) -> InsertionRecord | None:
         if not new_text.strip():

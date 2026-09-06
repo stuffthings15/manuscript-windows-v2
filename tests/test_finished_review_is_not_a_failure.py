@@ -118,3 +118,47 @@ def test_repeated_review_still_emits_completion(caplog):
         EchoLinkWindow._remember_reviewed_text(stub)
     assert "Writing HUD review finished;" in caplog.text
     assert stub._reviewed_texts == ["Already reviewed."]
+
+
+def test_completion_and_commands_survive_application_log_rotation(tmp_path, monkeypatch):
+    import run_essays_batch as batch
+    log = tmp_path / "app.log"
+    monkeypatch.setattr(batch, "LOG", log)
+    log.write_text("old review finished; will not auto-offer this text again stale\n")
+    mark = batch.log_lines()
+    with log.open("a") as stream:
+        stream.write("Polish request command=Clear characters=12\n")
+    log.rename(tmp_path / "app.log.1")
+    log.write_text("review finished; will not auto-offer this text again chars=12\n")
+    assert batch.commands_since(mark) == {"Clear": 1}
+    assert batch.review_finished_since(mark) == "chars=12"
+
+
+def test_lost_log_cursor_is_an_invalid_measurement(tmp_path, monkeypatch):
+    import pytest
+    import run_essays_batch as batch
+    log = tmp_path / "app.log"
+    monkeypatch.setattr(batch, "LOG", log)
+    log.write_text("original\n")
+    mark = batch.log_lines()
+    log.rename(tmp_path / "outside-retention.log")
+    log.write_text("review finished; will not auto-offer this text again unrelated\n")
+    with pytest.raises(RuntimeError, match="cursor lost"):
+        batch.review_finished_since(mark)
+
+
+def test_capture_wait_does_not_accept_the_previous_document(monkeypatch):
+    import run_essays_batch as batch
+    values = iter(["old document", "old document", "unique-target - Word"])
+    monkeypatch.setattr(batch, "captured_document_title", lambda _: next(values))
+    monkeypatch.setattr(batch.time, "sleep", lambda _: None)
+    assert batch.wait_for_document_capture("unique-target", 0) == "unique-target - Word"
+
+
+def test_capture_wait_has_a_bound_and_does_not_invent_identity(monkeypatch):
+    import run_essays_batch as batch
+    clock = iter([0.0, 0.1, 0.3])
+    monkeypatch.setattr(batch.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(batch.time, "sleep", lambda _: None)
+    monkeypatch.setattr(batch, "captured_document_title", lambda _: None)
+    assert batch.wait_for_document_capture("target", 0, timeout=0.2) is None

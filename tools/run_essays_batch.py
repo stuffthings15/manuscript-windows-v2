@@ -550,11 +550,40 @@ def diagnose(reason: str, hud) -> list[str]:
     return block
 
 
-def log_lines() -> int:
-    try:
-        return len(LOG.read_text(encoding="utf-8", errors="replace").splitlines())
-    except OSError:
-        return 0
+def log_lines() -> dict:
+    """Capture a file identity and byte offset that survive log rotation."""
+    with LOG.open("rb") as stream:
+        stream.seek(0, os.SEEK_END)
+        return {"file_id": os.fstat(stream.fileno()).st_ino, "offset": stream.tell()}
+
+
+def _lines_since(since: int | dict = 0) -> list[str]:
+    # Integer offsets remain supported for existing probes and saved fixtures.
+    if isinstance(since, int):
+        try:
+            return LOG.read_text(encoding="utf-8", errors="replace").splitlines()[since:]
+        except OSError:
+            return []
+    chunks = []
+    found = False
+    # Match the application's RotatingFileHandler backupCount=3. Losing the
+    # cursor is an invalid measurement, never permission to read older events.
+    for path in [LOG.with_name(LOG.name + f".{n}") for n in (3, 2, 1)] + [LOG]:
+        try:
+            with path.open("rb") as stream:
+                stat = os.fstat(stream.fileno())
+                if not found and stat.st_ino == since["file_id"]:
+                    if stat.st_size < since["offset"]:
+                        raise RuntimeError("application log truncated during measurement")
+                    stream.seek(since["offset"])
+                    found = True
+                if found:
+                    chunks.append(stream.read())
+        except FileNotFoundError:
+            continue
+    if not found:
+        raise RuntimeError("application log cursor lost during measurement")
+    return b"".join(chunks).decode("utf-8", errors="replace").splitlines()
 
 
 def tone_row_error(
@@ -596,7 +625,7 @@ def tone_row_error(
     return None
 
 
-def review_finished_since(since: int = 0) -> str:
+def review_finished_since(since: int | dict = 0) -> str:
     """The app's own statement that the review completed, or "".
 
     The HUD closes when a review is finished, which from the harness looks
@@ -606,11 +635,8 @@ def review_finished_since(since: int = 0) -> str:
     Returns the reported character count so the stop reason carries evidence
     rather than an assertion.
     """
-    try:
-        lines = LOG.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return ""
-    for line in reversed(lines[since:]):
+    lines = _lines_since(since)
+    for line in reversed(lines):
         found = re.search(
             r"review finished; will not auto-offer this text again (.+)$", line
         )
@@ -632,19 +658,16 @@ def record_review_completion(report: dict, presses: int) -> bool:
     return True
 
 
-def commands_since(since: int = 0) -> dict[str, int]:
+def commands_since(since: int | dict = 0) -> dict[str, int]:
     """Which Polish commands the app actually ran, from its own log.
 
     The harness pressing a tone is not evidence that a tone ran. This reads
     back what the app says it did, so a tone run that silently proofread
     everything is visible as such instead of being reported as a tone result.
     """
-    try:
-        lines = LOG.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return {}
+    lines = _lines_since(since)
     counts: dict[str, int] = {}
-    for line in lines[since:]:
+    for line in lines:
         found = re.search(r"Polish request command=(\w+)", line)
         if found is not None:
             name = found.group(1)
@@ -652,16 +675,13 @@ def commands_since(since: int = 0) -> dict[str, int]:
     return counts
 
 
-def rules_fallbacks_since(since: int = 0) -> int:
+def rules_fallbacks_since(since: int | dict = 0) -> int:
     """Sections that got no AI at all, from the app's own log."""
-    try:
-        lines = LOG.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return 0
-    return sum(1 for line in lines[since:] if "fell back to rules" in line)
+    lines = _lines_since(since)
+    return sum(1 for line in lines if "fell back to rules" in line)
 
 
-def captured_document_title(since: int = 0) -> str | None:
+def captured_document_title(since: int | dict = 0) -> str | None:
     """The document the app reported capturing since `since` log lines.
 
     Read from the app's own log rather than guessed from window focus, because
@@ -675,15 +695,24 @@ def captured_document_title(since: int = 0) -> str | None:
     focus_line = re.compile(
         r"Writing HUD editable focus detected title='(?P<title>.*?)' scope="
     )
-    try:
-        lines = LOG.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return None
-    for line in reversed(lines[since:]):
+    lines = _lines_since(since)
+    for line in reversed(lines):
         found = focus_line.search(line)
         if found:
             return found.group("title")
     return None
+
+
+def wait_for_document_capture(stem: str, since: int | dict, timeout: float = 10.0) -> str | None:
+    """Await the asynchronous target capture without accepting an old review."""
+    deadline = time.monotonic() + timeout
+    captured = None
+    while time.monotonic() < deadline:
+        captured = captured_document_title(since)
+        if captured is not None and stem.casefold() in captured.casefold():
+            return captured
+        time.sleep(0.2)
+    return captured
 
 
 def _foreground_title() -> str:
@@ -868,14 +897,14 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
     _hold_focus(path.stem)
     press_hotkey()
 
-    report: dict = {"presses": 0, "stalled_at": None, "counters": []}
+    report: dict = {"presses": 0, "stalled_at": None, "counters": [], "_log_start": log_start}
     # Which document the app actually captured, from the app's own log, before
     # a single key is pressed. Three runs in a row scored an essay the app had
     # never looked at, and reported err=None while doing it, because nothing
     # here compared the two. A wrong-document run is now an error rather than
     # a quiet zero-change result.
-    captured = captured_document_title(log_start)
-    if captured is not None and path.stem.lower() not in captured.lower():
+    captured = wait_for_document_capture(path.stem, log_start)
+    if captured is None or path.stem.lower() not in captured.lower():
         report["error"] = (
             f"the review on screen was captured from {captured!r}, "
             f"not from {path.stem}"
