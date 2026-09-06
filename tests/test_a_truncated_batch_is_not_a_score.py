@@ -19,6 +19,7 @@ to run a single experiment on a slice that had just been measured.
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -118,3 +119,59 @@ def test_the_specification_records_why_the_gate_is_checked_once():
     program = (ROOT / "program.md").read_text(encoding="utf-8")
     assert "CHECK IT ONCE, BEFORE THE RUN" in program
     assert "THE HARNESS ITSELF TYPES" in program
+
+
+def test_a_harness_error_is_a_crash_not_a_zero(tmp_path, monkeypatch):
+    """program.md lists the crash shapes - dead, partial, captured from
+    'Claude', COMError - and says they "all mean no score rather than a low
+    one".
+
+    On 2026-09-06 all three documents of a slice came back outcome='error' with
+    "the review on screen was captured from None", each after 17 to 21 seconds
+    rather than the usual hundred. Nothing was measured, and the cycle scored
+    the run 0.0 and recorded it as the slice baseline. That is the third time
+    this loop turned a failed measurement into a number.
+    """
+    summary = tmp_path / "batch-summary.json"
+    summary.write_text(
+        json.dumps(
+            [
+                {"essay": "a", "outcome": "error", "error": "captured from None"},
+                {"essay": "b", "outcome": "error", "error": "captured from None"},
+                {"essay": "c", "outcome": "error", "error": "captured from None"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(reliability, "SUMMARY", summary)
+    rate, reason = reliability.completion_rate()
+    assert rate is None, "a run that measured nothing was given a score"
+    assert "could not be measured" in reason
+
+
+def test_a_genuine_incomplete_run_is_still_scored(tmp_path, monkeypatch):
+    """The property that must survive. A document that ran and did not finish
+    is a real product result and has to count against the score, or the metric
+    would only ever see perfection."""
+    summary = tmp_path / "batch-summary.json"
+    summary.write_text(
+        json.dumps(
+            [
+                {"essay": "a", "outcome": "complete", "presses": 5},
+                {"essay": "b", "outcome": "partial", "presses": 2},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(reliability, "SUMMARY", summary)
+    rate, reason = reliability.completion_rate()
+    assert rate is not None and reason == ""
+    assert 0.0 <= rate <= 100.0
+
+
+def test_the_capture_wait_is_not_shorter_than_the_hud_wait():
+    """A capture that has not arrived before the HUD deadline will not produce
+    a usable review either, so a shorter bound only invents failures."""
+    source = (ROOT / "tools" / "run_essays_batch.py").read_text(encoding="utf-8")
+    assert "_CAPTURE_WAIT_SECONDS = 40.0" in source
+    assert "timeout: float = _CAPTURE_WAIT_SECONDS" in source

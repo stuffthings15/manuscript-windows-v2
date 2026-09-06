@@ -703,7 +703,19 @@ def captured_document_title(since: int | dict = 0) -> str | None:
     return None
 
 
-def wait_for_document_capture(stem: str, since: int | dict, timeout: float = 10.0) -> str | None:
+# The capture must appear before the HUD is usable, and the line after this
+# check waits 40 seconds for the HUD and then 120 for the review. Ten seconds
+# for the capture was out of step with both, and on 2026-09-06 it failed all
+# three documents of a slice in 17 to 21 seconds each - "captured from None" -
+# which the cycle then scored as a completion rate of 0.0 and recorded as a
+# baseline. The bound is now the HUD's own, because a capture that has not
+# arrived by then will not produce a usable review either.
+_CAPTURE_WAIT_SECONDS = 40.0
+
+
+def wait_for_document_capture(
+    stem: str, since: int | dict, timeout: float = _CAPTURE_WAIT_SECONDS
+) -> str | None:
     """Await the asynchronous target capture without accepting an old review."""
     deadline = time.monotonic() + timeout
     captured = None

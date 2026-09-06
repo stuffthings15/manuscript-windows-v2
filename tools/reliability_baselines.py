@@ -34,6 +34,12 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
+import time
+
+# Long enough for the harness's own keystrokes to age past the gate.
+_SKIP_WAIT_SECONDS = 60.0
+_SKIP_RETRIES = 30
+_SKIPPED_NOBODY_HOME = 2
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "tools") not in sys.path:
@@ -87,7 +93,24 @@ def main(argv: list[str] | None = None) -> int:
             if arguments.repeat == 1
             else f"{arguments.describe}, spread run {attempt} of {arguments.repeat}"
         )
-        code = _measure_once(arguments, label, scores)
+        # A SKIP RETRIES THIS RUN, it does not abandon the sequence.
+        #
+        # THE HARNESS ITSELF TYPES, so the moment a run finishes the idle timer
+        # reads zero and the next run is refused. Returning 2 here made the
+        # caller restart from run 1, which then measured, reset the timer, and
+        # was refused again - a loop that could record run one indefinitely and
+        # never reach run two. Waiting is the whole answer, and the wait is what
+        # the gate is for.
+        for _wait in range(_SKIP_RETRIES):
+            code = _measure_once(arguments, label, scores)
+            if code != _SKIPPED_NOBODY_HOME:
+                break
+            print(  # noqa: T201
+                f"  waiting for the machine to go quiet before spread run "
+                f"{attempt}",
+                flush=True,
+            )
+            time.sleep(_SKIP_WAIT_SECONDS)
         if code:
             return code
     if len(scores) > 1:

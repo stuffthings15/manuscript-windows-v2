@@ -96,6 +96,26 @@ def completion_rate() -> tuple[float | None, str]:
         return None, f"the batch wrote no readable summary ({type(exc).__name__})"
     if not isinstance(rows, list) or not rows:
         return None, "the batch summary held no runs"
+    # A HARNESS ERROR IS A CRASH, NOT A ZERO. program.md lists the crash shapes
+    # - dead, partial, `captured from 'Claude'`, COMError - and says they "all
+    # mean no score rather than a low one".
+    #
+    # On 2026-09-06 all three documents came back outcome='error' with "the
+    # review on screen was captured from None", after 17 to 21 seconds instead
+    # of the usual hundred. Not one of them was measured, and this scored the
+    # run 0.0 and recorded it as a baseline. That is the crash-versus-zero
+    # confusion the specification exists to prevent, and it is the third time
+    # this loop has turned a failed measurement into a number.
+    broken = [
+        str(row.get("error") or row.get("outcome"))
+        for row in rows
+        if isinstance(row, dict) and row.get("outcome") == "error"
+    ]
+    if broken:
+        return None, (
+            f"{len(broken)} of {len(rows)} documents could not be measured: "
+            f"{broken[0][:110]}"
+        )
     finished = sum(
         1
         for row in rows
