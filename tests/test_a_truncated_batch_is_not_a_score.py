@@ -173,5 +173,9 @@ def test_the_capture_wait_is_not_shorter_than_the_hud_wait():
     """A capture that has not arrived before the HUD deadline will not produce
     a usable review either, so a shorter bound only invents failures."""
     source = (ROOT / "tools" / "run_essays_batch.py").read_text(encoding="utf-8")
-    assert "_CAPTURE_WAIT_SECONDS = 40.0" in source
+    # 120s, because that is what the logs measured: across 31 app restarts the
+    # first capture took a median of 0s, a 90th percentile of 65s and a maximum
+    # of 109s. 10s caught 84 percent of them and 40s caught 87, so both invented
+    # failures. The median being zero is why a generous bound is free.
+    assert "_CAPTURE_WAIT_SECONDS = 120.0" in source
     assert "timeout: float = _CAPTURE_WAIT_SECONDS" in source

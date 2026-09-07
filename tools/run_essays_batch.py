@@ -703,14 +703,23 @@ def captured_document_title(since: int | dict = 0) -> str | None:
     return None
 
 
-# The capture must appear before the HUD is usable, and the line after this
-# check waits 40 seconds for the HUD and then 120 for the review. Ten seconds
-# for the capture was out of step with both, and on 2026-09-06 it failed all
-# three documents of a slice in 17 to 21 seconds each - "captured from None" -
-# which the cycle then scored as a completion rate of 0.0 and recorded as a
-# baseline. The bound is now the HUD's own, because a capture that has not
-# arrived by then will not produce a usable review either.
-_CAPTURE_WAIT_SECONDS = 40.0
+# MEASURED, not chosen. Across 31 app restarts in the retained logs, the time
+# from the app starting to its first editable-focus capture was:
+#
+#     median 0s, 90th percentile 65s, max 109s
+#
+# and a bound of 10s would have caught 84% of them, 40s 87%, 90s 97%, 120s all
+# of them. The original 10 seconds failed all three documents of a slice on
+# 2026-09-06 in 17 to 21 seconds each - "captured from None" - which the cycle
+# scored as a completion rate of 0.0 and recorded as a baseline. Raising it to
+# the HUD's own 40 seconds was still wrong, just less so: the very next run
+# failed the same way, with the app logging the capture 70 seconds after it
+# started while the harness had already given up.
+#
+# The median is ZERO, so this costs nothing in the ordinary case. It waits only
+# when the app is genuinely slow, which is precisely when giving up invents a
+# failure that never happened.
+_CAPTURE_WAIT_SECONDS = 120.0
 
 
 def wait_for_document_capture(
