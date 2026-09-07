@@ -169,13 +169,99 @@ def test_a_genuine_incomplete_run_is_still_scored(tmp_path, monkeypatch):
     assert 0.0 <= rate <= 100.0
 
 
-def test_the_capture_wait_is_not_shorter_than_the_hud_wait():
-    """A capture that has not arrived before the HUD deadline will not produce
-    a usable review either, so a shorter bound only invents failures."""
+def test_a_stuck_app_is_given_up_on(tmp_path, monkeypatch):
+    """A dead app must be caught in the quiet window, not after the cap. The
+    point of waiting longer for a busy app is not to wait longer for a dead one.
+    """
+    import run_essays_batch as batch
+
+    log = tmp_path / "app.log"
+    log.write_text("start\n", encoding="utf-8")
+    monkeypatch.setattr(batch, "LOG", log)
+    monkeypatch.setattr(batch, "captured_document_title", lambda _since: None)
+
+    elapsed = {"t": 0.0}
+
+    def _clock():
+        elapsed["t"] += 1.0
+        return elapsed["t"]
+
+    monkeypatch.setattr(batch.time, "monotonic", _clock)
+    monkeypatch.setattr(batch.time, "sleep", lambda _: None)
+    assert batch.wait_for_document_capture("target", 0) is None
+    assert elapsed["t"] < batch._CAPTURE_CAP_SECONDS, (
+        "a silent app waited out the whole cap instead of the quiet window"
+    )
+
+
+def test_the_cap_still_bounds_an_app_that_logs_forever(tmp_path, monkeypatch):
+    """An experiment has a five minute budget. An app that chatters without ever
+    capturing must not eat a night."""
+    import run_essays_batch as batch
+
+    log = tmp_path / "app.log"
+    log.write_text("start\n", encoding="utf-8")
+    monkeypatch.setattr(batch, "LOG", log)
+
+    def _title(_since):
+        with log.open("a", encoding="utf-8") as stream:
+            stream.write("busy\n")
+        return None
+
+    monkeypatch.setattr(batch, "captured_document_title", _title)
+    elapsed = {"t": 0.0}
+
+    def _clock():
+        elapsed["t"] += 10.0
+        return elapsed["t"]
+
+    monkeypatch.setattr(batch.time, "monotonic", _clock)
+    monkeypatch.setattr(batch.time, "sleep", lambda _: None)
+    assert batch.wait_for_document_capture("target", 0) is None
+    assert elapsed["t"] <= batch._CAPTURE_CAP_SECONDS + 20
+
+
+def test_no_capture_and_wrong_capture_are_reported_differently():
+    """They were reported identically for three days, and telling them apart by
+    hand cost three diagnoses and two wrong timeout values."""
     source = (ROOT / "tools" / "run_essays_batch.py").read_text(encoding="utf-8")
-    # 120s, because that is what the logs measured: across 31 app restarts the
-    # first capture took a median of 0s, a 90th percentile of 65s and a maximum
-    # of 109s. 10s caught 84 percent of them and 40s caught 87, so both invented
-    # failures. The median being zero is why a generous bound is free.
-    assert "_CAPTURE_WAIT_SECONDS = 120.0" in source
-    assert "timeout: float = _CAPTURE_WAIT_SECONDS" in source
+    assert "the app reported no capture at all before" in source
+    assert "the review on screen was captured from" in source
+
+
+def test_a_capture_at_the_time_that_actually_failed_is_waited_for(
+    tmp_path, monkeypatch
+):
+    """148 seconds, which is when the app logged the capture that run 3 missed.
+
+    The bound was 10s, then 40s because it matched the HUD's timeout, then 120s
+    taken from a measured maximum of 109 - and the very next run captured at
+    148. The distribution drifts as Word ages, so each fixed number invented a
+    failure and the cycle recorded it as a product result.
+    """
+    import run_essays_batch as batch
+
+    log = tmp_path / "app.log"
+    log.write_text("start\n", encoding="utf-8")
+    monkeypatch.setattr(batch, "LOG", log)
+
+    elapsed = {"t": 0.0}
+
+    def _clock():
+        return elapsed["t"]
+
+    def _title(_since):
+        elapsed["t"] += 4.0
+        with log.open("a", encoding="utf-8") as stream:
+            stream.write("still working at %.0fs\n" % elapsed["t"])
+        return "target - Word" if elapsed["t"] >= 148.0 else None
+
+    monkeypatch.setattr(batch.time, "monotonic", _clock)
+    monkeypatch.setattr(batch, "captured_document_title", _title)
+    monkeypatch.setattr(batch.time, "sleep", lambda _: None)
+
+    assert batch.wait_for_document_capture("target", 0) == "target - Word"
+    assert elapsed["t"] >= 148.0
+    assert batch._CAPTURE_CAP_SECONDS > 148.0, (
+        "the cap is below the slowest capture actually observed"
+    )

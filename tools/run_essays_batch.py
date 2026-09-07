@@ -703,37 +703,70 @@ def captured_document_title(since: int | dict = 0) -> str | None:
     return None
 
 
-# MEASURED, not chosen. Across 31 app restarts in the retained logs, the time
-# from the app starting to its first editable-focus capture was:
+# THE WAIT KEYS ON PROGRESS, NOT ON A DEADLINE I PICKED.
 #
-#     median 0s, 90th percentile 65s, max 109s
+# This bound has been wrong three times: 10 seconds, then 40 because it matched
+# the HUD's timeout and sounded principled, then 120 taken from a measured
+# maximum of 109. The very next run logged its capture 148 seconds after the app
+# started. The distribution DRIFTS - the codebase already records Word degrading
+# when it is left running for hours - so any fixed number is a guess against a
+# moving target, and each wrong guess invents a failure that never happened and
+# then gets recorded as a product score.
 #
-# and a bound of 10s would have caught 84% of them, 40s 87%, 90s 97%, 120s all
-# of them. The original 10 seconds failed all three documents of a slice on
-# 2026-09-06 in 17 to 21 seconds each - "captured from None" - which the cycle
-# scored as a completion rate of 0.0 and recorded as a baseline. Raising it to
-# the HUD's own 40 seconds was still wrong, just less so: the very next run
-# failed the same way, with the app logging the capture 70 seconds after it
-# started while the harness had already given up.
+# What actually distinguishes "slow" from "stuck" is whether the app is still
+# doing anything. It writes to its own log continuously while it works, so the
+# wait continues for as long as that log is growing and gives up once it has
+# been silent. A busy app is given as long as it needs; a dead one is caught in
+# half a minute rather than two.
 #
-# The median is ZERO, so this costs nothing in the ordinary case. It waits only
-# when the app is genuinely slow, which is precisely when giving up invents a
-# failure that never happened.
-_CAPTURE_WAIT_SECONDS = 120.0
+# The absolute cap remains, because an experiment has a five minute budget and
+# an app that logs busily forever must not eat a whole night.
+_CAPTURE_QUIET_SECONDS = 30.0
+_CAPTURE_CAP_SECONDS = 300.0
+
+
+def _log_position() -> tuple:
+    """Where the app's log currently ends, for spotting that it is still alive."""
+    try:
+        stat = LOG.stat()
+        return (stat.st_ino, stat.st_size)
+    except OSError:
+        return (0, 0)
 
 
 def wait_for_document_capture(
-    stem: str, since: int | dict, timeout: float = _CAPTURE_WAIT_SECONDS
+    stem: str,
+    since: int | dict,
+    timeout: float = _CAPTURE_CAP_SECONDS,
+    quiet: float = _CAPTURE_QUIET_SECONDS,
 ) -> str | None:
-    """Await the asynchronous target capture without accepting an old review."""
-    deadline = time.monotonic() + timeout
+    """Await the asynchronous target capture without accepting an old review.
+
+    Returns the captured title, or the last non-matching one, or None if the app
+    reported no capture at all - the caller tells those apart, because "the app
+    never captured" and "the app captured the wrong document" are different
+    faults and were reported identically for three days.
+    """
+    # The clock is read once per iteration on purpose: the deadline and the
+    # quiet window are two questions about the same instant, and reading twice
+    # makes the loop untestable against a pinned clock.
+    now = time.monotonic()
+    deadline = now + timeout
+    last_change = now
+    position = _log_position()
     captured = None
-    while time.monotonic() < deadline:
+    while True:
         captured = captured_document_title(since)
         if captured is not None and stem.casefold() in captured.casefold():
             return captured
+        moved = _log_position()
+        if moved != position:
+            position = moved
+            last_change = now
+        now = time.monotonic()
+        if now >= deadline or now - last_change >= quiet:
+            return captured
         time.sleep(0.2)
-    return captured
 
 
 def _foreground_title() -> str:
@@ -926,9 +959,18 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
     # a quiet zero-change result.
     captured = wait_for_document_capture(path.stem, log_start)
     if captured is None or path.stem.lower() not in captured.lower():
+        # TWO DIFFERENT FAULTS, said differently. "captured from None" meant
+        # both "the app never captured anything" and "the app captured another
+        # document", and telling them apart by hand cost three diagnoses and
+        # two wrong timeout values.
         report["error"] = (
-            f"the review on screen was captured from {captured!r}, "
-            f"not from {path.stem}"
+            f"the app reported no capture at all before {path.stem}; "
+            f"it was still starting or it is stuck"
+            if captured is None
+            else (
+                f"the review on screen was captured from {captured!r}, "
+                f"not from {path.stem}"
+            )
         )
         report["after"] = ""
         return report
