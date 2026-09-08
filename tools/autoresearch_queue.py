@@ -739,19 +739,19 @@ QUEUE: tuple[tuple[str, str, tuple[tuple[str, str], ...], str], ...] = (
     (
         "demand a wider separation before splitting a compound",
         SPELLING,
-        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 2", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 3"),),
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 1", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 3"),),
         "8",
     ),
     (
         "demand a wider separation before splitting a compound",
         SPELLING,
-        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 2", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 3"),),
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 1", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 3"),),
         "12",
     ),
     (
         "demand a wider separation before splitting a compound",
         SPELLING,
-        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 2", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 3"),),
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 1", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 3"),),
         "17",
     ),
     (
@@ -1282,37 +1282,37 @@ QUEUE: tuple[tuple[str, str, tuple[tuple[str, str], ...], str], ...] = (
     (
         "put no separation requirement on a compound split",
         SPELLING,
-        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 2", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 0"),),
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 1", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 0"),),
         "8",
     ),
     (
         "put no separation requirement on a compound split",
         SPELLING,
-        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 2", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 0"),),
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 1", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 0"),),
         "12",
     ),
     (
         "put no separation requirement on a compound split",
         SPELLING,
-        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 2", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 0"),),
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 1", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 0"),),
         "17",
     ),
     (
         "demand a very wide separation before splitting",
         SPELLING,
-        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 2", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 4"),),
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 1", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 4"),),
         "8",
     ),
     (
         "demand a very wide separation before splitting",
         SPELLING,
-        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 2", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 4"),),
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 1", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 4"),),
         "12",
     ),
     (
         "demand a very wide separation before splitting",
         SPELLING,
-        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 2", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 4"),),
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 1", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 4"),),
         "17",
     ),
     (
@@ -1705,6 +1705,49 @@ def apply(entry, root: Path) -> bool:
     return changed
 
 
+def stale_anchors(indices, root: Path) -> list[tuple[int, str, str]]:
+    """Every pending entry whose anchor matches neither form in the tree.
+
+    Reported ALL AT ONCE and before the run starts, because finding them one at
+    a time is what this actually costs. A kept experiment rewrites the file that
+    later entries are anchored to, so drift is a normal consequence of the queue
+    working, not a mistake in it.
+
+    Twice now that has stopped a run. `apply` records the first: entry 1 raised
+    the tie-break ratio and was kept, so a later entry could no longer find
+    `= 50`. The second was 2026-09-08 - entry 64 was kept at index 64 of 212,
+    moving _COMPOUND_MINIMUM_EDIT_SEPARATION from 2 to 1, and NINE later entries
+    were left anchored to `= 2`. Found one at a time they are nine halts and
+    nine restarts, each after the queue has run for however long it takes to
+    reach the next one. Found together they are one edit.
+
+    This cannot see drift a keep will cause LATER in the same run - only the
+    tree as it stands. That is the point at which the accumulated drift from
+    every previous run is visible, and it is the case that has cost the time.
+    """
+    found: list[tuple[int, str, str]] = []
+    for index in indices:
+        entry = QUEUE[index]
+        description, relative, edits = entry[0], entry[1], entry[2]
+        slice_name = entry[3]
+        kind = entry[4] if len(entry) > 4 else "essays"
+        if already_measured(description, slice_name, kind):
+            # No anchor is needed for an entry that will be skipped anyway.
+            continue
+        try:
+            text = (root / relative).read_text(encoding="utf-8")
+        except OSError as reason:
+            found.append((index, description, f"cannot read {relative}: {reason}"))
+            continue
+        for before, after in edits:
+            if before not in text and after not in text:
+                found.append(
+                    (index, description, f"{relative}: {before!r}")
+                )
+                break
+    return found
+
+
 def already_measured(description: str, slice_name: str, kind: str) -> bool:
     """Is there already a row in the ledger for this exact experiment?
 
@@ -1743,6 +1786,22 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
 
     pending = [i for i in range(len(QUEUE)) if i >= arguments.start]
+    # EVERY bad anchor, before the first experiment rather than during the
+    # fifth hour. See stale_anchors: drift is what a keep does to the entries
+    # behind it, and finding it one halt at a time has now cost two runs.
+    stale = stale_anchors(pending, ROOT)
+    if stale:
+        print(  # noqa: T201
+            f"{len(stale)} queue entries are anchored to text that is no "
+            f"longer in the tree, most likely because an earlier experiment "
+            f"was kept. Re-point them at what the file says now; each one's "
+            f"target value still means what its description says.",
+            flush=True,
+        )
+        for index, description, where in stale:
+            print(f"  STALE {index}: {description}", flush=True)  # noqa: T201
+            print(f"         {where}", flush=True)  # noqa: T201
+        return 1
     total = len(pending)
     # Where the ledger stood when this run began, so the panel counts THIS
     # night's results rather than every experiment ever recorded.
