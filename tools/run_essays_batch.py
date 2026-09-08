@@ -18,6 +18,7 @@ import argparse
 import hashlib
 import json
 import os
+
 from pathlib import Path
 import re
 import shutil
@@ -31,6 +32,7 @@ for entry in (ROOT / "src", ROOT / "tools"):
     if str(entry) not in sys.path:
         sys.path.insert(0, str(entry))
 
+from application_log_cursor import capture_cursor, lines_since  # noqa: E402
 import harness_state  # noqa: E402
 from animal_essay_corpus_probe import CORPUS, _essay_files, load_essays  # noqa: E402
 from repro_accept_advance import (  # noqa: E402
@@ -551,39 +553,12 @@ def diagnose(reason: str, hud) -> list[str]:
 
 
 def log_lines() -> dict:
-    """Capture a file identity and byte offset that survive log rotation."""
-    with LOG.open("rb") as stream:
-        stream.seek(0, os.SEEK_END)
-        return {"file_id": os.fstat(stream.fileno()).st_ino, "offset": stream.tell()}
+    return capture_cursor(LOG)
 
 
 def _lines_since(since: int | dict = 0) -> list[str]:
-    # Integer offsets remain supported for existing probes and saved fixtures.
-    if isinstance(since, int):
-        try:
-            return LOG.read_text(encoding="utf-8", errors="replace").splitlines()[since:]
-        except OSError:
-            return []
-    chunks = []
-    found = False
-    # Match the application's RotatingFileHandler backupCount=3. Losing the
-    # cursor is an invalid measurement, never permission to read older events.
-    for path in [LOG.with_name(LOG.name + f".{n}") for n in (3, 2, 1)] + [LOG]:
-        try:
-            with path.open("rb") as stream:
-                stat = os.fstat(stream.fileno())
-                if not found and stat.st_ino == since["file_id"]:
-                    if stat.st_size < since["offset"]:
-                        raise RuntimeError("application log truncated during measurement")
-                    stream.seek(since["offset"])
-                    found = True
-                if found:
-                    chunks.append(stream.read())
-        except FileNotFoundError:
-            continue
-    if not found:
-        raise RuntimeError("application log cursor lost during measurement")
-    return b"".join(chunks).decode("utf-8", errors="replace").splitlines()
+    return lines_since(LOG, since)
+
 
 
 def tone_row_error(

@@ -39,6 +39,12 @@ BATCH_PATH_MODULES = (
     "repro_accept_advance.py",
     "repro_zero_of_zero.py",
     "word_essay_session.py",
+    # Added 2026-09-07 when the rotation-aware log cursor moved out of the batch
+    # into its own module, and this test caught the omission on the same run.
+    # It opens no windows today, which is exactly the state this list exists to
+    # keep true: the rule is about every module the batch imports, not about the
+    # ones that happen to search a control tree right now.
+    "application_log_cursor.py",
 )
 
 # Matched against the PARSED TREE, not the text.

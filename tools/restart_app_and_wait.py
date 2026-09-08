@@ -12,19 +12,15 @@ from __future__ import annotations
 
 import subprocess
 import time
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from tools.application_log_cursor import capture_cursor, lines_since  # noqa: E402
+
 LOG_PATH = Path.home() / "AppData/Local/ManuscriptWindowsV2/echo-link.log"
 
-
-def log_length() -> int:
-    try:
-        return len(
-            LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
-        )
-    except OSError:
-        return 0
 
 
 def stop_the_running_app() -> int:
@@ -80,7 +76,9 @@ def stop_the_running_app() -> int:
 
 
 def main() -> int:
-    start = log_length()
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LOG_PATH.touch(exist_ok=True)
+    start = capture_cursor(LOG_PATH)
     stop_the_running_app()
     time.sleep(2.0)
     subprocess.Popen(
@@ -95,11 +93,10 @@ def main() -> int:
     deadline = time.monotonic() + 300
     while time.monotonic() < deadline:
         try:
-            lines = LOG_PATH.read_text(
-                encoding="utf-8", errors="replace"
-            ).splitlines()[start:]
-        except OSError:
-            lines = []
+            lines = lines_since(LOG_PATH, start)
+        except (OSError, RuntimeError) as exc:
+            print(f"startup evidence unavailable: {exc}")
+            return 6
         for line in lines:
             if "Adaptive Polish model prewarmed" in line:
                 loaded = "loaded=True" in line

@@ -158,9 +158,9 @@ class WindowsSelectionReader:
                             try:
                                 whole = getattr(pattern, "DocumentRange", None)
                                 if whole is not None:
-                                    whole_text = whole.GetText(
+                                    whole_text = normalize_captured_text(whole.GetText(
                                         self.max_characters + 1
-                                    )
+                                    ))
                                     if (
                                         isinstance(whole_text, str)
                                         and whole_text.strip()

@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, replace
+from difflib import SequenceMatcher
 from ctypes import wintypes
 from typing import Callable
 
@@ -512,6 +513,61 @@ def _word_native_offset(raw: str, offset: int) -> int:
     return _utf16_unit_count(raw[:offset].replace("\r\x07", "\r"))
 
 
+def _word_field_safe_edits(document, content, raw, start, end, replacement):
+    """Resolve edits around field results without overwriting live field codes.
+
+    Word omits field codes from Content.Text but counts them in Range positions.
+    Each field result stays protected; only changed text outside it is writable.
+    Return prevalidated edits in reverse order, or None on any disagreement.
+    """
+    origin = int(getattr(content, "Start", 0) or 0)
+    fields = list(getattr(document, "Fields", ()))
+    if not fields:
+        target = document.Range(
+            origin + _word_native_offset(raw, start),
+            origin + _word_native_offset(raw, end),
+        )
+        return [(target, replacement)] if str(target.Text or "") == raw[start:end] else None
+    events = []
+    protected = []
+    previous_end = origin
+    for field in sorted(fields, key=lambda item: int(item.Code.Start)):
+        code_start = int(field.Code.Start) - 1
+        result_start, result_end = int(field.Result.Start), int(field.Result.End)
+        if code_start < previous_end or not code_start < result_start <= result_end:
+            return None
+        prefix = str(document.Range(origin, code_start).Text or "")
+        result = str(field.Result.Text or "")
+        if not raw.startswith(prefix) or raw[len(prefix):len(prefix) + len(result)] != result:
+            return None
+        left, right = len(prefix), len(prefix) + len(result)
+        events.extend(((left, result_start - code_start), (right, 1)))
+        protected.append((left, right))
+        previous_end = result_end + 1
+
+    def native(offset, opening):
+        return origin + _word_native_offset(raw, offset) + sum(
+            size for position, size in events
+            if position < offset or (opening and position == offset)
+        )
+
+    edits = []
+    for tag, a, b, c, d in SequenceMatcher(None, raw[start:end], replacement, autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        left, right = start + a, start + b
+        if any(
+            (left < hi and right > lo) or (left == right and lo < left < hi)
+            for lo, hi in protected
+        ):
+            return None
+        target = document.Range(native(left, True), native(right, left == right))
+        if str(target.Text or "") != raw[left:right]:
+            return None
+        edits.append((target, replacement[c:d]))
+    return list(reversed(edits))
+
+
 def _set_foreground_window(user32, handle: int) -> bool:
     """Give a window the foreground, even when Manuscript is in the background.
 
@@ -728,7 +784,14 @@ def _replace_word_document_range(
             or end > len(captured_text)
             or captured_text[start:end] != expected_text
         ):
-            logger.warning("Word COM range replacement refused a stale review range")
+            logger.warning(
+                "Word COM range replacement refused a stale review range "
+                "start=%r end=%r document_chars=%d original_chars=%d "
+                "slice_chars=%d matching_offset=%d",
+                start, end, len(captured_text), len(expected_text),
+                len(captured_text[start:end]) if isinstance(start, int) and isinstance(end, int) else -1,
+                captured_text.find(expected_text),
+            )
             return False
         absolute_start = range_start + start
         absolute_end = range_start + end
@@ -869,19 +932,16 @@ def _replace_word_document_range(
             return False
         document.Activate()
         word.Activate()
-        content_start = int(getattr(content, "Start", 0) or 0)
         replacement = _canonical_word_text(new_text).replace("\n", "\r")
         raw_document = str(content.Text or "")
-        target_range = document.Range(
-            content_start + _word_native_offset(raw_document, raw_start),
-            content_start + _word_native_offset(raw_document, raw_end),
+        edits = _word_field_safe_edits(
+            document, content, raw_document, raw_start, raw_end, replacement,
         )
-        # Verify native endpoints before writing. A representation mismatch
-        # must refuse the edit, never change a neighbouring cell or character.
-        if str(target_range.Text or "") != raw_range:
-            logger.warning("Word COM native range text disagreed before replacement")
+        if edits is None:
+            logger.warning("Word COM native range or protected field disagreed before replacement")
             return False
-        target_range.Text = replacement
+        for target_range, changed_text in edits:
+            target_range.Text = changed_text
         # THE RECORD IS REFRESHED FOR EVERY SCOPE, INCLUDING A WHOLE DOCUMENT.
         #
         # This used to read `if not record_covers_entire_document(record)`, and
