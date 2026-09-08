@@ -115,3 +115,65 @@ Machine-readable hashes and scoped results: evidence/windows-reliability-2026-09
 The original scorer and corpus remain unchanged. Full essay/tone/holdout evidence,
 all advertised user journeys, crash resolution, eight-hour soak, clean install,
 trusted signing, and owner/payment service inputs remain release blockers.
+
+
+## Follow-up verification
+
+- The native test shutdown defect is repaired in the pytest lifecycle. The
+  isolated GUI diagnostic found 2,000 remaining top-level widgets; deleting
+  them while Python callbacks and Qt remain alive produced exit 0. The complete
+  suite with this cleanup passed 2720 tests, skipped 2, and exited 0.
+  No native exit is ignored or converted into a pass.
+- Live Word testing exposed a second harness defect: the application rotated
+  its one-megabyte log during a review. Line offsets then missed completion and
+  commands. File identity plus byte-offset cursors now follow retained logs;
+  losing a cursor is an explicit measurement error. Regression tests force
+  rotation and loss. The initial mixed-list result is invalid measurement.
+- Mixed lists (11) and restarted numbering (12) each completed three consecutive
+  runs with the repaired harness: 33 accepts total,
+  no errors or dismissals, explicit completion each time. Every saved hash and
+  paragraph numbering property matched its source. Together with shape 03,
+  this is nine completed runs over three shapes, not the full shape matrix.
+- These timings were observed while offscreen tests ran; they are not approved
+  latency measurements. The full essay corpus, all tones and holdouts, remaining
+  user journeys, eight-hour soak, installed/signing/licensing qualification,
+  and owner launch inputs remain incomplete. Release remains blocked.
+
+## Source rollback
+
+Preserve any later working changes, then revert the reliability commits on
+codex/windows-reliability-acceptance in newest-first order with git revert.
+Restart the source application and rerun the relevant acceptance checks.
+Keep corpus originals, saved evidence, and untracked model assets intact.
+No installed or public release artifact was replaced by these commits.
+
+
+## Final receipt, 2026-09-07
+
+The fixes were reviewed and committed by the concurrent project session as
+e7d6c9f, following this task's 2d022b3. The 2,720-pass full suite and clean exit
+apply to that repair snapshot. Subsequent harness commits culminate at e795cf1.
+Fresh focused verification of the current tree passed 91 tests; lint and diff
+whitespace checks passed. This is not a fresh full-suite claim for every later
+harness change.
+
+The later twenty-document baseline at e795cf1 is 75% workflow completion,
+recorded in results.tsv and build/batch-summary.json. Five cases remain
+incomplete: 06_table, 08_field_result, 09_internal_hyperlink, 10_nested_bullets,
+and 20_mixed_everything. This percentage is not an essay-quality score.
+
+The table repair now maps UIA cell terminators consistently and converts raw
+COM text offsets to native Word positions, including UTF-16 characters. Native
+range text is checked before assignment and cell-spanning replacements remain
+refused. These repairs have regression proof, but repeated live table reviews
+still did not finish. The table workflow therefore remains an open release
+defect; neither its arithmetic fix nor the clean Python exit qualifies it.
+
+The outstanding open-slice change in tools/autoresearch_reliability_cycle.py
+belongs to the concurrent project session and is preserved separately from this
+receipt commit. The original model-assets directory remains untouched.
+
+The full implementation plan is not complete. Do not ship or claim 100% essay
+acceptance from these results. Finish the five document failures, full essay and
+tone checks, holdout review, remaining advertised journeys, soak, and installed
+release qualification before changing that status.

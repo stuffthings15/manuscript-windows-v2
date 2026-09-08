@@ -1,10 +1,11 @@
 {
-  "recorded_utc": "2026-09-06T19:52:59.249013+00:00",
+  "recorded_utc": "2026-09-08T04:54:41.857478+00:00",
   "release_ready": false,
   "python_assertions": {
-    "passed": 2703,
+    "passed": 2720,
     "skipped": 2,
-    "process_exit_clean": false
+    "process_exit_clean": true,
+    "source_commit": "e7d6c9f7bcffd31a4709ed07b389475b63d9c472"
   },
   "website": {
     "tests_passed": 36,
@@ -70,6 +71,148 @@
     {
       "name": "manuscript-production-preflight.log",
       "sha256": "a52940bbebe65df0a404e3f9f4cde4f4fd1784da32fa45b9545c6348cfdd3e9b"
+    },
+    {
+      "name": "manuscript-candidate-suite.log",
+      "sha256": "ccb0c30c8af9253ea32c3979ef4753e4d97757f7b6ff73097671d721b2d8c675"
+    },
+    {
+      "name": "manuscript-cleanup-probe.log",
+      "sha256": "6ca5f08e106312d3c4841dab6bfa9482482f9ee200599080df944770a9225c8a"
+    },
+    {
+      "name": "manuscript-rotation-fixed-shapes.log",
+      "sha256": "26cd471f690920c1ce56c123d27e0993d42995f1c2fe3c6688de8f5882b0397f"
     }
-  ]
+  ],
+  "test_shutdown_fix": {
+    "gui_probe_passed": 321,
+    "leftover_widgets": 2000,
+    "explicit_cleanup_exit": 0
+  },
+  "word_mixed_and_restarted_list_runs": [
+    {
+      "essay": "11_mixed_lists",
+      "attempt": 1,
+      "accepts": 5,
+      "seconds": 66.8,
+      "sha256": "038709b3e43330eeb402cfb8281b95618c60168dfa913bf61c716009fa425fd1",
+      "hash_verified": true,
+      "paragraph_numbering_matches_source": true,
+      "explicit_completion": "the review finished after press 5; section 5/5, chars=210 remembered=2",
+      "commands": {
+        "Proofread": 6,
+        "Clear": 1
+      }
+    },
+    {
+      "essay": "11_mixed_lists",
+      "attempt": 2,
+      "accepts": 5,
+      "seconds": 55.7,
+      "sha256": "6c897128519b91bdc06c3e236009804d68e9fad483c912025a1d19db1e3faac2",
+      "hash_verified": true,
+      "paragraph_numbering_matches_source": true,
+      "explicit_completion": "the review finished after press 5; section 5/5, chars=210 remembered=2",
+      "commands": {
+        "Proofread": 6,
+        "Clear": 1
+      }
+    },
+    {
+      "essay": "11_mixed_lists",
+      "attempt": 3,
+      "accepts": 5,
+      "seconds": 61.7,
+      "sha256": "2e4dbef8506d7b97ffd508fe3cda6f80bcd3df6e3b2fe5ab389eeb8964e2f94c",
+      "hash_verified": true,
+      "paragraph_numbering_matches_source": true,
+      "explicit_completion": "the review finished after press 5; section 5/5, chars=210 remembered=2",
+      "commands": {
+        "Proofread": 6,
+        "Clear": 1
+      }
+    },
+    {
+      "essay": "12_restarted_numbering",
+      "attempt": 1,
+      "accepts": 6,
+      "seconds": 68.0,
+      "sha256": "83d2eaf41e64ce023b6590252e0154d16dece623dbb35706a081db77666de99d",
+      "hash_verified": true,
+      "paragraph_numbering_matches_source": true,
+      "explicit_completion": "the review finished after press 6; section 6/6, chars=238 remembered=2",
+      "commands": {
+        "Proofread": 7,
+        "Clear": 2
+      }
+    },
+    {
+      "essay": "12_restarted_numbering",
+      "attempt": 2,
+      "accepts": 6,
+      "seconds": 67.9,
+      "sha256": "912ce6aafd1b1fdf2e80dbc48353ac78208083262b1095adc396b6a696f57999",
+      "hash_verified": true,
+      "paragraph_numbering_matches_source": true,
+      "explicit_completion": "the review finished after press 6; section 6/6, chars=238 remembered=2",
+      "commands": {
+        "Proofread": 7,
+        "Clear": 2
+      }
+    },
+    {
+      "essay": "12_restarted_numbering",
+      "attempt": 3,
+      "accepts": 6,
+      "seconds": 74.6,
+      "sha256": "d99577ad0bff4450269676cfef88ad156ed686d683cdd61e715791a3d00dc4e1",
+      "hash_verified": true,
+      "paragraph_numbering_matches_source": true,
+      "explicit_completion": "the review finished after press 6; section 6/6, chars=238 remembered=2",
+      "commands": {
+        "Proofread": 7,
+        "Clear": 2
+      }
+    }
+  ],
+  "timing_note": "Concurrent offscreen regression tests; durations are observations, not a performance baseline.",
+  "runtime_provenance": {
+    "app_commit": "2d022b39d433c794e848742baf1a26b742a45b1e",
+    "reported_pack": "gemma4-12b-qat-v1",
+    "reported_model": "gemma4:12b-it-qat",
+    "reported_runtime": "local compatibility runtime, CUDA",
+    "model_asset_digest_verified": false,
+    "scope": "Recorded list runs; not a claim that the later full corpus or table runs used the same source."
+  },
+  "focused_verification": {
+    "passed": 91,
+    "process_exit": 0,
+    "base_commit": "e795cf1",
+    "date": "2026-09-07",
+    "lint": "passed",
+    "working_diff_sha256": "8f7b3ee971decffe62ffb7ea5928269d327f630eb254fb5e3471504e2c4ff930",
+    "log_sha256": "3bab56397aeb7cb051b2c0be80e63f896aa6477fc015e87a503ad59e857e3c74"
+  },
+  "source_hashes_at_full_suite_commit": {
+    "tests/conftest.py": "deb8af0bae108c56884da8ed03f2ef46dfc1971f0f88691e1ec4641eb59c3c27",
+    "tools/run_essays_batch.py": "23bf279ce66d1e463e72e41b3a095d72964692b734ab37959f9ee0a76fc7a8cf",
+    "src/echo_link_core/insertion.py": "62872bba6378590ad2d25673a18450c6600cb6ab622168338718ce479e6149b7",
+    "src/echo_link_core/windows_selection.py": "d500193dde71f98c4789cf145680bfac163c6500ee6f7eb8b09e6e6414ae2b31"
+  },
+  "later_document_baseline": {
+    "source_commit": "e795cf1",
+    "completion_percent": 75.0,
+    "scope": "Twenty document-shape cases, not essay quality",
+    "incomplete": [
+      "06_table",
+      "08_field_result",
+      "09_internal_hyperlink",
+      "10_nested_bullets",
+      "20_mixed_everything"
+    ],
+    "summary_sha256": "a57c62603e1eea09f286ee91888a34553a45b64cdb276f98610b870d1bba3af4",
+    "ledger_sha256": "6b62cd093bce53dffb5dae5b9f54913d73a9fba22d9112e4e03040320d49098a"
+  },
+  "table_release_status": "incomplete: coordinate repairs have unit proof; live review still failed to complete"
 }
