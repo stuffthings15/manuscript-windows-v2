@@ -56,6 +56,28 @@ CORPUS = ROOT / "test-corpus" / "document-shapes"
 CORPORA = {
     "shapes": CORPUS,
     "hard": ROOT / "test-corpus" / "document-shapes-hard",
+    # "hard" is SATURATED. Its three list documents scored 0.0 before the
+    # capture-refresh fix, 66.7 after the caret fix, and 100.0 on two agreeing
+    # runs afterwards - confirmed on the full corpus, where 03, 11 and 12 now
+    # report "the review finished after press 7; section 7/7". A slice at 100
+    # can teach nothing, because the keep rule is a strict improvement and every
+    # experiment ties. That is the dead end nine essay slices are already in.
+    #
+    # "open" is where the headroom moved to. The 2026-09-07 twenty-document
+    # baseline scored 75.0 with five documents still failing, and these are
+    # three of them, chosen to span all three remaining causes rather than to
+    # repeat one:
+    #
+    #   10_nested_bullets  1 press, sections 1-5 all left unchanged - the worst
+    #   06_table           a table, where the CR+BEL correction fixed the
+    #                      arithmetic without fixing the outcome
+    #   08_field_result    a document proved through COM to have NO coordinate
+    #                      mismatch, so its cause is a third thing entirely
+    #
+    # 09_internal_hyperlink and 20_mixed_everything are held back deliberately:
+    # 09 fails the same way as 08 and 20 the same way as 06, so including them
+    # would spend budget confirming a cause rather than finding one.
+    "open": ROOT / "test-corpus" / "document-shapes-open",
 }
 
 
