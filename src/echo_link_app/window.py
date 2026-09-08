@@ -1601,6 +1601,25 @@ class EchoLinkWindow(QMainWindow):
             self.tabs.setCurrentIndex(1)
             update_status_label(self.writing_state, str(exc), assertive=True)
             return
+        # Name the document, on this path too. The automatic monitor logs
+        # "editable focus detected title=..." and the shortcut logged nothing
+        # carrying a title, so the app's log could say a review was built and
+        # never say what it was built from. That is not cosmetic: on
+        # 2026-09-08 the batch harness scored a 20 essay run a crash on 8
+        # errors and 2 dead, and every one of the 5 failures still traceable
+        # in the un-rotated log was a document this app had captured
+        # correctly - essay 10 built a review of 22 sections at 9005
+        # characters, which is exactly essay 10, and then waited five minutes
+        # for a line this path never wrote. The two paths race, the shortcut
+        # wins whenever the monitor has not settled within about 16 seconds of
+        # the document opening, and only one of them was visible from
+        # outside.
+        logger.info(
+            "Writing HUD shortcut capture prepared title=%r scope=%s chars=%d",
+            record.window.title,
+            record.scope,
+            len(record.text),
+        )
         self.selected_text_record = record
         self.writing_source.setPlainText(record.text)
         self.writing_result_edit.clear()

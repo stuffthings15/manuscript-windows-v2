@@ -668,8 +668,29 @@ def captured_document_title(since: int | dict = 0) -> str | None:
     fires on one - which is exactly what it did on its first run, failing essay
     2 in 7.3 seconds against a line written during essay 1.
     """
+    # BOTH capture paths, because the app has two and only one of them was
+    # readable from here. The automatic focus monitor logs "editable focus
+    # detected"; the writer's shortcut logs "shortcut capture prepared". They
+    # race, and the shortcut wins whenever the monitor has not settled within
+    # about 16 seconds of the document opening.
+    #
+    # Measured 2026-09-08 over the 12 essays of one 20 essay run that the
+    # un-rotated log still held, with no exceptions either way: all 7 where the
+    # monitor won completed, and all 5 where the shortcut won were scored "the
+    # app reported no capture at all" after waiting the full 300 second cap.
+    # The app had captured every one of them correctly. The other 8 sit in a
+    # rotated log where presses can no longer be matched to essays, so they are
+    # not claimed here; the run totals of 10 complete, 8 error and 2 dead are
+    # consistent with them behaving the same way. Reading one path made a
+    # working product look like a crash.
+    #
+    # Still matched on the TITLE and never on the review that follows it,
+    # because "the app never captured" and "the app captured the wrong
+    # document" have to stay distinguishable - a title-less "review prepared"
+    # line would collapse them again.
     focus_line = re.compile(
-        r"Writing HUD editable focus detected title='(?P<title>.*?)' scope="
+        r"Writing HUD (?:editable focus detected|shortcut capture prepared) "
+        r"title='(?P<title>.*?)' scope="
     )
     lines = _lines_since(since)
     for line in reversed(lines):
