@@ -45,6 +45,8 @@ BATCH_PATH_MODULES = (
     # keep true: the rule is about every module the batch imports, not about the
     # ones that happen to search a control tree right now.
     "application_log_cursor.py",
+    # Added 2026-09-08 with the liveness check the capture wait now asks.
+    "restart_app_and_wait.py",
 )
 
 # Matched against the PARSED TREE, not the text.

@@ -23,6 +23,53 @@ LOG_PATH = Path.home() / "AppData/Local/ManuscriptWindowsV2/echo-link.log"
 
 
 
+APP_SCRIPT = "run_echo_link"
+
+
+def app_process_ids(script: str = APP_SCRIPT) -> list[str]:
+    """Process ids running Manuscript, matched on the command line.
+
+    Matched on the command line and never on the image name, for the reason
+    `stop_the_running_app` records below: the launcher moved from pythonw.exe
+    to python.exe and a killer matching the image silently stopped doing
+    anything for six hours.
+    """
+    query = (
+        "Get-CimInstance Win32_Process | "
+        f"Where-Object {{ $_.CommandLine -like '*{script}*' }} | "
+        "ForEach-Object { $_.ProcessId }"
+    )
+    try:
+        found = subprocess.run(  # noqa: S603
+            ["powershell", "-NoProfile", "-Command", query],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [line.strip() for line in found.splitlines() if line.strip().isdigit()]
+
+
+def app_is_running() -> bool:
+    """Is Manuscript alive right now?
+
+    THE DIRECT QUESTION, asked because every proxy for it has been wrong. The
+    harness waited a fixed 10 seconds for the app to capture a document, then
+    40, then 120 - and then on whether the app's log was still growing, which
+    sounded principled and was not. Measured 2026-09-08 over 14 app starts, the
+    log goes SILENT for a median of 14.6 seconds while the model loads, with a
+    90th percentile of 122.8 and a maximum of 131.7. A 30 second quiet window
+    survives 64 percent of starts, which is what turned 9 of 20 essays into
+    "the app reported no capture at all" in a run where the app was working
+    perfectly well.
+
+    A loading app is silent. A dead one is also silent. Only this tells them
+    apart.
+    """
+    return bool(app_process_ids())
+
+
 def stop_the_running_app() -> int:
     """Stop Manuscript whatever interpreter it is running under.
 

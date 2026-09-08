@@ -33,6 +33,7 @@ for entry in (ROOT / "src", ROOT / "tools"):
         sys.path.insert(0, str(entry))
 
 from application_log_cursor import capture_cursor, lines_since  # noqa: E402
+from restart_app_and_wait import app_is_running  # noqa: E402
 import harness_state  # noqa: E402
 from animal_essay_corpus_probe import CORPUS, _essay_files, load_essays  # noqa: E402
 from repro_accept_advance import (  # noqa: E402
@@ -678,24 +679,24 @@ def captured_document_title(since: int | dict = 0) -> str | None:
     return None
 
 
-# THE WAIT KEYS ON PROGRESS, NOT ON A DEADLINE I PICKED.
+# THE WAIT ASKS WHETHER THE APP IS ALIVE, because every proxy has been wrong.
 #
-# This bound has been wrong three times: 10 seconds, then 40 because it matched
-# the HUD's timeout and sounded principled, then 120 taken from a measured
-# maximum of 109. The very next run logged its capture 148 seconds after the app
-# started. The distribution DRIFTS - the codebase already records Word degrading
-# when it is left running for hours - so any fixed number is a guess against a
-# moving target, and each wrong guess invents a failure that never happened and
-# then gets recorded as a product score.
+# Four attempts, each replacing the last: a fixed 10 seconds, then 40 to match
+# the HUD's own timeout, then 120 from a measured maximum of 109 - and the next
+# run captured at 148 - and then "keep waiting while the app's log is growing",
+# which sounded principled and was not.
 #
-# What actually distinguishes "slow" from "stuck" is whether the app is still
-# doing anything. It writes to its own log continuously while it works, so the
-# wait continues for as long as that log is growing and gives up once it has
-# been silent. A busy app is given as long as it needs; a dead one is caught in
-# half a minute rather than two.
+# Measured 2026-09-08 over 14 app starts: the log goes SILENT while the model
+# loads for a median of 14.6 seconds, a 90th percentile of 122.8 and a maximum
+# of 131.7. A 30 second quiet window survives 64 percent of starts, which is
+# exactly what turned 9 of 20 essays into "the app reported no capture at all"
+# in a run where the app was working perfectly.
 #
-# The absolute cap remains, because an experiment has a five minute budget and
-# an app that logs busily forever must not eat a whole night.
+# A loading app is silent and a dead app is silent. Only the process tells them
+# apart, so the quiet window is now a trigger to ASK rather than an answer: when
+# nothing has been logged for a while, check whether Manuscript is still there.
+# If it is, keep waiting; if it is gone, stop at once. That costs one process
+# query per quiet window rather than one per poll.
 _CAPTURE_QUIET_SECONDS = 30.0
 _CAPTURE_CAP_SECONDS = 300.0
 
@@ -739,8 +740,13 @@ def wait_for_document_capture(
             position = moved
             last_change = now
         now = time.monotonic()
-        if now >= deadline or now - last_change >= quiet:
+        if now >= deadline:
             return captured
+        if now - last_change >= quiet:
+            if not app_is_running():
+                return captured
+            # Alive but quiet, which is what loading a model looks like.
+            last_change = now
         time.sleep(0.2)
 
 
