@@ -442,15 +442,40 @@ def release_document(path) -> None:
     import comtypes.client
 
     wanted = str(path.resolve()).casefold()
+    # EVERY copy of this essay, not only this run's.
+    #
+    # The target is named "<session_tag>-<essay>.docx" with a fresh uuid per
+    # batch, so matching the full path releases the document THIS run opened
+    # and can never release one an earlier run left behind. Measured
+    # 2026-09-09: build/working held 656 files across 192 distinct session
+    # prefixes, several with Word's "~$" owner locks beside them, and two
+    # WINWORD processes were holding two copies of essay 20 at once.
+    #
+    # A leaked window is not inert. The HUD attaches to it, live-review-open
+    # then refuses every focus signal from the real document, and
+    # _hud_source_window_alive correctly reports the source alive because it
+    # genuinely is. That produced every failure of the 2026-09-09 animal
+    # corpus run: eight "save/readback failed: AttributeError: ActiveDocument"
+    # where Word held several documents and the active one was not the
+    # target, three reviews served from the WRONG essay (essay 3's against
+    # essay 2, essay 6's against essay 4), and a card left stuck on the
+    # previous copy that a person had to close by hand.
+    #
+    # Matched on the essay's own name with the session tag stripped, and
+    # anchored on the leading '-' so '-1_Dogs.docx' cannot match
+    # '-11_Dogs.docx'.
     try:
         word = comtypes.client.GetActiveObject("Word.Application", dynamic=True)
     except Exception:  # noqa: BLE001 - Word is not running, so nothing holds it
         return
+    essay_name = re.sub(r"^[0-9a-f]{12}-", "", Path(path).name)
+    suffix = f"-{essay_name}".casefold()
     for open_document in list(word.Documents):
         try:
-            if str(open_document.FullName).casefold() != wanted:
-                continue
+            full = str(open_document.FullName)
         except Exception:  # noqa: BLE001 - Word raises assorted COM errors
+            continue
+        if full.casefold() != wanted and not Path(full).name.casefold().endswith(suffix):
             continue
         try:
             # Positional, not SaveChanges=0: the keyword form silently does
@@ -1347,9 +1372,32 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
 def save_review_document(word, path: Path, report: dict) -> None:
     """Save/read back only the disposable target, even after focus changes."""
     try:
-        document = word.ActiveDocument
-        if Path(str(document.FullName)).resolve() != path.resolve():
-            report["error"] = "Word target changed before save; no document saved"
+        # BY NAME, never whichever document happens to be active.
+        #
+        # ActiveDocument raised AttributeError on 8 of 20 essays on
+        # 2026-09-09, several of them AFTER the review had finished - "the
+        # review finished after press 11" - so the product had done the work
+        # and the harness lost it at the last step and scored an error.
+        # Word had more than one document open because earlier runs leaked
+        # theirs, and the active one was not this essay.
+        #
+        # The app already does this correctly in
+        # insertion._word_document_for_record, which finds the document the
+        # capture names rather than trusting focus. Same reasoning here: the
+        # target is known, so ask for it.
+        document = None
+        for candidate in list(word.Documents):
+            try:
+                if Path(str(candidate.FullName)).resolve() == path.resolve():
+                    document = candidate
+                    break
+            except Exception:  # noqa: BLE001 - Word raises assorted COM errors
+                continue
+        if document is None:
+            report["error"] = (
+                f"Word has no document open named {path.name}; "
+                f"nothing was saved"
+            )
             return
         document.Save()
         if not document.Saved:
