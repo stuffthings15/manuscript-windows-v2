@@ -399,19 +399,44 @@ def _word_automatic_list_labels(
             # correction and a misplaced one costs the document.
             found = captured.find(label, capture_offset)
             if found < 0 or found - capture_offset > len(label) + 2:
-                logger.warning(
-                    "Word automatic list labels not reconstructed: label %d "
-                    "is not in the captured text near offset %d",
+                # WORD'S GLYPH IS NOT ALWAYS THE RENDERED ONE, so a label
+                # missing here does not mean the capture has none.
+                #
+                # Measured on 10_nested_bullets, 2026-09-08, by reading the
+                # document both ways: ListString reports the level 1 bullets
+                # as U+2022 and the level 2 sub-bullet as the ASCII letter
+                # 'o' (U+006F), while accessibility renders that same
+                # sub-bullet as U+25E6 WHITE BULLET. Labels 1 and 3 matched
+                # exactly, label 2 could not be found, and this returned {}
+                # and threw away all three. With no labels the capture's 201
+                # characters were compared against Word's 194, every offset
+                # past position 69 was out by six, and the text check refused
+                # every correction on the document: three runs of the `open`
+                # slice, one press each, identical every time.
+                #
+                # Falling through to the same gap reading the no-label branch
+                # uses, for the reason this function already states twice -
+                # whatever produced the captured text is the only authority
+                # on what it contains. Word's answer is a hint, and when the
+                # hint is wrong the capture still knows.
+                #
+                # It stays a REFUSAL when the gap does not qualify: bounded,
+                # no newline, and nothing reconstructed unless the paragraph
+                # body can be located. A refused edit costs one correction,
+                # a misplaced one costs the document.
+                logger.info(
+                    "Word automatic list label %d is not the captured glyph "
+                    "near offset %d; reading it from the capture instead",
                     len(labels) + 1,
                     capture_offset,
                 )
-                return {}
-            separator = captured[found + len(label) : found + len(label) + 1]
-            if separator not in (" ", "\t"):
-                separator = ""
-            labels[offset] = f"{label}{separator}"
-            capture_offset = found + len(label) + len(separator)
-        else:
+            else:
+                separator = captured[found + len(label) : found + len(label) + 1]
+                if separator not in (" ", "\t"):
+                    separator = ""
+                labels[offset] = f"{label}{separator}"
+                capture_offset = found + len(label) + len(separator)
+        if offset not in labels:
             # Word reports NO label, and the capture still holds characters here.
             #
             # Measured on 10_nested_bullets, 2026-09-03: COM 198 against the
