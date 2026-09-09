@@ -198,6 +198,38 @@ def record(commit: str, score: float | None, memory_gb: float, status: str,
         )
 
 
+def with_crash_reason(description: str, reason: str | None) -> str:
+    """The description, carrying WHY a crash crashed.
+
+    A crash row records 0.000000 and the experiment's description, and that is
+    all it has ever recorded. The reason was printed to a console and then
+    discarded. Of 26 crash rows in results.tsv on 2026-09-08, exactly one
+    carried any hint of a cause.
+
+    That is why four of six tones have been unmeasurable for weeks with nothing
+    to diagnose: `tone Clear: baseline` crashed four separate times and the file
+    cannot say whether it was the same fault four times or four different ones.
+    The measurement was made, the answer was produced, and the one field that
+    survives did not keep it.
+
+    Tabs and newlines are stripped because results.tsv is tab separated and five
+    columns wide per the specification; a reason carrying either would shift
+    every field after it and corrupt rows that are already correct.
+    """
+    if not reason:
+        return description
+    flat = " ".join(str(reason).replace("	", " ").split())
+    if not flat:
+        return description
+    # Bounded, and at a word rather than mid-token. The reason is a diagnostic
+    # aid in a free-text field, not the diagnosis itself - the run log holds
+    # that - but it has to be enough to tell two faults apart.
+    limit = 300
+    if len(flat) > limit:
+        flat = flat[:limit].rsplit(" ", 1)[0] + " [...]"
+    return f"{description} CRASH: {flat}"
+
+
 def void_row(
     commit: str,
     name: str,
@@ -333,12 +365,20 @@ def main(argv: list[str] | None = None) -> int:
     kind = "essays" if arguments.metric == "total" else f"essays-{arguments.metric}"
     baseline = current_baseline(arguments.essays, kind)
     status = decide(baseline, score)
+    # Read BEFORE the row is written, not after it is printed. The reason was
+    # parsed three lines below this and used only for the console, so the row
+    # that survives never carried it.
+    crash_line = re.search(r"^crash: +(.+)", text, re.MULTILINE)
+    reason = crash_line.group(1).strip() if crash_line else "no score"
     record(
         commit,
         score,
         memory_gb,
         status,
-        f"{slice_tag(arguments.essays, kind)} {arguments.describe}",
+        with_crash_reason(
+            f"{slice_tag(arguments.essays, kind)} {arguments.describe}",
+            reason if score is None else None,
+        ),
     )
 
     if status != "keep":
@@ -347,8 +387,7 @@ def main(argv: list[str] | None = None) -> int:
         _git("reset", "--hard", before)
 
     if score is None:
-        reason = re.search(r"^crash: +(.+)", text, re.MULTILINE)
-        print(f"CRASH {reason.group(1).strip() if reason else 'no score'}")  # noqa: T201
+        print(f"CRASH {reason}")  # noqa: T201
     else:
         print(f"{status.upper()} {score:.2f}  (baseline {baseline:.2f})")  # noqa: T201
     return 0

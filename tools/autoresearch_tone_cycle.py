@@ -376,7 +376,12 @@ def main(argv: list[str] | None = None) -> int:
         autoresearch_status.clear_status()
 
     status = autoresearch_cycle.decide(baseline, percent)
-    autoresearch_cycle.record(commit, percent, 0.0, status, description)
+    autoresearch_cycle.record(
+        commit, percent, 0.0, status,
+        autoresearch_cycle.with_crash_reason(
+            description, reason if percent is None else None
+        ),
+    )
     if status != "keep":
         # Recoverable by the hash in results.tsv, and only ever on the
         # autoresearch branch. Same contract as the correction cycle.

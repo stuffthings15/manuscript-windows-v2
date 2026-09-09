@@ -394,7 +394,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     status = autoresearch_cycle.decide(baseline, rate)
-    autoresearch_cycle.record(commit, rate, 0.0, status, description)
+    autoresearch_cycle.record(
+        commit, rate, 0.0, status,
+        autoresearch_cycle.with_crash_reason(description, reason if rate is None else None),
+    )
     if status != "keep":
         autoresearch_cycle._git("reset", "--hard", before)
 
