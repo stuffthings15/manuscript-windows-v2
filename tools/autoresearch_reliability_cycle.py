@@ -134,9 +134,42 @@ def completion_rate() -> tuple[float | None, str]:
         if isinstance(row, dict) and row.get("outcome") == "error"
     ]
     if broken:
+        # WHOLE reasons, and every DISTINCT one - not the first, cut at 110.
+        #
+        # That cap fell exactly inside the sentence it was quoting. The batch
+        # says "the review on screen was captured from 'X', not from Y", and
+        # 110 characters reaches the end of X and stops, so the ledger recorded
+        # `... - Compatibility Mode - Word', no` on 2026-09-08. What survived
+        # was the document the app HAD captured; what was cut was the document
+        # it was supposed to capture. A mismatch diagnostic that names one side
+        # of the mismatch is not a diagnostic, and this is the same fault as
+        # the harness reading one of two capture paths: the evidence was
+        # present and the reader threw half of it away.
+        #
+        # Only broken[0] was reported, too. Three documents failing for three
+        # different reasons showed one, and the other two looked like the same
+        # fault.
+        #
+        # Bounded by the NUMBER of reasons rather than by characters, so
+        # whatever is shown is shown whole. Only LINE BREAKS are normalised, and
+        # spacing within a line is left exactly as it came: a COM failure can
+        # carry a traceback and a crash reason spanning lines cannot be read
+        # back out of a log, but a Word window title really does contain
+        # "  -  Compatibility Mode - Word" with doubled spaces, and collapsing
+        # those corrupts the document name this message exists to report.
+        seen = list(
+            dict.fromkeys(
+                " ".join(part.strip() for part in reason.splitlines() if part.strip())
+                for reason in broken
+            )
+        )
+        shown = seen[:3]
+        detail = "; ".join(shown)
+        if len(seen) > len(shown):
+            detail += f"; and {len(seen) - len(shown)} further reasons"
         return None, (
             f"{len(broken)} of {len(rows)} documents could not be measured: "
-            f"{broken[0][:110]}"
+            f"{detail}"
         )
     finished = sum(
         1

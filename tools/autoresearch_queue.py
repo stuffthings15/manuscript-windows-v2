@@ -721,19 +721,19 @@ QUEUE: tuple[tuple[str, str, tuple[tuple[str, str], ...], str], ...] = (
     (
         "allow a closer compound split",
         SPELLING,
-        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 2", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 1"),),
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 3", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 1"),),
         "8",
     ),
     (
         "allow a closer compound split",
         SPELLING,
-        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 2", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 1"),),
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 3", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 1"),),
         "12",
     ),
     (
         "allow a closer compound split",
         SPELLING,
-        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 2", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 1"),),
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 3", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 1"),),
         "17",
     ),
     (
@@ -1282,37 +1282,37 @@ QUEUE: tuple[tuple[str, str, tuple[tuple[str, str], ...], str], ...] = (
     (
         "put no separation requirement on a compound split",
         SPELLING,
-        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 1", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 0"),),
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 3", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 0"),),
         "8",
     ),
     (
         "put no separation requirement on a compound split",
         SPELLING,
-        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 1", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 0"),),
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 3", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 0"),),
         "12",
     ),
     (
         "put no separation requirement on a compound split",
         SPELLING,
-        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 1", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 0"),),
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 3", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 0"),),
         "17",
     ),
     (
         "demand a very wide separation before splitting",
         SPELLING,
-        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 1", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 4"),),
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 3", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 4"),),
         "8",
     ),
     (
         "demand a very wide separation before splitting",
         SPELLING,
-        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 1", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 4"),),
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 3", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 4"),),
         "12",
     ),
     (
         "demand a very wide separation before splitting",
         SPELLING,
-        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 1", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 4"),),
+        (("_COMPOUND_MINIMUM_EDIT_SEPARATION = 3", "_COMPOUND_MINIMUM_EDIT_SEPARATION = 4"),),
         "17",
     ),
     (

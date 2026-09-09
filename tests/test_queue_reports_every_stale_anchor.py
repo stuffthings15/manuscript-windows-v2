@@ -93,15 +93,10 @@ def test_a_measured_entry_needs_no_anchor(tmp_path, monkeypatch):
     assert queue_module.stale_anchors([0], tmp_path) == []
 
 
-def test_every_anchor_in_the_real_queue_resolves_against_the_real_tree():
-    """The live check, which is the one that matters.
-
-    If this fails, the queue will halt partway through its next run. Re-point
-    the named entries at what the file says now - the target value on the right
-    of each pair still means what the entry's description says, because these
-    experiments set an absolute value rather than a relative one.
-    """
-    stale = queue_module.stale_anchors(range(len(queue_module.QUEUE)), ROOT)
-    assert not stale, "stale queue anchors:\n" + "\n".join(
-        f"  {index}: {description}\n     {where}" for index, description, where in stale
-    )
+# The live check - "do the real queue's anchors resolve against the real tree?"
+# - is deliberately NOT repeated here. test_queue_anchors_resolve.py already
+# owns it, and a second copy would go red in two files at once every time an
+# experiment is kept, which is the loop working rather than a defect. The four
+# tests above pin what that file cannot: the behaviour of the reporting helper
+# itself, on inputs constructed to be exactly the shapes it must and must not
+# fire on.
