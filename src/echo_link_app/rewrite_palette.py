@@ -62,6 +62,7 @@ from echo_link_app.review_spans import (
     _shift_remaining_sentence_suggestions,
     _token_diff_opcodes,
 )
+from echo_link_app.target_underline import screen_for_physical_point
 from echo_link_app.theme import COLORS
 from echo_link_app.branding import APP_NAME, ICON_PNG
 from echo_link_core.paths import resource_path
@@ -192,11 +193,24 @@ def _anchor_in_screen_points(
     if sys.platform != "win32" or screen is None:
         return int(left), int(top), int(right), int(bottom)
     scale = max(1.0, float(screen.devicePixelRatio()))
+    # RE-OFFSET FROM THE SCREEN'S ORIGIN, which this did not do at all.
+    #
+    # Dividing a virtual-desktop coordinate by the scale only works when the
+    # screen starts at zero. On a second monitor whose logical origin is
+    # x=1920 at 150 percent, a UI Automation point at physical x=2500 became
+    # 2500/1.5 = 1667 - a position on the PRIMARY monitor, most of a screen
+    # away from the text it was meant to sit beside.
+    #
+    # target_underline._safe_line_rectangles has always done it this way and
+    # is the model; the underline landed correctly while the badge did not.
+    geometry = screen.geometry()
+    origin_x = geometry.left()
+    origin_y = geometry.top()
     return (
-        round(left / scale),
-        round(top / scale),
-        round(right / scale),
-        round(bottom / scale),
+        origin_x + round((left - origin_x) / scale),
+        origin_y + round((top - origin_y) / scale),
+        origin_x + round((right - origin_x) / scale),
+        origin_y + round((bottom - origin_y) / scale),
     )
 
 class RewritePalette(QDialog):
@@ -4008,7 +4022,25 @@ class RewritePalette(QDialog):
         *,
         anchor: tuple[int, int, int, int] | None,
     ) -> None:
-        screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
+        # THE DOCUMENT'S SCREEN, not the mouse's.
+        #
+        # This asked screenAt(QCursor.pos()), which is where the pointer
+        # happens to be - normally the HUD itself, since the writer just
+        # clicked it. On a two-monitor desk that is routinely a different
+        # display from the document, so the anchor was converted with the wrong
+        # device pixel ratio and the badge was placed on the wrong screen.
+        #
+        # With no anchor there is nothing to locate, and the cursor is then the
+        # right answer because the placement below uses the cursor too.
+        screen = None
+        if anchor is not None:
+            screens = tuple(QApplication.screens())
+            left, top, right, bottom = (int(value) for value in anchor)
+            screen = screen_for_physical_point(
+                screens, (left + right) // 2, (top + bottom) // 2
+            )
+        if screen is None:
+            screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
         if screen is None:
             return
         area = screen.availableGeometry()
