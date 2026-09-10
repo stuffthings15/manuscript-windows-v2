@@ -344,6 +344,12 @@ class EchoLinkWindow(QMainWindow):
             self._share_completed_polish_result,
         )
         self._installed_writing_models: set[str] = set()
+        # Why the writing AI is not serving corrections, in the writer's own
+        # words, or "" when it is. _show_ready_state reported the hotkeys and
+        # the speech model and said nothing about this one, so a machine that
+        # came up rules-only looked entirely healthy until a review card
+        # rendered with no AI in it.
+        self._writing_ai_reason: str = ""
         # Lets the prewarm retry give up at once when the window closes,
         # instead of sitting out its delay in a daemon thread.
         self._warm_retry_stop = threading.Event()
@@ -2204,11 +2210,17 @@ class EchoLinkWindow(QMainWindow):
                 # hour. The reason is usually momentary (another program holding
                 # the GPU at launch) and every later request re-plans, so this
                 # is a warning about the warm-up, not a permanent state.
-                logger.warning(
-                    "Adaptive Polish came up rules-only: %s",
+                reason = (
                     plan.downgrade_reason
                     or plan.reason
-                    or "no installed pack fits this hardware",
+                    or "no installed pack fits this hardware"
+                )
+                logger.warning("Adaptive Polish came up rules-only: %s", reason)
+                # Laundered, because downgrade_reason can name the pack or the
+                # runtime, and those names are kept out of user-facing text.
+                self._writing_ai_reason = (
+                    user_ai_status(reason)
+                    or "Local AI is not available. Corrections use built-in rules."
                 )
             # Load the selected model now, in this startup daemon thread, so
             # the user's first correction does not pay the multi-second cold
@@ -2313,6 +2325,8 @@ class EchoLinkWindow(QMainWindow):
                         warmed.use_llm,
                         loaded,
                     )
+                    if loaded:
+                        self._writing_ai_reason = ""
                     return loaded
                 else:
                     self.ai_coordinator.clear(token=token)
@@ -2322,6 +2336,9 @@ class EchoLinkWindow(QMainWindow):
             # Startup probing is optional and runs in a daemon thread. Any
             # normal provider failure must leave the app in rules-only mode.
             logger.warning("Adaptive Polish setup fell back to rules", exc_info=True)
+            self._writing_ai_reason = (
+                "Local AI could not start. Corrections use built-in rules."
+            )
             self.ai_coordinator.clear(token=token)
         finally:
             self.ai_coordinator.finish_update(token)
@@ -3718,6 +3735,20 @@ class EchoLinkWindow(QMainWindow):
         speech_status = self.engine.transcriber.status()
         if not speech_status["available"]:
             self._set_status("Speech AI unavailable. Open Settings to repair it.", COLORS["amber"])
+        elif self._writing_ai_reason:
+            # SAY IT HERE, because nothing else does.
+            #
+            # Coming up rules-only turns the product's main feature off, and it
+            # was visible only as a WARNING in a log the writer has no reason to
+            # open. This panel already reports a hotkey that would not register
+            # and a speech model that would not load; the corrector going
+            # missing is at least as worth saying.
+            #
+            # Amber rather than red: the cause is usually momentary - another
+            # program holding the GPU at launch - and every later request
+            # re-plans, so this describes the warm-up rather than a permanent
+            # state.
+            self._set_status(self._writing_ai_reason, COLORS["amber"])
         else:
             self._set_status("Ready", COLORS["green"])
 

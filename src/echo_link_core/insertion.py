@@ -252,14 +252,57 @@ def _no_selection_message(window: WindowSnapshot) -> str:
     changed, so the honest answer is not "highlight some text" - the writer
     already did - it is that the document is still read only.
     """
-    title = str(window.title or "")
-    if "protected view" in title.casefold():
+    if _word_is_in_protected_view(window):
         return (
             "This document is open in Protected View, so it cannot be "
             "selected or changed yet. Click Enable Editing in Word, then "
             "try again."
         )
     return "No selected text was found. Highlight text and try again."
+
+
+def _word_is_in_protected_view(window: WindowSnapshot) -> bool:
+    """Ask Word, and only fall back to reading its title.
+
+    The title test was the whole of this check, and it matched the literal
+    English string "protected view". A German Word says "Geschuetzte Ansicht",
+    a French one "Mode protege", a Spanish one "Vista protegida" - so on every
+    non-English Word the branch never fired and the writer was told to
+    "Highlight text and try again" on a document where nothing can be selected
+    at all. That is advice they have already followed, sending them round the
+    same loop, and it is the single most likely thing a non-English user hits.
+
+    Application.ActiveProtectedViewWindow is the same question asked of Word
+    instead of of its window caption, and it is not translated. It answers for
+    the document the writer is looking at, which is the one being captured.
+
+    THE TITLE TEST STAYS as a fallback, because COM is not always reachable:
+    Word may be starting, the automation object may be unavailable, or the
+    dispatch may fail on a machine where nothing else has gone wrong. English
+    behaves exactly as before, and a machine where COM answers gets the right
+    message in any language.
+    """
+    # The title first, because it costs nothing and is what English Word says.
+    # Checked BEFORE the window-kind gate on purpose: _is_word_document matches
+    # " - word" with single spaces and a real Word caption reads
+    # "Name  -  Protected View  -  Word" with doubled ones, so gating this on it
+    # would have broken the English path that already worked.
+    if "protected view" in str(window.title or "").casefold():
+        return True
+    if not _is_word_document(window):
+        return False
+    try:
+        active = _active_word_application().ActiveProtectedViewWindow
+    except Exception:  # noqa: BLE001 - COM raises undocumented types here, and
+        # Word being unreachable is not evidence either way.
+        return False
+    if active is None:
+        return False
+    try:
+        return bool(active)
+    except Exception:  # noqa: BLE001 - a COM truthiness probe can itself raise
+        # It exists, which is the answer; only its __bool__ failed.
+        return True
 
 
 def _is_word_document(window: WindowSnapshot) -> bool:

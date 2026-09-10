@@ -176,3 +176,62 @@ def test_the_save_finds_its_document_when_another_is_active(tmp_path, monkeypatc
     assert report["after"] == "the corrected essay"
     assert wanted.saved_calls == 1
     assert stale.saved_calls == 0, "the stale copy was saved instead"
+
+
+def test_every_copy_a_run_opened_is_released_at_the_end(tmp_path, monkeypatch):
+    """The last essay's copy is the one nothing else releases.
+
+    release_document runs at the START of each essay, so essay 20's copy was
+    still open in Word when the batch finished - one leaked document per run,
+    192 runs, 656 files in build/working.
+    """
+    released = []
+    monkeypatch.setattr(batch, "release_document", released.append)
+    targets = [Path(tmp_path / f"aaaaaaaaaaaa-{n}_Essay.docx") for n in (1, 2, 3)]
+
+    batch.release_opened_targets(targets)
+
+    assert released == targets, (
+        "a run's own disposable copies were not all released; the last one is "
+        "the one that stays open in Word and that the next run trips over"
+    )
+
+
+def test_releasing_nothing_is_harmless(tmp_path, monkeypatch):
+    """A run that opened no documents - the idle gate stopped it first."""
+    released = []
+    monkeypatch.setattr(batch, "release_document", released.append)
+    batch.release_opened_targets([])
+    assert released == []
+
+
+def test_the_cleanup_runs_on_every_exit_from_main():
+    """main() returns early when the app will not start.
+
+    A cleanup that only runs on the happy path is the same defect wearing a
+    different hat. Parsed rather than grepped, and scoped to main(), so the
+    rule cannot be satisfied by the word appearing in a comment or by the two
+    tests above calling the helper directly.
+    """
+    import ast
+
+    tree = ast.parse((ROOT / "tools" / "run_essays_batch.py").read_text(encoding="utf-8"))
+    main = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "main"
+    )
+    calls = [
+        node
+        for node in ast.walk(main)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "release_opened_targets"
+    ]
+    returns = [node for node in ast.walk(main) if isinstance(node, ast.Return)]
+    assert len(calls) >= len(returns), (
+        f"main() has {len(returns)} return statements but only {len(calls)} "
+        f"release_opened_targets calls. An exit that does not release leaks "
+        f"whatever the run had already opened, which is the defect this file "
+        f"exists for."
+    )

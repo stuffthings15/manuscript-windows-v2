@@ -486,6 +486,31 @@ def release_document(path) -> None:
             print(f"   warning: could not release the document: {exc}", flush=True)
 
 
+def release_opened_targets(targets) -> None:
+    """Release every disposable copy a run opened, however the run ended.
+
+    release_document runs at the START of each essay, so the LAST essay's
+    copy was never released and Word kept it open after the batch finished.
+    One leaked document per run: build/working reached 656 files across 192
+    session prefixes, and on 2026-09-09 two WINWORD processes were holding
+    two copies of essay 20 at once.
+
+    A leaked window is not inert. The Writing HUD attaches to it, refuses
+    every focus signal from the real document, and the next run is served a
+    review of the wrong essay - see release_document for the full account.
+
+    A FUNCTION rather than a line at the end of main(), because main() can
+    return early when the app fails to start, and a cleanup that only runs
+    on the happy path is the same defect wearing a different hat.
+
+    close_word() still refuses to terminate Word, and release_document still
+    matches only copies of the essay being run, so a writer's own unsaved
+    document is never touched.
+    """
+    for target in targets:
+        release_document(target)
+
+
 def close_word() -> None:
     """Legacy global termination is forbidden: unrelated work may be unsaved."""
     raise RuntimeError("Refusing to terminate Word; release only the disposable test document")
@@ -1526,6 +1551,14 @@ def main() -> int:
 
     summary: list[dict] = []
     stopped_for_idle = False
+    # EVERY disposable copy this run opens, so the last one can be released
+    # too. release_document runs at the START of each essay, so the final
+    # essay's copy was never released and Word held it after the batch
+    # ended. Measured 2026-09-09: one WINWORD process still holding
+    # 3c4896e8b782-20_Axolotls_in_Puebla_Mexico after a clean 20/20 run, and
+    # build/working carrying 656 files across 192 session prefixes - one
+    # leaked document per run, for 192 runs.
+    opened_targets: list[Path] = []
     for number in range(args.start, args.end + 1):
         if number > len(essays):
             break
@@ -1576,6 +1609,8 @@ def main() -> int:
         outcomes: list[str] = []
         for attempt in range(1, max(1, args.repeat) + 1):
             # Release only this disposable output, never another document or Word.
+            if target not in opened_targets:
+                opened_targets.append(target)
             release_document(target)
             shutil.copy2(source, target)  # every run starts from the original
             if not args.no_restart and not restart_app():
@@ -1595,6 +1630,7 @@ def main() -> int:
                     "failure, not a corpus result.",
                     flush=True,
                 )
+                release_opened_targets(opened_targets)
                 return 2
             started = time.monotonic()
             try:
@@ -1740,6 +1776,9 @@ def main() -> int:
     (args.output_root / "batch-summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    # This run's own disposable copies, including the last essay's, which
+    # nothing else releases. See release_opened_targets.
+    release_opened_targets(opened_targets)
     # Never terminate Word or close unrelated documents on completion.
     print(f"\nsummary: {args.output_root / 'batch-summary.json'}")
     # 2 means come back later, the specification word for a tick that

@@ -6,6 +6,30 @@ from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, co
 
 
 ROOT = Path(SPECPATH)
+
+
+def _build_channel() -> str:
+    """Which kind of build this is, from the manifest build.py already wrote.
+
+    tools/build.py calls _write_build_info before PyInstaller runs, so this
+    file exists by the time the spec is evaluated. Missing or unreadable is
+    treated as production, because the safe default for an unknown build is
+    the one that ships less.
+    """
+    import json
+
+    try:
+        manifest = json.loads(
+            (ROOT / "build" / "generated" / "build_info.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, ValueError):
+        return "production"
+    return str(manifest.get("build_channel") or "production")
+
+
+IS_TESTING_BUILD = _build_channel() == "testing-unlocked"
 datas = [
     (str(ROOT / "resources" / "manuscript.ico"), "resources"),
     (str(ROOT / "resources" / "manuscript.png"), "resources"),
@@ -48,7 +72,26 @@ hiddenimports = sorted(
         + [
             "av",
             "tokenizers",
-            "tools.windows_workflow_probe",
+            # THE TEST HARNESS SHIPS ONLY IN A TESTING BUILD.
+            #
+            # tools/windows_workflow_probe.py is not a feature. It synthesizes
+            # keystrokes through user32.keybd_event, spawns a second process,
+            # opens the microphone and writes screenshots to disk. It has no
+            # business on a writer's machine.
+            #
+            # It was in EVERY build until 2026-09-09, and the artifact of
+            # 2026-08-16 shipped it reachable: the runtime gate in main.py
+            # permits internal commands when subscription_required is false,
+            # and that build's subscription.json said exactly that.
+            #
+            # It cannot simply be dropped, because
+            # tools/installer_lifecycle_probe.py drives --workflow-probe
+            # against the INSTALLED executable - that is how release
+            # acceptance checks the packaged hotkey, HUD, transcription and
+            # insertion path end to end. So a testing build keeps it and a
+            # production build does not, which is a property of the build
+            # rather than of a file a user could edit.
+            *(["tools.windows_workflow_probe"] if IS_TESTING_BUILD else []),
             "pyperclip",
             "winrt._winrt",
             "winrt._winrt_windows_foundation",
