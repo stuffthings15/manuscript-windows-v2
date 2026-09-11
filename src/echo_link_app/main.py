@@ -34,7 +34,7 @@ from echo_link_core.recommendation import (
 from echo_link_core.subscription import subscription_enforcement_required
 from echo_link_core.storage import SCHEMA_VERSION, EchoLinkStore
 from echo_link_core.transcription import cuda_available, discover_local_models, local_model_path
-from echo_link_core.version import build_commit
+from echo_link_core.version import build_commit, product_version
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -176,6 +176,9 @@ def diagnostics() -> dict[str, object]:
     return {
         "app": APP_NAME,
         "runtime": "local-only",
+        # Both: the release a person can name, and the exact code behind
+        # it. --diagnostics is what a support request pastes.
+        "version": product_version(),
         "code_commit": build_commit(),
         "schema_version": SCHEMA_VERSION,
         "speech_model": settings.model_name,

@@ -32,6 +32,30 @@ def user_ai_status(message: str) -> str:
             if backend
             else f"Local AI correction ready{suffix}."
         )
+    # NOT INSTALLED is its own answer, and it is the likeliest one.
+    #
+    # "Ollama is not installed or is not available on PATH" is what a fresh
+    # machine says, and it fell through every branch below to the catch-all
+    # "Local AI status updated." - which tells the writer nothing at all about
+    # the most common first-run state there is. That undercut the whole point
+    # of surfacing the rules-only reason in the first place.
+    #
+    # The runtime is still not named, per the rule this function exists for.
+    # What the writer needs is that it is missing rather than broken, and that
+    # there is somewhere to go about it.
+    if any(
+        phrase in lowered
+        for phrase in (
+            "not installed",
+            "not available on path",
+            "not found on path",
+            "is not on path",
+        )
+    ):
+        return (
+            "Local AI is not installed. Corrections use built-in rules; "
+            "open Settings to set it up."
+        )
     if "load" in lowered:
         return "Local AI could not load. Retry shortly."
     if any(

@@ -117,3 +117,41 @@ def test_the_window_reports_the_writing_ai_in_its_ready_state():
         "_show_ready_state does not consult the writing AI's state, so a "
         "rules-only machine reports 'Ready' in green."
     )
+
+
+def test_a_missing_runtime_says_so_instead_of_saying_nothing():
+    """The likeliest first-run state produced the least useful sentence.
+
+    "Ollama is not installed or is not available on PATH" fell through every
+    branch to the catch-all "Local AI status updated.", which tells a writer
+    nothing. On a machine that has just installed Manuscript and nothing else,
+    that IS the state - so the most common case had the worst message, and it
+    undercut the point of surfacing the rules-only reason at all.
+    """
+    # Both name a runtime. user_ai_status deliberately passes a message that
+    # names none straight through, because it is already safe to show, so a
+    # vendor-free string is not a case this branch applies to.
+    for raw_message in (
+        "Ollama is not installed or is not available on PATH.",
+        "ollama was not found on PATH",
+    ):
+        shown = user_ai_status(raw_message)
+        assert shown != "Local AI status updated.", (
+            f"{raw_message!r} still produces the catch-all, which says nothing"
+        )
+        assert "not installed" in shown.casefold()
+        assert "settings" in shown.casefold(), (
+            "the writer is told what is wrong but not where to go about it"
+        )
+        assert "ollama" not in shown.casefold(), "the runtime was named"
+
+
+def test_a_runtime_that_is_installed_but_broken_reads_differently():
+    """Missing and broken need different answers; one is actionable."""
+    missing = user_ai_status("Ollama is not installed or is not available on PATH.")
+    broken = user_ai_status("gemma4-12b-qat-v1 could not load")
+    assert missing != broken
+    assert "Retry" in broken, "a transient failure should suggest retrying"
+    assert "Retry" not in missing, (
+        "retrying does nothing when the runtime is not installed at all"
+    )
