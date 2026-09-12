@@ -202,6 +202,28 @@ class _SentenceSuggestion:
     sentence_count: int
 
 
+# What Word hands UI Automation for Enter. VERTICAL TAB is not here and must
+# not be: Shift+Enter means the text flowed on, and `_sentence_spans` records
+# at length why that distinction is load-bearing.
+PARAGRAPH_MARK = re.compile(r"[\r\n]+")
+
+
+def _append_bounds(target: list[list[int]], text: str, start: int, end: int) -> None:
+    """Add [start, end) as a section, trimmed, skipping it when it is blank.
+
+    The sentence count is recomputed rather than carried over, because a split
+    piece holds fewer sentences than the span it came from and that number is
+    what the card shows the writer.
+    """
+    while start < end and text[start].isspace():
+        start += 1
+    while end > start and text[end - 1].isspace():
+        end -= 1
+    if end <= start:
+        return
+    target.append([start, end, max(1, len(_sentence_spans(text[start:end])))])
+
+
 def _group_sentence_suggestions(
     text: str,
     suggestions: Sequence[object],
@@ -240,6 +262,40 @@ def _group_sentence_suggestions(
             merged[-1][2] += count
         else:
             merged.append([left, right, count])
+
+    # No section may hold a paragraph mark, because a section is written back
+    # as ONE run of text and the mark inside it goes with the old text.
+    #
+    # Every other layer here guards that and says why - `_sentence_spans` ends
+    # a sentence on [\r\n]+, `_review_spans` closes a batch on a paragraph
+    # break, `_sentence_bounds` stops at one from both sides, and
+    # `split_tone_batch` refuses a batched answer whose paragraph count moved,
+    # promising "never a lost paragraph break". This is the layer that decides
+    # the final sections, and it was the one taking the property back: the
+    # bounds above must CONTAIN the edit filed under them (min/max), so a rule
+    # whose own range reaches over a mark drags its section over it, and the
+    # union step then fuses two paragraph-safe spans into one that is not.
+    #
+    # Measured 2026-09-11, essay 16 of the error-riddled corpus through Word as
+    # a writer: in went 15 paragraphs, out came 14. No words were lost -
+    # paragraph 10 was appended to paragraph 9 - but the break the writer typed
+    # was gone, and a deleted break cannot be clicked back. The same essay and
+    # the same 21 presses with Proofread alone came out 15 of 15.
+    #
+    # Splitting here rather than trusting the rules is deliberate. The rule
+    # that did it is fixed too, but a guard that depends on 500-odd rules all
+    # staying well behaved is not a guard.
+    split: list[list[int]] = []
+    for left, right, count in merged:
+        if PARAGRAPH_MARK.search(text[left:right]) is None:
+            split.append([left, right, count])
+            continue
+        cursor = left
+        for mark in PARAGRAPH_MARK.finditer(text[left:right]):
+            _append_bounds(split, text, cursor, left + mark.start())
+            cursor = left + mark.end()
+        _append_bounds(split, text, cursor, right)
+    merged = split
 
     grouped: dict[tuple[int, int, int], list[object]] = {
         (left, right, count): [] for left, right, count in merged

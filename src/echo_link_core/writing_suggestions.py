@@ -471,9 +471,18 @@ _TITLE_NAME_COMMAS = re.compile(
 # The match must reach the end of the sentence, so a trailing clause
 # ("..., the alerts and the queue, which we archived") is left alone: that comma
 # belongs to the clause, not to the list.
+# CARRIAGE RETURN and NEWLINE are excluded from both item classes because a
+# list does not run across a paragraph mark, and an edit that takes one into
+# its range drags the review section around it across one too. Measured
+# 2026-09-11 on essay 16: "repair, disassembly<VT> and material
+# identification" ended a paragraph with no full stop, the next began "?? .",
+# and `last` expanded through the mark to reach that "?", which deleted the
+# writer's paragraph break when the section was applied. VERTICAL TAB stays
+# allowed: Shift+Enter means the text flowed on, which is this module's rule
+# everywhere else.
 _SERIAL_COMMA = re.compile(
-    r",[ \t]+[^,;:.!?()]{2,60},[ \t]+(?P<middle>[^,;:.!?()]{2,60}?)[ \t]+and[ \t]+"
-    r"(?P<last>[^,;:.!?()]{2,60}?)(?=[.;:!?]|\Z)"
+    r",[ \t]+[^,;:.!?()\r\n]{2,60},[ \t]+(?P<middle>[^,;:.!?()\r\n]{2,60}?)"
+    r"[ \t]+and[ \t]+(?P<last>[^,;:.!?()\r\n]{2,60}?)(?=[.;:!?]|\Z)"
 )
 # An appositive wears the same punctuation as a two-item list: "Ann, my manager
 # and my mentor" describes one person, and inserting a comma silently turns her
