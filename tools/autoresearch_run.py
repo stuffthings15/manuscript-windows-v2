@@ -72,6 +72,10 @@ TIMEOUT_PER_ESSAY_SECONDS = 600
 # as no score at all, which is far worse than a crash: a crash is obvious.
 _DEAD = "dead"
 _PARTIAL = "partial"
+# run_essays_batch.outcome returns this when a document's paragraph count moved
+# between going into Word and coming out. It carries no score, like the two
+# above, because structural damage is not something a mean can express.
+_RESHAPED = "reshaped"
 _CAPTURE_MISMATCH = "captured from"
 
 
@@ -357,7 +361,13 @@ def _row_status(row: str) -> str:
     """
     if _CAPTURE_MISMATCH in row:
         return "capture-mismatch"
-    for marker in (_DEAD, _PARTIAL):
+    # _RESHAPED is here so the ledger can tell a document that came back a
+    # different shape from a COM fault. Without it the row matched nothing and
+    # fell through to "unknown", and the loop printed `crash: unknown` for the
+    # one failure whose cause is already known by name. The loop exists to
+    # separate a harness failure from a product failure; an unnamed crash is
+    # the least useful thing it can say.
+    for marker in (_DEAD, _PARTIAL, _RESHAPED):
         if f" {marker}" in row:
             return marker
     if " complete" in row:

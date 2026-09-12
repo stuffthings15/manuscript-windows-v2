@@ -246,6 +246,23 @@ def _reshaped_runs() -> list[dict[str, object]]:
     ]
 
 
+def _reshaped_failure(label: str, reshaped: list) -> str:
+    """The gate line for runs that changed a document's shape, or "" for none.
+
+    One function because there are three places that must ask - the smoke, the
+    twenty-essay corpora, and the tone runs - and the first version asked in
+    only one of them. A rule written out three times is a rule applied twice.
+    """
+    if not reshaped:
+        return ""
+    first = reshaped[0] if isinstance(reshaped[0], dict) else {}
+    return (
+        f"{label}: {len(reshaped)} essay run(s) changed the document's paragraph "
+        f"count ({first.get('essay')}: {first.get('paragraphs_before')} -> "
+        f"{first.get('paragraphs_after')})"
+    )
+
+
 def _incomplete_runs() -> list[dict[str, object]]:
     """Essays whose Word run did not finish, with the reason the batch gave.
 
@@ -537,10 +554,19 @@ def fast_tier(results: dict[str, object], started: float) -> list[str]:
     results["corrections_smoke"] = smoke
     if "error" in smoke:
         failures.append(str(smoke["error"]))
-    elif smoke["mean"] < CORRECTIONS_MEAN:
-        failures.append(
-            f"corrections smoke mean {smoke['mean']} is below {CORRECTIONS_MEAN}"
-        )
+    else:
+        # Asked BEFORE the mean, and separately from it. A reshaped smoke run
+        # scores perfectly well - the damage is structural, so no average can
+        # express it - and the fast tier is what gates the full tier, so a
+        # green smoke here is what lets eight hours of measurement start on a
+        # build that is already destroying documents.
+        reshaped = _reshaped_failure("corrections smoke", smoke.get("reshaped") or [])
+        if reshaped:
+            failures.append(reshaped)
+        if smoke["mean"] < CORRECTIONS_MEAN:
+            failures.append(
+                f"corrections smoke mean {smoke['mean']} is below {CORRECTIONS_MEAN}"
+            )
     return failures
 
 
@@ -573,17 +599,12 @@ def full_tier(results: dict[str, object], started: float) -> list[str]:
                 f"not graded ({excluded[0].get('essay')}: "
                 f"{excluded[0].get('stopped_because') or excluded[0].get('outcome')})"
             )
-        reshaped = report.get("reshaped") or []
+        # Ungated runs are reported and not gated on their SCORE. This is not a
+        # score. A document that came back a different shape is a failure at any
+        # mean, including a perfect one.
+        reshaped = _reshaped_failure(label, report.get("reshaped") or [])
         if reshaped:
-            # Ungated runs are reported and not gated on their SCORE. This is
-            # not a score. A document that came back a different shape is a
-            # failure at any mean, including a perfect one.
-            first = reshaped[0]
-            failures.append(
-                f"{label}: {len(reshaped)} essay run(s) changed the document's "
-                f"paragraph count ({first.get('essay')}: "
-                f"{first.get('paragraphs_before')} -> {first.get('paragraphs_after')})"
-            )
+            failures.append(reshaped)
         if not gated:
             # Reported, never gated. Said out loud on every run so a reader
             # does not mistake a low number here for a release blocker.
@@ -621,6 +642,17 @@ def full_tier(results: dict[str, object], started: float) -> list[str]:
             tone_reports[tone] = {"status": "incomplete", "batch": evidence}
             failures.append(f"tone {tone}: all twenty documents must finish before judging")
             continue
+        # The tone runs are where this defect has ever actually been seen, and
+        # they were the one place with no check. On 2026-09-11 essay 16 lost a
+        # paragraph under five of the six tones and the gate said
+        # "tone Clear: missing or invalid judge evidence" - blaming the judge,
+        # because tone_correctness exits non-zero when its own section counts
+        # stop lining up. That is how the incident was found by accident and
+        # mis-attributed for a quarter of an hour. Ask the question directly,
+        # and keep judging: the tone score is still worth having.
+        tone_reshaped = _reshaped_failure(f"tone {tone}", _reshaped_runs())
+        if tone_reshaped:
+            failures.append(tone_reshaped)
         reports = []
         for source in sources:
             target = EVIDENCE / f"tone-{tone.lower()}-{source.stem}.json"

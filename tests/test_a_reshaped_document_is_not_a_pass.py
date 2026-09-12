@@ -146,3 +146,120 @@ def test_a_reshaped_run_is_not_counted_as_an_incomplete_one(tmp_path, monkeypatc
 
     assert release_acceptance._incomplete_runs() == []
     assert release_acceptance._reshaped_runs()
+
+
+def test_only_one_paragraph_count_is_not_a_reshaped_run():
+    """One number and not the other is a missing measurement, not damage.
+
+    outcome() and _reshaped_runs() have to agree about this or the summary and
+    the gate say different things about the same row. outcome() compared with
+    .get() on both sides, so a row holding only paragraphs_before was
+    "reshaped" (None != 15) while _reshaped_runs, which requires both, called
+    it clean.
+    """
+    row = _row()
+    del row["paragraphs_after"]
+
+    assert run_essays_batch.outcome(row) == "complete"
+
+
+def test_the_tiers_fail_on_a_reshaped_run():
+    """The list existing is not the gate working.
+
+    The nine tests above cover outcome() and _reshaped_runs() and stopped
+    there. Deleting the whole `if reshaped` block from a tier left all of them
+    green, which is the failure mode CLAUDE.md names - a test that asserts the
+    shape of a call rather than its effect - and it is why two of the three
+    tier paths were written without a check at all.
+    """
+    damaged = [{
+        "essay": "16_sustainable_fashion_and_textile_waste",
+        "paragraphs_before": 15,
+        "paragraphs_after": 14,
+    }]
+
+    line = release_acceptance._reshaped_failure("corrections smoke", damaged)
+
+    assert line
+    assert "16_sustainable_fashion_and_textile_waste" in line
+    assert "15 -> 14" in line
+    assert release_acceptance._reshaped_failure("anything", []) == ""
+
+
+def test_every_word_batch_in_the_gate_asks_about_reshaping():
+    """All three places that run essays through Word, not just one.
+
+    The smoke, the twenty-essay corpora and the tone runs each drive Word and
+    each can produce a reshaped document. The first version of this gate asked
+    in one of the three, and the tone runs - the only place the defect has ever
+    actually been observed - were not the one.
+    """
+    source = Path(release_acceptance.__file__).read_text(encoding="utf-8")
+    batch_runs = source.count('"tools/run_essays_batch.py",')
+    asked = source.count("_reshaped_failure(")
+
+    assert batch_runs == 3, f"the gate now drives Word {batch_runs} times"
+    # Three call sites plus the definition.
+    assert asked >= batch_runs, (
+        f"{batch_runs} Word batches but only {asked} reshaped checks; a batch "
+        f"that is never asked about can damage a document and still pass"
+    )
+
+
+def test_a_table_is_not_mistaken_for_a_reshaped_document():
+    """The two ends of a run do not count paragraphs the same way.
+
+    `before` is built from the .docx XML, one entry per w:p. `after` is Word's
+    COM Content.Text, where every table cell and row terminator is CR+BEL.
+    U+0007 is not whitespace, so `.strip()` kept it and each row end became a
+    paragraph of its own.
+
+    Measured on a heading plus a 2x2 table with nothing changed at all: 5
+    paragraphs in, 8 out. Once a moved paragraph count fails a run, that is not
+    cosmetic - every document containing a table would be reported damaged on a
+    perfect run, and a gate that cries wolf is a gate people learn to skip.
+    06_table.docx is in the live autoresearch `open` slice.
+    """
+    # What Word COM hands back for a heading and a 2x2 table.
+    com_text = "Title\rAlpha\r\x07Beta\r\x07\r\x07Gamma\r\x07Delta\r\x07\r\x07"
+    # What docx_paragraphs gives for the same document.
+    xml_text = "Title\nAlpha\nBeta\nGamma\nDelta"
+
+    before = run_essays_batch.paragraphs(xml_text)
+    after = run_essays_batch.paragraphs(com_text)
+
+    assert before == ["Title", "Alpha", "Beta", "Gamma", "Delta"]
+    assert after == before
+    assert run_essays_batch.outcome(
+        _row(paragraphs_before=len(before), paragraphs_after=len(after))
+    ) == "complete"
+
+
+def test_a_real_table_document_still_reports_its_own_paragraphs():
+    """Stripping the cell mark must not also swallow the cell's text."""
+    com_text = "Heading\rleft cell\r\x07right cell\r\x07\r\x07"
+
+    assert run_essays_batch.paragraphs(com_text) == [
+        "Heading",
+        "left cell",
+        "right cell",
+    ]
+
+
+def test_the_research_loop_names_a_reshaped_row_rather_than_calling_it_unknown():
+    """The loop exists to tell a harness failure from a product failure.
+
+    _row_status matched the outcome vocabulary as literal substrings and was
+    not extended, so a reshaped row fell through every branch to "unknown" and
+    the loop printed `crash: unknown` for the one failure whose cause is
+    already known by name.
+    """
+    import autoresearch_run
+
+    row = " 16 16_sustainable_fashion      run1  226.3s reshaped  presses=21"
+
+    assert autoresearch_run._row_status(row) == "reshaped"
+    # And the words it already knew still read the same way.
+    assert autoresearch_run._row_status(row.replace("reshaped", "complete")) == "complete"
+    assert autoresearch_run._row_status(row.replace("reshaped", "partial")) == "partial"
+    assert autoresearch_run._row_status(row.replace("reshaped", "dead")) == "dead"

@@ -554,7 +554,9 @@ def outcome(row: dict) -> str:
     #
     # Structural damage outranks a stall. A writer can re-run a stalled essay;
     # a deleted paragraph break cannot be clicked back.
-    if row.get("paragraphs_before") != row.get("paragraphs_after"):
+    before = row.get("paragraphs_before")
+    after = row.get("paragraphs_after")
+    if before is not None and after is not None and before != after:
         return "reshaped"
     if row["unchanged"] or row["stalled_at"]:
         return "partial"
@@ -977,9 +979,28 @@ def open_in_word(path: Path):
 
 
 def paragraphs(value: str) -> list[str]:
+    """Split a document into paragraphs the same way at both ends of a run.
+
+    The two ends do NOT arrive the same way, and that asymmetry is why the cell
+    terminator has to go first. `before` is built from the .docx XML, one entry
+    per w:p (animal_essay_corpus_probe.docx_paragraphs). `after` is Word's COM
+    Content.Text, where every table cell and row terminator is CR+BEL.
+
+    U+0007 is not whitespace, so `.strip()` keeps it and every row end became a
+    non-empty paragraph of its own. Measured on a heading plus a 2x2 table with
+    nothing changed at all: 5 paragraphs in, 8 out. Now that `outcome` fails a
+    run whose paragraph count moved, that is not a cosmetic difference - it
+    would report every document containing a table as damaged, on a perfect
+    run, and a gate that cries wolf is a gate people learn to skip.
+
+    Collapsing CR+BEL to CR is what insertion._word_native_offset already does
+    for the same reason; the trailing replace catches a BEL that arrives
+    without its CR.
+    """
+    flattened = str(value).replace("\r\x07", "\r").replace("\x07", "")
     return [
         line.strip()
-        for line in str(value).replace("\r", "\n").split("\n")
+        for line in flattened.replace("\r", "\n").split("\n")
         if line.strip()
     ]
 

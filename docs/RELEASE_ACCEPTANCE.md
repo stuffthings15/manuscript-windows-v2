@@ -35,6 +35,7 @@ Evidence lands in `build/acceptance/`.
 | 4 | Test suite | passes, and ruff is clean | fast |
 | 5 | Control surface | no findings | fast |
 | 6 | Diagnostics | `diagnostics_check.py` passes | fast |
+| 7 | Document shape | no run changes a document's paragraph count | both |
 
 ## What each number does and does not prove
 
@@ -55,9 +56,13 @@ situation almost no user is ever in.
 
 The gated corpus is `test-corpus/error-riddled-20-docx`, coherent prose with
 seeded surface damage, because that is what a user's writing actually looks
-like. `20_Animal_Pet_Essays_800_Percent_More_Errors` is reported on every full
-run and never gated: it is deliberately incoherent and harder than anything a
-user will type, so a low number there is information, not a blocker.
+like. `20_Animal_Pet_Essays_800_Percent_More_Errors` has its SCORE reported on every
+full run and never gated: it is deliberately incoherent and harder than
+anything a user will type, so a low number there is information, not a
+blocker. Gate 7 is the exception and applies to it like any other corpus, for
+the reason gate 7 exists: a document that came back a different shape is not a
+low score, it is damage, and no corpus is too hard to justify losing one of a
+writer's paragraphs.
 
 Known limits, stated so a passing score is not read as more than it is.
 
