@@ -2598,9 +2598,16 @@ class EchoLinkWindow(QMainWindow):
             protected_terms,
             self.selected_text_record.text or "",
             # Read here, on the GUI thread, because the worker below must not
-            # touch a widget. This is the correction already on the card, kept
-            # so a failed tone does not cost the writer their proofread.
-            self.rewrite_palette.current_replacement_text(),
+            # touch a widget. This is the correction THIS SECTION already has,
+            # kept so a failed tone does not cost the writer their proofread.
+            #
+            # It used to read current_replacement_text(), which is whatever is
+            # on the card. Those agree for the section the writer is looking at
+            # and differ for every section corrected ahead of them in the
+            # background - and a background section then had the CARD's text
+            # written into it. See correction_for_section for what that did to
+            # 122 sections of the acceptance tier.
+            self.rewrite_palette.correction_for_section(suggestion_id),
         )
         with self._palette_ai_lock:
             if self._palette_ai_shutdown:

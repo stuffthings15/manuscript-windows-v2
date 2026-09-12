@@ -4776,3 +4776,78 @@ def test_the_state_file_names_this_process_from_startup(app, tmp_path, monkeypat
     published = json.loads(session_state.state_path().read_text(encoding="utf-8"))
 
     assert published.get("build") == session_state.build_identifier()
+
+
+def test_a_background_section_carries_its_own_correction_not_the_cards(
+    app, tmp_path, monkeypatch
+):
+    """The wrong-variable defect that put the title into 122 sections.
+
+    A tone job carries the correction the section already has, so a tone that
+    cannot be applied hands that back rather than costing the writer their
+    proofread. That text was read from the CARD - `current_replacement_text()`
+    - which is right for the section the writer is looking at and wrong for
+    every section corrected ahead of them in the background.
+
+    On the acceptance tier of 2026-09-11 the background section then received
+    the CARD's text, and the card during a prefetch burst is the document's
+    title. 122 sections came back as "Artificial Intelligence in Education."
+    where the writer's paragraph had been.
+
+    This drives the real path: the card shows section one while a job is
+    started for section two, and the job must carry section two's text.
+    """
+    capture = (
+        "Echo-Link are ready today.\n"
+        "The teh report is here.\n"
+        "A third paragraph stands alone."
+    )
+    monkeypatch.setenv("ECHOLINK_DISABLE_PALETTE_AI", "0")
+    window = EchoLinkWindow(
+        EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False
+    )
+    window.selected_text_record = _selection(capture)
+    palette = window.rewrite_palette
+    requests = []
+    palette.sentence_rewrite_requested.connect(lambda *a: requests.append(a))
+    palette.show_capture(capture)
+    app.processEvents()
+    palette.badge_button.click()
+    app.processEvents()
+
+    sections = [
+        str(getattr(item, "suggestion_id", "")) for item in palette._review_suggestions
+    ]
+    assert len(sections) >= 3, "this test needs the card and a background section"
+
+    # Finish the first section so the card is actually showing something. Until
+    # it does, the card is blank and the defect cannot be told from the fix.
+    first_attempt, first_id, *_ = requests[0]
+    palette.show_sentence_result(
+        first_attempt, first_id, "Echo-Link is ready today.", "Ready."
+    )
+    app.processEvents()
+
+    on_the_card = palette.current_replacement_text()
+    background = sections[2]
+    its_own = palette.correction_for_section(background)
+    assert on_the_card, "the card is blank, so this test proves nothing"
+    assert its_own and its_own != on_the_card, (
+        "the fixture stopped distinguishing the card from the background "
+        "section, so this test can no longer detect the defect"
+    )
+
+    # Do not let the job actually run; the question is only what it carries.
+    monkeypatch.setattr(window, "_palette_ai_width", lambda: 0)
+    window._run_palette_sentence_rewrite(7, background, its_own, "Friendly")
+    app.processEvents()
+    with window._palette_ai_lock:
+        jobs = list(window._palette_ai_queue)
+
+    assert jobs, "no job was queued"
+    carried = str(jobs[-1][-1]).strip()
+    assert carried == its_own
+    assert carried != on_the_card
+    window.shutdown()
+
+

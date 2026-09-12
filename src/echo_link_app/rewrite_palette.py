@@ -3849,12 +3849,44 @@ class RewritePalette(QDialog):
     def current_replacement_text(self) -> str:
         """The correction the card is showing right now.
 
+        WHAT IS ON SCREEN, which is a different question from what belongs to
+        any particular section, and the difference cost a document. Use
+        correction_for_section when you mean one section's own text.
+        """
+        return self.after_text.toPlainText().strip()
+
+    def correction_for_section(self, suggestion_id: str) -> str:
+        """The correction belonging to ONE section, whoever is on the card.
+
         Read on the GUI thread before a tone job starts, so a failed tone can
         hand this back instead of the rules repair. A refused Friendly used to
         replace a clean AI proofread with "Another benefit are the WAY a
         hamster..." - the writer lost the tone and the correction together.
+
+        That is why the text is carried, and it was read from the CARD. For the
+        section the writer is looking at the two agree, so it was right for
+        every case anyone tested by hand. Sections are also corrected ahead of
+        the writer in the background, and for one of those the card is showing
+        somebody else: in practice section 1, the document's title.
+
+        Measured 2026-09-11 on the release acceptance tier. 122 sections came
+        back as the document's own title, repeated, in place of the writer's
+        paragraph, across four of the six tones - "Artificial Intelligence in
+        Education. Artificial Intelligence in Education." where 118 words had
+        been. The app's log records it plainly once you know what to look for:
+        "kept the existing correction ... characters=42" identical on
+        consecutive sections, the same string handed to each of them.
+
+        It looked like the model collapsing, and it was not. Over 1,426 logged
+        request and completion pairs the smallest answer was 0.839 of its
+        request; no answer ever collapsed. The model was never the problem, and
+        on the runs where this happened it had not run at all.
+
+        Returns "" for an id that is no longer under review, which the caller
+        already treats as "no correction was carried" and falls through to the
+        deterministic repair.
         """
-        return self.after_text.toPlainText().strip()
+        return self._review_text_for(str(suggestion_id))
 
     def _set_result_text(self, text: str) -> None:
         self._updating_result = True
