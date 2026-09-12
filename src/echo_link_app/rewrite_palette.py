@@ -1612,6 +1612,45 @@ class RewritePalette(QDialog):
                 suggestion_id,
             )
             return
+        # An answer that threw its section away is a guard turning an answer
+        # down, and the HUD already has exactly one path for that. Delegate to
+        # it rather than returning early from further down this method, which
+        # is what this did first and got three things wrong.
+        #
+        # _ai_failed_ids is the difference between a card that reads honestly
+        # and one that lies. _mark_ai_provenance shows "Suggested text" for a
+        # section in _ai_completed_ids and "Suggested text, built-in rules
+        # only" otherwise, and its docstring records why: a rules-only essay
+        # that claims to be AI-corrected "reads as a working corrector right up
+        # until it is graded". Marking a REFUSED section completed put that
+        # defect back. show_sentence_error files the section as failed, which
+        # is what it is, and the card then says so.
+        #
+        # It also gets right what an early return here could not: a refusal for
+        # a BACKGROUND section must not repaint the card the writer is looking
+        # at (show_sentence_error checks that explicitly), the section stays
+        # reviewable rather than being counted as done, and the review moves on
+        # without retrying the same text forever.
+        #
+        # Batches are not handled here. They need the answer split first, and
+        # the batch path below already has its own refusal that puts every
+        # member back for an individual request.
+        if len(
+            self._ai_batch_members.get(attempt, ())
+        ) <= 1 and answer_abandons_the_source(
+            self._review_text_for(suggestion_id), text
+        ):
+            session_state.record_event(
+                "answer_abandoned_source", section=str(suggestion_id)[:8]
+            )
+            logger.info("Writing HUD answer refused: it abandoned its section")
+            self.show_sentence_error(
+                attempt_id,
+                suggestion_id,
+                "The rewrite lost this paragraph's meaning. Showing the "
+                "built-in correction.",
+            )
+            return
         self._ai_attempts.pop(attempt, None)
         foreground = attempt == self._active_ai_attempt_id
         was_background = self._active_ai_background if foreground else True
@@ -1700,46 +1739,6 @@ class RewritePalette(QDialog):
             self._ai_toned_ids.update(members)
             session_state.record_event("tone_batch_filed", members=len(members))
             rewritten = parts[0]
-        elif answer_abandons_the_source(
-            self._review_text_for(suggestion_id), rewritten
-        ):
-            # The half of this defect that had no guard at all. A section long
-            # enough to carry a tone on its own is sent as a batch of one, never
-            # reaches split_tone_batch, and its answer went straight into the
-            # card unchecked. 30 of the 59 damaged batches on 2026-09-11 were
-            # this shape.
-            #
-            # There is no batch to fall back from here, so the section keeps the
-            # proofread correction it already had and the writer is told the
-            # tone did not take - the same shape as the empty-answer branch
-            # above. Silently showing a card that has thrown the paragraph away
-            # is the one thing that must not happen.
-            session_state.record_event(
-                "tone_answer_abandoned_source", section=str(suggestion_id)[:8]
-            )
-            logger.info(
-                "Writing HUD tone answer refused: it abandoned its section"
-            )
-            self._restore_visible_suggestion(suggestion_id)
-            self._restore_card_view(suggestion_id)
-            self.show_error(
-                "The tone rewrite lost this paragraph's meaning. "
-                "Showing the current correction."
-            )
-            # The review has to keep moving, and it has to keep COUNTING. The
-            # batch refusal above learned the first half the hard way on
-            # 2026-08-23: a branch that returns without handing the turn on
-            # leaves the HUD waiting for an answer that never comes, and to a
-            # writer that is the app hanging. The second half is the same
-            # bookkeeping the success path does below - drop the timing sample
-            # so it does not leak, count the section, and republish the
-            # counter, or the writer watches a progress number stop moving
-            # while the review carries on behind it.
-            self._ai_request_started.pop(suggestion_id, 0.0)
-            self._ai_completed_ids.add(suggestion_id)
-            self._update_series_progress()
-            QTimer.singleShot(0, self._request_next_ai_prefetch)
-            return
         updated_suggestions = []
         found = False
         for suggestion in self._suggestions:
@@ -1851,6 +1850,16 @@ class RewritePalette(QDialog):
             self.set_busy(False)
         self._ai_failed_ids.add(suggestion_id)
         self._ai_failure_messages[suggestion_id] = message
+        if self._pending_tone_rewrite == suggestion_id:
+            # The writer picked a tone before this section's proofread landed,
+            # so the tone was parked until the proofread came back. It is not
+            # coming back. Only the success path resumes this, so leaving the
+            # pointer set strands it for the rest of the review: the tone is
+            # never requested and the slot is never free for another section.
+            # Applying a tone over text that failed its proofread would be
+            # worse, so the request is dropped, and the failure message above
+            # is what the writer sees instead.
+            self._pending_tone_rewrite = ""
         self._render_suggestions()
         self._set_status(message, assertive=True)
         current = self._current_review_suggestion()

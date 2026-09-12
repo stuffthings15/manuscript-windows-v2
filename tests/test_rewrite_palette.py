@@ -1196,7 +1196,7 @@ def test_ai_proofread_prefetches_next_replacement_before_user_decision(app):
     palette.show_sentence_result(
         first_attempt,
         first_id,
-        "Echo-Link is ready.",
+        "Echo-Link is ready. A clean sentence. A third sentence.",
         "First AI proofread ready.",
     )
     app.processEvents()
@@ -1223,7 +1223,7 @@ def test_advancing_while_prefetch_runs_keeps_rule_text_locked(app):
     palette.show_sentence_result(
         first_attempt,
         first_id,
-        "Echo-Link is ready.",
+        "Echo-Link is ready. A clean sentence. A third sentence.",
         "First AI proofread ready.",
     )
     app.processEvents()
@@ -1523,7 +1523,7 @@ def test_advancing_to_prefetched_result_restores_its_ready_state(app):
     palette.show_sentence_result(
         first_attempt,
         first_id,
-        "Echo-Link is ready.",
+        "Echo-Link is ready. A clean sentence. A third sentence.",
         "CUDA | qwen3:8b correction ready.",
     )
     app.processEvents()
@@ -3927,7 +3927,7 @@ def test_dismissing_a_section_does_count_as_progress(app):
     # Dismiss is disabled until the section's AI step finishes, so finish it.
     attempt, suggestion_id, *_ = requests[0]
     palette.show_sentence_result(
-        attempt, suggestion_id, "Echo-Link is ready.", "AI proofread ready."
+        attempt, suggestion_id, "Echo-Link is ready. A clean sentence. A third sentence.", "AI proofread ready."
     )
     app.processEvents()
 
@@ -4897,8 +4897,14 @@ def test_an_answer_that_abandons_its_section_never_reaches_the_card(app):
 
     A section long enough to carry a tone by itself is sent as a batch of one
     and never reaches split_tone_batch, so its answer went into the card
-    unchecked. 30 of the 59 damaged batches on the tier were this shape. The
-    writer must keep the correction they already had.
+    unchecked. 30 of the 59 damaged batches on the tier were this shape.
+
+    A refused answer is a guard turning an answer down, so it goes through the
+    same path as any other guard refusal: the section is filed FAILED, not
+    completed, and the card offers retry or dismiss. Filing it completed was
+    tried first and is the thing to watch for - _ai_completed_ids is what
+    _mark_ai_provenance reads to decide whether to call the text an AI
+    correction, so it would have relabelled the rules repair as one.
     """
     capture = (
         "Local ordinances commonly address setbacks, water sources, barriers, "
@@ -4911,13 +4917,15 @@ def test_an_answer_that_abandons_its_section_never_reaches_the_card(app):
     )
     app.processEvents()
 
-    shown = palette.after_text.toPlainText()
-    assert "Artificial Intelligence" not in shown
-    # The card is not left empty either. The writer keeps the rule-based
-    # correction this section already had - "teh" is still fixed - which is the
-    # whole point of refusing rather than blanking the paragraph.
-    assert "the rules vary widely" in shown
-    assert "hive counts" in shown
+    assert "Artificial Intelligence" not in palette.after_text.toPlainText()
+    assert suggestion_id in palette._ai_failed_ids
+    assert suggestion_id not in palette._ai_completed_ids
+    assert not (palette._ai_completed_ids & palette._ai_failed_ids)
+    # Never "Suggested text" on its own, which is what the card says for a
+    # section the model corrected and the guards accepted.
+    assert "not ready" in palette.after_heading.text().casefold()
+    # And the review is not stranded waiting for an answer that never comes.
+    assert palette.view != "loading"
     palette.finish_choice()
 
 
