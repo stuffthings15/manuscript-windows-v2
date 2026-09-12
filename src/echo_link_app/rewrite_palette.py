@@ -52,6 +52,7 @@ from echo_link_app.ai_status import user_ai_status
 from echo_link_app.review_spans import (
     FILTERS,
     TONE_BATCH_PARAGRAPHS,
+    answer_abandons_the_source,
     join_tone_batch,
     split_tone_batch,
     tone_request_batches,
@@ -1631,6 +1632,35 @@ class RewritePalette(QDialog):
         members = self._ai_batch_members.pop(attempt, ())
         if len(members) > 1:
             parts = split_tone_batch(rewritten, len(members))
+            if parts is not None:
+                # Counting the blocks is not enough. An answer that repeats one
+                # line five times returns five blocks, passes the count check,
+                # and each block is written over a paragraph. That is the shape
+                # the 122 title sections of 2026-09-11 arrived in, though the
+                # app produced those itself rather than the model - see
+                # correction_for_section. This catches the shape either way.
+                abandoned = [
+                    member
+                    for member, part in zip(members, parts)
+                    if answer_abandons_the_source(self._review_text_for(member), part)
+                ]
+                if abandoned:
+                    session_state.record_event(
+                        "tone_batch_abandoned_source",
+                        members=len(members),
+                        abandoned=len(abandoned),
+                    )
+                    logger.info(
+                        "Writing HUD tone batch refused: %d of %d answers abandoned "
+                        "their section",
+                        len(abandoned),
+                        len(members),
+                    )
+                    # The whole batch goes back, not just the bad blocks. The
+                    # good ones came out of the same collapsed answer and the
+                    # per-section retry below is cheap next to writing one
+                    # wrong paragraph into a writer's document.
+                    parts = None
             if parts is None:
                 session_state.record_event(
                     "tone_batch_refused", members=len(members), section=suggestion_id[:8]
@@ -1670,6 +1700,46 @@ class RewritePalette(QDialog):
             self._ai_toned_ids.update(members)
             session_state.record_event("tone_batch_filed", members=len(members))
             rewritten = parts[0]
+        elif answer_abandons_the_source(
+            self._review_text_for(suggestion_id), rewritten
+        ):
+            # The half of this defect that had no guard at all. A section long
+            # enough to carry a tone on its own is sent as a batch of one, never
+            # reaches split_tone_batch, and its answer went straight into the
+            # card unchecked. 30 of the 59 damaged batches on 2026-09-11 were
+            # this shape.
+            #
+            # There is no batch to fall back from here, so the section keeps the
+            # proofread correction it already had and the writer is told the
+            # tone did not take - the same shape as the empty-answer branch
+            # above. Silently showing a card that has thrown the paragraph away
+            # is the one thing that must not happen.
+            session_state.record_event(
+                "tone_answer_abandoned_source", section=str(suggestion_id)[:8]
+            )
+            logger.info(
+                "Writing HUD tone answer refused: it abandoned its section"
+            )
+            self._restore_visible_suggestion(suggestion_id)
+            self._restore_card_view(suggestion_id)
+            self.show_error(
+                "The tone rewrite lost this paragraph's meaning. "
+                "Showing the current correction."
+            )
+            # The review has to keep moving, and it has to keep COUNTING. The
+            # batch refusal above learned the first half the hard way on
+            # 2026-08-23: a branch that returns without handing the turn on
+            # leaves the HUD waiting for an answer that never comes, and to a
+            # writer that is the app hanging. The second half is the same
+            # bookkeeping the success path does below - drop the timing sample
+            # so it does not leak, count the section, and republish the
+            # counter, or the writer watches a progress number stop moving
+            # while the review carries on behind it.
+            self._ai_request_started.pop(suggestion_id, 0.0)
+            self._ai_completed_ids.add(suggestion_id)
+            self._update_series_progress()
+            QTimer.singleShot(0, self._request_next_ai_prefetch)
+            return
         updated_suggestions = []
         found = False
         for suggestion in self._suggestions:

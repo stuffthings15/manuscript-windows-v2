@@ -15,6 +15,12 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
+# The meaning guards, reused unchanged. They already answer "which words did the
+# writer use that this answer dropped and never accounted for", which is exactly
+# the question a collapsed tone answer fails. Both are pure text functions with
+# no I/O, so they do not compromise this module's freedom from Qt and from disk.
+from echo_link_core.meaning_diff import content_words, unexplained_losses
+
 logger = logging.getLogger(__name__)
 
 
@@ -182,6 +188,97 @@ def split_tone_batch(answer: str, expected: int) -> tuple[str, ...] | None:
         )
         return None
     return tuple(blocks)
+
+
+# How much of a section's meaning an answer may drop before it is not a rewrite
+# of that section at all.
+#
+# Measured 2026-09-11 over the 1,671 section pairs of the six tone runs of the
+# release acceptance tier, using meaning_diff.unexplained_losses:
+#
+#     sections the tones rewrote properly   1,549   median 0.026   MAX 0.3438
+#     sections the model abandoned            122   MIN 0.6567     median 0.960
+#
+# Nothing at all lies between 0.3438 and 0.6567, so 0.5 sits in the middle of an
+# empty band with about 0.156 of margin either side rather than being fitted to
+# the data: every threshold from 0.35 to 0.65 gives the same perfect split. At
+# 0.5 all 122 abandoned sections are refused and none of the 1,549 good ones is,
+# and every refusal was then read by eye to confirm it was real damage rather
+# than a strict judge.
+#
+# Held out, and used for none of the above: 655 sections from the four
+# PROOFREAD-only batches, across both corpora. None would be refused, the worst
+# reaching 0.286.
+#
+# A LENGTH ratio was tried first and is NOT the reason this is a meaning check -
+# a first pass claimed length could not separate at all, and that was wrong. It
+# came from pairing essay 16 by paragraph index after a separate defect had
+# merged two of its paragraphs, so every section after the tenth was being
+# compared with the rewrite of its neighbour. On a clean pairing, length does
+# separate once short sections are set aside: for sources of 20 words or more,
+# good output keeps at least 0.703 of the length and damaged output at most
+# 0.448.
+#
+# Meaning is used anyway, for three reasons that survive the correction. Length
+# needs that word-count floor and this does not: across ALL sizes, length
+# overlaps (good output goes down to 0.625 while two damaged answers come back
+# LONGER than their source, up to 1.625, both of them 8-word sections of essay
+# 1 under Friendly). A second, independent measure - the share of the source's
+# distinct word stems the answer keeps - agrees with this one on all 1,671
+# rows, which is what makes the separation look like a property of the data
+# rather than of one metric. And it asks the right question: whether the
+# writer's words survived, not how many words came back.
+ANSWER_MAX_LOST_CONTENT_SHARE = 0.5
+
+# Below this the ratio stops meaning anything: in a three-word heading one
+# substituted word is already a third of it, and a legitimate "Overview" ->
+# "Here is the overview" would score 1.0.
+#
+# Four is where the cost changes, not a round number. The damaged sections'
+# lowest content-word counts are 4, 4, 6, 7, 7, 7, 11, 12, so raising the floor
+# starts letting real damage through at 5. Lowering it to 3 exempts 18 fewer
+# good sections and catches nothing extra. Measured 2026-09-11:
+#
+#     floor 3   0 damaged sections let through    18 good sections exempt
+#     floor 4   0 let through                     66 exempt
+#     floor 5   2 let through                    125 exempt
+#     floor 8   6 let through                    181 exempt
+_ANSWER_MINIMUM_CONTENT_WORDS = 4
+
+
+def answer_abandons_the_source(original: str, answer: str) -> bool:
+    """Whether this answer threw away the section it was supposed to rewrite.
+
+    The failure this exists for, measured on the tier of 2026-09-11: 122 of
+    1,671 sections came back as some variant of "Artificial Intelligence in
+    Education. Artificial Intelligence in Education." in place of the writer's
+    paragraph, across four of the six tones. The writer's words were gone.
+
+    THE MODEL DID NOT DO THAT, and it is worth saying so here because the
+    answers look exactly as though it had. Over 1,426 logged request and
+    completion pairs the smallest answer was 0.839 of its request; none ever
+    collapsed. The app substituted the text itself, handing a background
+    section whatever correction was on the HUD card - during a prefetch burst,
+    the title. That is fixed at its source; see
+    `rewrite_palette.correction_for_section`.
+
+    This stays anyway, because it is the check that would have caught it, and
+    it does not care what produced the answer. Nothing else does: split_tone_batch
+    counts the blocks in an answer and never looks inside them, so an answer
+    with the right number of wrong paragraphs is accepted, and a single-section
+    request never reaches even that.
+
+    Deliberately not a model call and not a judge. This runs on every tone
+    answer, in the HUD, while the writer waits.
+    """
+    words = content_words(original)
+    if len(words) < _ANSWER_MINIMUM_CONTENT_WORDS:
+        return False
+    if not str(answer or "").strip():
+        # An empty answer is somebody else's branch to handle, and it has one.
+        return False
+    lost = unexplained_losses(original, answer)
+    return len(lost) / len(words) >= ANSWER_MAX_LOST_CONTENT_SHARE
 
 
 
