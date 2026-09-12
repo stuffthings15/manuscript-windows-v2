@@ -545,6 +545,17 @@ def outcome(row: dict) -> str:
         return "error"
     if row["presses"] == 0:
         return "dead"
+    # A review must never change how many paragraphs the document has. `score`
+    # has counted both ends since this harness was written and NOTHING READ THE
+    # ANSWER: on 2026-09-11 essay 16 went in with 15 paragraphs, came out with
+    # 14, and this function called it "complete". The tone judge caught it a
+    # quarter of an hour later, by accident, because its own section counts
+    # stopped lining up - and only because that essay happened to be judged.
+    #
+    # Structural damage outranks a stall. A writer can re-run a stalled essay;
+    # a deleted paragraph break cannot be clicked back.
+    if row.get("paragraphs_before") != row.get("paragraphs_after"):
+        return "reshaped"
     if row["unchanged"] or row["stalled_at"]:
         return "partial"
     return "complete"

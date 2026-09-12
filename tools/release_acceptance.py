@@ -204,6 +204,48 @@ def _run_was_truncated(row: dict) -> bool:
     return True
 
 
+def _reshaped_runs() -> list[dict[str, object]]:
+    """Essays that came out of Word with a different number of paragraphs.
+
+    A review corrects words. It must never add or remove a paragraph, because a
+    paragraph break is something the writer typed and a deleted one cannot be
+    clicked back.
+
+    `run_essays_batch.score` has counted paragraphs at both ends since the
+    harness was written, and until 2026-09-11 nothing compared the two numbers.
+    Essay 16 of the error-riddled corpus went into Word with 15 paragraphs that
+    day, came out with 14, was recorded as `paragraphs_before: 15,
+    paragraphs_after: 14` in the summary, and was reported `complete`. The tone
+    judge noticed a quarter of an hour later and only by accident, because its
+    own source and result section counts stopped agreeing.
+
+    Separate from `_incomplete_runs` on purpose: that one asks whether the run
+    finished, this one asks whether the document survived it, and the two have
+    different answers and different fixes.
+    """
+    try:
+        rows = json.loads(SUMMARY.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(rows, list):
+        return []
+    return [
+        {
+            "essay": row.get("essay"),
+            "paragraphs_before": row.get("paragraphs_before"),
+            "paragraphs_after": row.get("paragraphs_after"),
+            "outcome": row.get("outcome"),
+        }
+        for row in rows
+        if isinstance(row, dict)
+        # Both present and different. A row that never reached `score` has
+        # neither, and a missing measurement is not a failed one.
+        and row.get("paragraphs_before") is not None
+        and row.get("paragraphs_after") is not None
+        and row["paragraphs_before"] != row["paragraphs_after"]
+    ]
+
+
 def _incomplete_runs() -> list[dict[str, object]]:
     """Essays whose Word run did not finish, with the reason the batch gave.
 
@@ -352,6 +394,12 @@ def _graded(corpus: Path, first: int, last: int, after: float) -> dict[str, obje
         # Named so a reader is never told a mean without being told what it
         # left out.
         "excluded_incomplete": incomplete,
+        # Kept separate from the exclusions above, and deliberately so. A
+        # reshaped run FINISHED - it pressed every section and its score is
+        # honest - so excluding it would throw away a real measurement. What it
+        # did was change the document's shape, and no score can express that.
+        # It is graded, reported, and fails the gate.
+        "reshaped": _reshaped_runs(),
         "mean": round(sum(totals) / len(totals), 1),
         "lowest": lowest["total"],
         "lowest_essay": lowest["name"],
@@ -524,6 +572,17 @@ def full_tier(results: dict[str, object], started: float) -> list[str]:
                 f"{label}: {len(excluded)} essay run(s) did not complete and were "
                 f"not graded ({excluded[0].get('essay')}: "
                 f"{excluded[0].get('stopped_because') or excluded[0].get('outcome')})"
+            )
+        reshaped = report.get("reshaped") or []
+        if reshaped:
+            # Ungated runs are reported and not gated on their SCORE. This is
+            # not a score. A document that came back a different shape is a
+            # failure at any mean, including a perfect one.
+            first = reshaped[0]
+            failures.append(
+                f"{label}: {len(reshaped)} essay run(s) changed the document's "
+                f"paragraph count ({first.get('essay')}: "
+                f"{first.get('paragraphs_before')} -> {first.get('paragraphs_after')})"
             )
         if not gated:
             # Reported, never gated. Said out loud on every run so a reader
