@@ -1644,11 +1644,20 @@ class RewritePalette(QDialog):
                 "answer_abandoned_source", section=str(suggestion_id)[:8]
             )
             logger.info("Writing HUD answer refused: it abandoned its section")
+            # Says what actually happens. The wording carried over from an
+            # earlier version of this branch, which restored the card before
+            # showing the message, so "showing the built-in correction" was
+            # true of it. This path does the opposite: _show_review_suggestion
+            # CLEARS the pane for a section in _ai_failed_ids and heads it "AI
+            # correction not ready", deliberately, so a rules repair is never
+            # mistaken for an AI one. The message is set assertively and is
+            # read out by a screen reader, so promising text that is not on
+            # screen is worse than saying nothing.
             self.show_sentence_error(
                 attempt_id,
                 suggestion_id,
-                "The rewrite lost this paragraph's meaning. Showing the "
-                "built-in correction.",
+                "The rewrite lost this paragraph's meaning. Retry the AI or "
+                "dismiss this section.",
             )
             return
         self._ai_attempts.pop(attempt, None)
@@ -1860,6 +1869,15 @@ class RewritePalette(QDialog):
             # worse, so the request is dropped, and the failure message above
             # is what the writer sees instead.
             self._pending_tone_rewrite = ""
+        # The series bar counts terminal failures as progress, so a failure
+        # moves it - but only if something republishes it. The prefetch below
+        # does that, and only on the path where it actually issues a request
+        # (_request_next_ai_prefetch reaches _update_series_progress after the
+        # request is built). When the LAST outstanding section fails there is
+        # nothing left to request, so the bar stopped one short and stayed
+        # there. Republish here, where every terminal outcome for a section
+        # passes, rather than relying on there being more work to do.
+        self._update_series_progress()
         self._render_suggestions()
         self._set_status(message, assertive=True)
         current = self._current_review_suggestion()

@@ -132,12 +132,105 @@ def test_a_section_never_carries_a_paragraph_mark_even_for_a_greedy_edit():
 
 
 def test_sections_still_cover_the_edit_they_were_built_for():
-    """Clamping must not lose the correction, only the mark."""
+    """Clamping must not lose the correction, only the mark.
+
+    This asserted only that SOME section changed and that each section quoted
+    its own text, and an adversarial review showed it passing against the
+    unfixed code - decoration, in the exact sense CLAUDE.md names. The
+    assertion that matters is the function's own contract: an edit can always
+    be placed, and placed in exactly one section. Only an edit that carries a
+    mark may be refused, and it must be refused loudly.
+    """
     edits = WritingSuggestionEngine().analyze(ESSAY_16_TAIL)
     sections = _group_sentence_suggestions(ESSAY_16_TAIL, edits)
 
     assert sections
-    changed = [section for section in sections if section.has_changes]
-    assert changed, "every correction for this text was dropped"
     for section in sections:
         assert ESSAY_16_TAIL[section.start : section.end] == section.original
+
+    for edit in edits:
+        holding = [
+            section
+            for section in sections
+            if section.start <= edit.start and edit.end <= section.end
+        ]
+        carries_mark = bool(
+            set("\r\n") & set(ESSAY_16_TAIL[edit.start : edit.end])
+        )
+        if carries_mark:
+            assert not holding, (
+                f"edit [{edit.start},{edit.end}) carries a paragraph mark and "
+                f"was filed under a section anyway, which is how the mark gets "
+                f"written away"
+            )
+        else:
+            assert len(holding) == 1, (
+                f"edit [{edit.start},{edit.end}) landed in {len(holding)} "
+                f"sections; the contract is exactly one"
+            )
+
+
+def test_an_edit_that_cannot_be_placed_is_dropped_loudly_and_privately():
+    """The split makes this path fire in normal use for the first time.
+
+    An edit that carries a mark now matches no section. Nothing downstream
+    reads that, so if it were silent the correction would vanish with no trace
+    for the writer, the harness or the suite. It is logged - and the log must
+    not carry the writer's words, which is a rule this project states flatly.
+    """
+    import logging
+
+    mark = ESSAY_16_TAIL.index("\r")
+    greedy = _Edit(
+        start=mark - 10,
+        end=mark + 1,
+        original=ESSAY_16_TAIL[mark - 10 : mark + 1],
+        replacement="ification\r",
+    )
+
+    logger = logging.getLogger("echo_link_app.review_spans")
+    records: list[logging.LogRecord] = []
+
+    class _Catch(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    handler = _Catch()
+    logger.addHandler(handler)
+    try:
+        sections = _group_sentence_suggestions(ESSAY_16_TAIL, [greedy])
+    finally:
+        logger.removeHandler(handler)
+
+    assert not any(
+        section.start <= greedy.start and greedy.end <= section.end
+        for section in sections
+    )
+    said = [r for r in records if "found no section" in r.getMessage()]
+    assert said, "the correction was dropped in silence"
+    for record in said:
+        message = record.getMessage()
+        assert str(greedy.original) not in message
+        assert "material identification" not in message
+
+
+def test_the_guard_holds_in_the_shape_the_app_actually_analyses():
+    """Word gives CR; Qt gives the engine LF, and the two are not the same test.
+
+    `show_capture` round-trips the capture through a Qt text widget, which
+    rewrites every CR to LF before `_analyze_suggestions` ever sees it. The
+    first version of these tests used CR throughout, so they exercised a shape
+    the product never analyses - and at least one rule's separator class
+    matches LF but not a bare CR, so a whole family of straddling edits was
+    invisible to them.
+    """
+    lf_text = ESSAY_16_TAIL.replace("\r", "\n")
+    edits = WritingSuggestionEngine().analyze(lf_text)
+    sections = _group_sentence_suggestions(lf_text, edits)
+
+    assert sections
+    assert not [
+        section
+        for section in sections
+        if set("\r\n") & set(section.original)
+    ]
