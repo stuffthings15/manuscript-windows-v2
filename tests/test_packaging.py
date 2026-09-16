@@ -126,6 +126,15 @@ def test_installer_has_safe_unique_identity():
     assert "[UninstallDelete]" not in text
 
 
+def test_installer_shows_the_eula_before_install_can_proceed() -> None:
+    text = (ROOT / "packaging" / "EchoLink.iss").read_text(encoding="utf-8")
+    assert "LicenseFile=..\\resources\\EULA.txt" in text
+
+    eula = (ROOT / "resources" / "EULA.txt").read_text(encoding="utf-8")
+    assert "END USER LICENSE AGREEMENT" in eula
+    assert "I accept the agreement" in eula
+
+
 def test_windows_file_metadata_uses_public_manuscript_brand() -> None:
     text = (ROOT / "packaging" / "manuscript_version_info.txt").read_text(
         encoding="utf-8"
