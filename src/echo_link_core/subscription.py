@@ -12,10 +12,11 @@ import urllib.request
 from ctypes import wintypes
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlsplit
 
 from .data_protection import validate_local_data_file
+from .origin_client import OriginBoundClient
 from .paths import data_root, resource_path
 
 
@@ -103,10 +104,23 @@ class _DenyRedirect(urllib.request.HTTPRedirectHandler):
         raise SubscriptionError("The subscription service returned an unsafe redirect.")
 
 
-class EntitlementClient:
-    def __init__(self, origin: str, *, opener: Callable[..., Any] | None = None) -> None:
-        self.origin = _validate_origin(origin)
-        self._opener = opener
+def _validate_origin(origin: str) -> str:
+    parsed = urlsplit(origin)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("Subscription origin must be a bare HTTPS origin.")
+    return f"https://{parsed.hostname}" + (f":{parsed.port}" if parsed.port else "")
+
+
+class EntitlementClient(OriginBoundClient):
+    _validate_origin = staticmethod(_validate_origin)
 
     def validate(self, license_key: str, device_hash: str, *, timeout: float = 10.0) -> EntitlementResult:
         key = normalize_license_key(license_key)
@@ -235,21 +249,6 @@ def normalize_license_key(value: str) -> str:
     if not LICENSE_PATTERN.fullmatch(key):
         raise SubscriptionError("Enter the complete Manuscript license key.")
     return key
-
-
-def _validate_origin(origin: str) -> str:
-    parsed = urlsplit(origin)
-    if (
-        parsed.scheme != "https"
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path not in {"", "/"}
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise ValueError("Subscription origin must be a bare HTTPS origin.")
-    return f"https://{parsed.hostname}" + (f":{parsed.port}" if parsed.port else "")
 
 
 def _blob(data: bytes) -> tuple[_DataBlob, Any]:
