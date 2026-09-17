@@ -21,7 +21,11 @@ from .correction import (
     _protect_text,
     _protected_value_pattern,
 )
-from .local_transport import LocalTransportError, LoopbackJSONTransport
+from .local_transport import (
+    LocalTransportConnectionError,
+    LocalTransportError,
+    LoopbackJSONTransport,
+)
 from .meaning_diff import edit_distance, unexplained_losses
 from .polish_quality import tone_contract_instruction
 from .models import OLLAMA_KEEP_ALIVE
@@ -342,6 +346,24 @@ class WritingRuntimeStatus:
     backend: str
     model_bytes: int = 0
     gpu_bytes: int = 0
+
+
+# This is the ONE place in the product allowed to name Ollama in text a
+# writer sees. Everywhere else routes AI status through ai_status.py, which
+# deliberately hides runtime names because the bundled correction engine is
+# meant to be invisible infrastructure. The writing assistant (Translate and
+# the other commands run() serves) is different in kind: it has no bundled
+# fallback at all, Ollama is an optional install the writer chooses to add,
+# and hiding the name here does not protect anyone - it just turns a fixable
+# "go install this" into an unfixable "retry", which measurably happened
+# (see ai_status.py's generic "unavailable" branch, which this message would
+# otherwise fall into).
+OLLAMA_NOT_RUNNING_MESSAGE = (
+    "The writing assistant is optional and needs Ollama installed and running "
+    "on this computer. It does not affect Proofread or other corrections. "
+    "Install Ollama from ollama.com, then open Settings > Writing Models to "
+    "choose a model."
+)
 
 
 class LocalWritingAssistant:
@@ -1076,6 +1098,8 @@ class LocalWritingAssistant:
                 },
                 timeout=max(0.2, float(timeout)),
             )
+        except LocalTransportConnectionError as exc:
+            raise RuntimeError(OLLAMA_NOT_RUNNING_MESSAGE) from exc
         except LocalTransportError as exc:
             raise RuntimeError(f"Local AI unavailable: {exc}") from exc
         payload = _require_exact_response_model(payload, model)

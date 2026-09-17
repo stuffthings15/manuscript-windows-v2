@@ -6,6 +6,7 @@ import re
 import pytest
 
 from echo_link_core.selected_text import (
+    OLLAMA_NOT_RUNNING_MESSAGE,
     LocalWritingAssistant,
     _apply_fast_proofread_rules,
     _apply_safe_caveman_splits,
@@ -1356,6 +1357,36 @@ def test_local_writing_assistant_keeps_model_warm_for_five_idle_minutes(monkeypa
     )
 
     assert result.text == "The draft is ready."
+
+
+def test_a_generation_request_when_ollama_is_not_running_names_it_and_says_how_to_fix_it(
+    monkeypatch,
+):
+    """run() is the one place allowed to name Ollama to a writer.
+
+    Everything else routes through ai_status.py, which hides runtime names
+    because the bundled correction engine is meant to be invisible. This
+    optional assistant has no bundled fallback, so hiding the name here
+    turned a fixable "go install this" into an unfixable "retry" - the
+    generic LocalTransportError branch this used to fall into.
+    """
+
+    def refused(request, timeout):
+        if request.full_url.endswith("/api/ps"):
+            return _Response({"models": []})
+        raise ConnectionRefusedError("No connection could be made")
+
+    monkeypatch.setattr("echo_link_core.local_transport._open_request", refused)
+
+    with pytest.raises(RuntimeError) as error:
+        LocalWritingAssistant().run(
+            "the draft are ready",
+            command="Proofread",
+            model="local-model",
+        )
+
+    assert str(error.value) == OLLAMA_NOT_RUNNING_MESSAGE
+    assert "ollama" in str(error.value).casefold()
 
 
 def test_local_writing_assistant_loads_qwen_and_requires_real_gpu_vram(monkeypatch):
