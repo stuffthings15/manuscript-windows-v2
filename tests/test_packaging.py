@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -353,3 +354,102 @@ def test_signing_uses_sha256_timestamping_and_trust_verification() -> None:
         "/all",
         str(artifact),
     ]
+
+
+def test_production_installer_requires_a_release_download_base_url() -> None:
+    resolve = getattr(build_tool, "_release_download_base_url", None)
+    assert callable(resolve)
+
+    with pytest.raises(SystemExit, match="release download base URL"):
+        resolve("", testing_unlocked=False, environ={})
+    assert resolve("", testing_unlocked=True, environ={}) == ""
+    assert (
+        resolve("https://releases.example.com", testing_unlocked=False, environ={})
+        == "https://releases.example.com"
+    )
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://releases.example.com",
+        "https://localhost",
+        "https://releases.example.com/path",
+        "https://releases.example.invalid",
+    ],
+)
+def test_production_installer_rejects_a_nonpublic_release_download_base_url(
+    base_url: str,
+) -> None:
+    with pytest.raises(SystemExit, match="public HTTPS origin"):
+        build_tool._release_download_base_url(
+            base_url, testing_unlocked=False, environ={}
+        )
+
+
+def test_release_manifest_sha256_matches_the_signed_installer_exactly(
+    tmp_path: Path,
+) -> None:
+    """update_check.py verifies this hash before trusting a download.
+
+    Computing it before signing, or from a different copy of the file, would
+    publish a checksum that never matches what a writer actually downloads.
+    """
+    installer = tmp_path / "ManuscriptV2Setup.exe"
+    installer.write_bytes(b"signed installer bytes")
+
+    manifest_path = build_tool._write_release_manifest(
+        installer,
+        testing_unlocked=False,
+        download_base_url="https://releases.example.com",
+    )
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["sha256"] == hashlib.sha256(installer.read_bytes()).hexdigest()
+    assert manifest["downloadUrl"] == (
+        "https://releases.example.com/releases/ManuscriptV2Setup.exe"
+    )
+    from echo_link_core.version import PRODUCT_VERSION
+
+    assert manifest["version"] == PRODUCT_VERSION
+
+
+def test_release_manifest_download_url_stays_under_the_release_origin(
+    tmp_path: Path,
+) -> None:
+    """echo_link_core.update_check._validate_download_url pins the download
+
+    to the same host and port as the update-check origin, so a manifest
+    naming a different host would be refused by every client that reads it.
+    """
+    installer = tmp_path / "ManuscriptV2Setup.exe"
+    installer.write_bytes(b"x")
+
+    manifest = json.loads(
+        build_tool._write_release_manifest(
+            installer,
+            testing_unlocked=False,
+            download_base_url="https://releases.example.com:8443",
+        ).read_text(encoding="utf-8")
+    )
+
+    assert manifest["downloadUrl"].startswith("https://releases.example.com:8443/")
+
+
+def test_testing_unlocked_release_manifest_never_raises_without_a_base_url(
+    tmp_path: Path,
+) -> None:
+    installer = tmp_path / "ManuscriptV2TestingSetup.exe"
+    installer.write_bytes(b"test build bytes")
+
+    manifest = json.loads(
+        build_tool._write_release_manifest(
+            installer,
+            testing_unlocked=True,
+            download_base_url="",
+        ).read_text(encoding="utf-8")
+    )
+
+    assert manifest["downloadUrl"].endswith(
+        "replace-before-release.invalid/releases/ManuscriptV2TestingSetup.exe"
+    )

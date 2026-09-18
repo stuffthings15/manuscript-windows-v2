@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import ipaddress
 import importlib.util
 import json
@@ -46,6 +47,17 @@ def parser() -> argparse.ArgumentParser:
             "Path to an Azure Trusted Signing metadata.json. Overrides the "
             "MANUSCRIPT_AZURE_SIGNING_METADATA environment variable. Requires "
             "MANUSCRIPT_AZURE_SIGNING_DLIB to point at Azure.CodeSigning.Dlib.dll."
+        ),
+    )
+    result.add_argument(
+        "--release-download-base-url",
+        default="",
+        help=(
+            "Public HTTPS origin the built installer will be uploaded under, e.g. "
+            "https://releases.example.com. Overrides "
+            "MANUSCRIPT_RELEASE_DOWNLOAD_BASE_URL. Required with --installer "
+            "unless --testing-unlocked; used to write installer-output/"
+            "release-manifest.json for echo_link_core.update_check."
         ),
     )
     return result
@@ -121,6 +133,13 @@ def main(argv: list[str] | None = None) -> int:
             print(str(ROOT / "packaging" / "EchoLink.iss"))
         return 0
 
+    release_download_base_url = ""
+    if args.installer:
+        release_download_base_url = _release_download_base_url(
+            args.release_download_base_url,
+            testing_unlocked=args.testing_unlocked,
+            environ=os.environ,
+        )
     signing = _resolve_signing(args, os.environ)
     signtool = _find_signtool() if signing else None
     if signing and signtool is None:
@@ -181,6 +200,14 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"Build did not create {installer}")
         if signing and signtool:
             _sign_files([installer], signing, signtool)
+        # After signing, not before: the sha256 published here must match the
+        # exact bytes a writer downloads and update_check.py verifies against.
+        manifest = _write_release_manifest(
+            installer,
+            testing_unlocked=args.testing_unlocked,
+            download_base_url=release_download_base_url,
+        )
+        print(manifest)
         print(installer)
     print(executable)
     return 0
@@ -415,6 +442,63 @@ def _write_subscription_manifest(*, testing_unlocked: bool = False) -> Path:
                 "build_channel": (
                     "testing-unlocked" if testing_unlocked else "production"
                 ),
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return target
+
+
+def _release_download_base_url(value: str, *, testing_unlocked: bool, environ: Mapping[str, str]) -> str:
+    supplied = (value or environ.get("MANUSCRIPT_RELEASE_DOWNLOAD_BASE_URL", "")).strip()
+    if not supplied:
+        if testing_unlocked:
+            return ""
+        raise SystemExit(
+            "Production installers require a public HTTPS release download base URL. "
+            "Pass --release-download-base-url or set MANUSCRIPT_RELEASE_DOWNLOAD_BASE_URL."
+        )
+    if not _is_public_https_origin(supplied):
+        raise SystemExit(
+            "The release download base URL must be a public HTTPS origin, no path."
+        )
+    return supplied
+
+
+def _write_release_manifest(
+    installer: Path,
+    *,
+    testing_unlocked: bool,
+    download_base_url: str,
+) -> Path:
+    # update_check.UpdateClient pins a download URL to the same host and port
+    # as the update-check origin (see _validate_download_url), so this manifest
+    # must publish a URL under that same origin - a fixed /releases/<file> path
+    # keeps that a promise this function can enforce rather than a convention
+    # a release script could get wrong.
+    from echo_link_core.version import PRODUCT_VERSION
+
+    if not re.fullmatch(r"\d+\.\d+\.\d+", PRODUCT_VERSION):
+        raise SystemExit(
+            "PRODUCT_VERSION must be MAJOR.MINOR.PATCH to publish a release manifest."
+        )
+    sha256 = hashlib.sha256(installer.read_bytes()).hexdigest()
+    base = download_base_url.strip()
+    download_url = (
+        f"{base}/releases/{installer.name}"
+        if base
+        else f"https://replace-before-release.invalid/releases/{installer.name}"
+    )
+    target = installer.parent / "release-manifest.json"
+    target.write_text(
+        json.dumps(
+            {
+                "version": PRODUCT_VERSION,
+                "downloadUrl": download_url,
+                "sha256": sha256,
+                "notes": "",
             },
             indent=2,
         )
