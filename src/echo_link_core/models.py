@@ -70,6 +70,13 @@ class DictationSettings:
     whisper_mode: bool = False
     append_trailing_space: bool = True
     local_refinement_enabled: bool = True
+    # Let a dictated name be checked against the document it is being typed
+    # into. Without this the corrector sees one utterance and nothing else, so
+    # a cited author's name it has never met reads as a misspelling and gets
+    # "corrected" into something the writer did not say. The document is only
+    # evidence about which capitalised words are real names; no document text
+    # is ever sent to the model.
+    document_context_enabled: bool = True
     # Empty means the hardware policy must choose an accepted local AI pack.
     ollama_model: str = ""
     polish_mode: PolishMode = PolishMode.AUTO

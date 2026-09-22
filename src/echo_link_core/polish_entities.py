@@ -625,3 +625,73 @@ def _sentence_initial_common_word(
         if before and not re.search(r"""[.!?]['"\)\]]*$""", before):
             return False
     return True
+
+
+def repair_dictated_names(text: str, document: str) -> tuple[str, int]:
+    """Spell a dictated name the way the document the writer is in already spells it.
+
+    The transcriber is the weak link, not the corrector. A name the writer has
+    already typed - a cited author, a subject term - comes back from speech one
+    or two letters wrong, and every stage downstream is then defending the
+    wrong word. Measured 2026-09-21: a correctly spelled name survives
+    deterministic cleanup and the entity protector untouched, so protection was
+    never the gap. This is.
+
+    Three gates, each of which exists because removing it breaks something
+    measured:
+
+    - The token must not be an ordinary English word. Without this the guard
+      runs backwards: "When" sits one edit from "Wen" and would be rewritten
+      into a typo, which is the 2026-08-07 incident in reverse.
+    - The match must be unique. Two document names an equal distance away is
+      not evidence, it is a coin flip.
+    - _same_name_respelled decides sameness, not raw distance. It already
+      refuses "Malik" -> "Mali", a truncation that reads as one cheap edit and
+      is a different person.
+
+    Coverage is orthographic only. A phonetic re-spelling - "Cannaman" for
+    "Kahneman", "Fuko" for "Foucault" - is many edits away and out of reach
+    here; this repairs the near miss, not the mishearing. Returns the text and
+    the number of repairs, never the words, because this path must not log what
+    the writer said.
+    """
+    source = str(text or "")
+    if not source.strip() or not str(document or "").strip():
+        return source, 0
+    inventory = {
+        name
+        for name in _named_entities(document, document)
+        if " " not in name and len(name) >= 4
+    }
+    if not inventory:
+        return source, 0
+
+    repairs = 0
+
+    def _repair(match: "re.Match[str]") -> str:
+        nonlocal repairs
+        token = match.group(0)
+        # "Petrova's argument" is how a citation is usually spoken, and the
+        # possessive is part of the token. Comparing "pethrova's" against
+        # "petrova" puts a correctable name two edits out of reach, so the
+        # suffix comes off for the comparison and goes back on the repair.
+        stem, suffix = token, ""
+        if len(token) > 2 and token[-2:].casefold() == "'s":
+            stem, suffix = token[:-2], token[-2:]
+        if len(stem) < 4 or _is_ordinary_english_word(stem):
+            return token
+        folded = stem.casefold()
+        if any(folded == name.casefold() for name in inventory):
+            return token
+        limit = 1 if len(folded) < 8 else 2
+        matches = {
+            name
+            for name in inventory
+            if _same_name_respelled(folded, name.casefold(), limit)
+        }
+        if len(matches) != 1:
+            return token
+        repairs += 1
+        return matches.pop() + suffix
+
+    return re.sub(r"[A-Za-z][A-Za-z']*", _repair, source), repairs

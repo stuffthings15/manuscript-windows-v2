@@ -11,9 +11,17 @@ from .developer_text import format_developer_text
 from .learning import apply_learned_corrections
 from .local_transport import LocalTransportError, LoopbackJSONTransport
 from .models import DictationMode, DictationSettings, OLLAMA_KEEP_ALIVE
+from .polish_entities import _runtime_opaque_entities, repair_dictated_names
 
 
 logger = logging.getLogger(__name__)
+
+# How much of the surrounding document is worth scanning for names. Dictation
+# is latency-bound in a way the proofread path is not: the measured baseline is
+# 2.01s mean refinement, 0.8s warm, and a whole dictation runs in 1.1 to 1.6s.
+# The HUD reads up to 500,000 characters; scanning that per utterance would
+# spend the budget on evidence-gathering for a handful of names.
+MAX_DOCUMENT_CONTEXT_CHARACTERS = 4_000
 
 _QUESTION_START = re.compile(
     r"^(?:who|what|when|where|why|how|can|could|would|should|will|do|does|did|is|are|am|was|were|have|has|had)\b",
@@ -481,6 +489,8 @@ class CorrectionPipeline:
         self,
         raw_text: str,
         mode: DictationMode | None = None,
+        *,
+        document_context: str = "",
     ) -> CorrectionResult:
         selected_mode = mode or self._settings.mode
         snippet = expand_snippet(raw_text, dict(self._snippet_provider() or {}))
@@ -495,14 +505,29 @@ class CorrectionPipeline:
                 text += " "
             return CorrectionResult(text, "developer")
         text = deterministic_cleanup(raw_text, vocabulary)
+        # Before learning, so an explicit learned correction still has the last
+        # word, and in the deterministic pass rather than beside the model so
+        # that Fast mode - which never calls a writing model at all - gets the
+        # repair too. Fast is where a mis-heard name is least defended.
+        text = self._repair_names(text, document_context)
         text = self._apply_learning(text, vocabulary)
         if self._settings.append_trailing_space and text and not text.endswith(" "):
             text += " "
         return CorrectionResult(text, "deterministic")
 
-    def correct(self, raw_text: str, mode: DictationMode | None = None) -> CorrectionResult:
+    def correct(
+        self,
+        raw_text: str,
+        mode: DictationMode | None = None,
+        *,
+        document_context: str = "",
+    ) -> CorrectionResult:
         selected_mode = mode or self._settings.mode
-        base = self.deterministic(raw_text, selected_mode)
+        base = self.deterministic(
+            raw_text,
+            selected_mode,
+            document_context=document_context,
+        )
         if base.source == "snippet":
             return base
         if selected_mode in (DictationMode.FAST, DictationMode.DEVELOPER):
@@ -523,7 +548,11 @@ class CorrectionPipeline:
         refined = coordinator.refine(
             base.text.strip(),
             model=model,
-            protected_terms=tuple(vocabulary.values()) + tuple(learned.values()),
+            protected_terms=(
+                tuple(vocabulary.values())
+                + tuple(learned.values())
+                + self._document_entities(base.text, document_context)
+            ),
             timeout=self._settings.correction_timeout_seconds,
         )
         if refined.source not in {"ollama", "ai"}:
@@ -533,6 +562,55 @@ class CorrectionPipeline:
         if self._settings.append_trailing_space and final and not final.endswith(" "):
             final += " "
         return CorrectionResult(final, refined.source, refined.warning)
+
+    def _repair_names(self, text: str, document_context: str) -> str:
+        """Spell a dictated name the way the document already spells it."""
+        if not self._settings.document_context_enabled:
+            return text
+        context = str(document_context or "").strip()
+        if not context:
+            return text
+        repaired, repairs = repair_dictated_names(
+            text,
+            context[-MAX_DOCUMENT_CONTEXT_CHARACTERS:],
+        )
+        if repairs:
+            # The count, never the words. This path may not log what was said.
+            logger.info("Dictation name repair applied repairs=%d", repairs)
+        return repaired
+
+    def _document_entities(self, text: str, document_context: str) -> tuple[str, ...]:
+        """Names the writer just dictated, corroborated by the document around them.
+
+        The entities come from the UTTERANCE; the document is only evidence
+        about which capitalised words are real names rather than typos. That
+        distinction is the whole design. A document-as-prompt-context version
+        of this was built for the proofread path on 2026-08-07, measured at 0,
+        240 and 800 characters, and reverted unshipped: it did nothing for
+        "Wether" or "Cair" and made "esay" worse. Protected terms are a hard
+        constraint the model cannot rewrite, which is a different mechanism
+        from the hint that failed.
+
+        _runtime_opaque_entities is reused rather than reimplemented because it
+        is already tuned against the opposite failure. It tokenizes single-word
+        and versioned names only, because tokenizing every long name "made
+        otherwise-correct generations fail before validation" - and this path
+        punishes that harder than the proofread path does: one missing token
+        drops the entire refinement (see refine(), which returns the
+        deterministic text on a protected-token mismatch) and the writer is
+        never told.
+        """
+        if not self._settings.document_context_enabled:
+            return ()
+        context = str(document_context or "").strip()
+        if not context:
+            return ()
+        # _document_occurrences scans the document once per candidate word, so
+        # the cost is O(candidates x context). The tail is the text nearest the
+        # caret for the ordinary case of dictating at the end of what you have
+        # written; a page captured around a caret mid-document is bounded the
+        # same way rather than scanned in full.
+        return _runtime_opaque_entities(text, context[-MAX_DOCUMENT_CONTEXT_CHARACTERS:])
 
     def _apply_learning(self, text: str, vocabulary: dict[str, str]) -> str:
         if not self._settings.personal_learning_enabled:

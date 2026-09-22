@@ -53,10 +53,10 @@ class BlockingCorrection:
         self.max_concurrent = 0
         self._lock = threading.Lock()
 
-    def deterministic(self, raw_text: str, *_args) -> CorrectionResult:
+    def deterministic(self, raw_text: str, *_args, **_kwargs) -> CorrectionResult:
         return CorrectionResult(f"deterministic {raw_text}", "deterministic")
 
-    def correct(self, raw_text: str, _mode=None) -> CorrectionResult:
+    def correct(self, raw_text: str, _mode=None, **_kwargs) -> CorrectionResult:
         with self._lock:
             self.calls.append(raw_text)
             self.concurrent += 1
@@ -78,10 +78,10 @@ class BlockingCorrection:
 
 
 class InstantCorrection:
-    def deterministic(self, raw_text: str, *_args) -> CorrectionResult:
+    def deterministic(self, raw_text: str, *_args, **_kwargs) -> CorrectionResult:
         return CorrectionResult(f"deterministic {raw_text}", "deterministic")
 
-    def correct(self, raw_text: str, _mode=None) -> CorrectionResult:
+    def correct(self, raw_text: str, _mode=None, **_kwargs) -> CorrectionResult:
         return CorrectionResult(f"corrected {raw_text}", "ollama")
 
     def update_settings(self, _settings) -> None:

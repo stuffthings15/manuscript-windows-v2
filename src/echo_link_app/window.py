@@ -10,6 +10,7 @@ import threading
 import logging
 import math
 import time
+from contextlib import nullcontext
 from datetime import datetime
 from difflib import ndiff
 
@@ -116,6 +117,12 @@ from echo_link_core.windows_selection import (
 
 
 logger = logging.getLogger(__name__)
+
+# The HUD reads up to 500,000 characters because it has to correct all of it.
+# This read only has to recognise how a name is spelled, and it happens once
+# per dictation, so it asks for far less. correction.py bounds what it actually
+# scans again on its own side.
+DOCUMENT_CONTEXT_CHARACTERS = 20_000
 
 
 
@@ -310,6 +317,7 @@ class EchoLinkWindow(QMainWindow):
             store,
             event_callback=self.bridge.session_event.emit,
             level_callback=self.bridge.level_changed.emit,
+            document_context_provider=self._read_document_context,
         )
         self.hotkey: GlobalPushToTalk | None = None
         self.hands_free_hotkey: GlobalPushToTalk | None = None
@@ -1518,6 +1526,31 @@ class EchoLinkWindow(QMainWindow):
 
     def _capture_selected_text_for_palette(self) -> None:
         self._capture_selected_text_for_review(show_palette=True)
+
+    def _read_document_context(self, target_window) -> str:
+        """Read the document being dictated into, for name evidence only.
+
+        Called by the engine on its own thread the moment recording starts, so
+        the UI Automation cost is spent while the writer is still speaking
+        rather than between the last word and the text appearing. That ordering
+        is the point: a read on the dictation path cost 0.5 seconds and delayed
+        the activation cue on 2026-07-29.
+
+        The text never leaves this machine and is never sent to the model. It
+        is used only to decide how a name the writer already uses is spelled.
+        """
+        if not sys.platform.startswith("win"):
+            return ""
+        handle = int(getattr(target_window, "handle", 0) or 0)
+        if handle <= 0:
+            return ""
+        reader = WindowsSelectionReader(max_characters=DOCUMENT_CONTEXT_CHARACTERS)
+        context_factory = getattr(reader, "automation_thread_context", None)
+        context = context_factory() if callable(context_factory) else nullcontext()
+        with context:
+            detected = reader.read_document()
+        record = getattr(detected, "record", None)
+        return str(getattr(record, "text", "") or "")
 
     def _capture_selected_text_for_review(self, *, show_palette: bool) -> None:
         logger.info("Selected-text hotkey/capture requested")

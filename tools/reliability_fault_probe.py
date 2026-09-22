@@ -81,13 +81,13 @@ class FaultCorrection:
         self.fail_deterministic = False
         self.fail_refinement = False
 
-    def deterministic(self, raw_text: str) -> CorrectionResult:
+    def deterministic(self, raw_text: str, *_args, **_kwargs) -> CorrectionResult:
         if self.fail_deterministic:
             raise RuntimeError("injected deterministic correction failure")
         text = "Deterministic local text. " if raw_text.strip() else ""
         return CorrectionResult(text, "deterministic")
 
-    def correct(self, _raw_text: str, _mode: DictationMode) -> CorrectionResult:
+    def correct(self, _raw_text: str, _mode: DictationMode, **_kwargs) -> CorrectionResult:
         if self.fail_refinement:
             raise RuntimeError("injected local refinement failure")
         return CorrectionResult("Refined local text. ", "ollama")
