@@ -11,7 +11,11 @@ from .developer_text import format_developer_text
 from .learning import apply_learned_corrections
 from .local_transport import LocalTransportError, LoopbackJSONTransport
 from .models import DictationMode, DictationSettings, OLLAMA_KEEP_ALIVE
-from .polish_entities import _runtime_opaque_entities, repair_dictated_names
+from .polish_entities import (
+    _runtime_opaque_entities,
+    document_name_inventory,
+    repair_dictated_names,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -566,17 +570,25 @@ class CorrectionPipeline:
     def _repair_names(self, text: str, document_context: str) -> str:
         """Spell a dictated name the way the document already spells it."""
         if not self._settings.document_context_enabled:
+            logger.info("Dictation name repair skipped reason=setting-off")
             return text
         context = str(document_context or "").strip()
         if not context:
+            # Logged as its own case on purpose. The first real dictation
+            # against this feature repaired nothing, and the log could not say
+            # whether the repair had run and found nothing or had never had a
+            # document to work from - the two look identical when only a
+            # successful repair is logged. Counts only, never the words.
+            logger.info("Dictation name repair skipped reason=no-document-context")
             return text
-        repaired, repairs = repair_dictated_names(
-            text,
-            context[-MAX_DOCUMENT_CONTEXT_CHARACTERS:],
+        bounded = context[-MAX_DOCUMENT_CONTEXT_CHARACTERS:]
+        repaired, repairs = repair_dictated_names(text, bounded)
+        logger.info(
+            "Dictation name repair ran context_characters=%d names_in_document=%d repairs=%d",
+            len(bounded),
+            len(document_name_inventory(bounded)),
+            repairs,
         )
-        if repairs:
-            # The count, never the words. This path may not log what was said.
-            logger.info("Dictation name repair applied repairs=%d", repairs)
         return repaired
 
     def _document_entities(self, text: str, document_context: str) -> tuple[str, ...]:

@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "run_role": "current",
-  "generated_at_utc": "2026-07-20T00:18:50.974203+00:00",
+  "generated_at_utc": "2026-09-23T22:36:17.334049+00:00",
   "corpus_name": "Echo-Link Capstone Gold Corpus",
   "automated_result": {
     "case_count": 20,
@@ -9,8 +9,8 @@
     "exact_match_rate": 1.0,
     "protected_content_pass_count": 20,
     "protected_content_pass_rate": 1.0,
-    "median_cleanup_latency_ms": 0.0672,
-    "p95_cleanup_latency_ms": 0.0863,
+    "median_cleanup_latency_ms": 0.063,
+    "p95_cleanup_latency_ms": 0.0833,
     "repeat_count_per_case": 25
   },
   "human_metrics": {
@@ -27,7 +27,7 @@
       "exact_match": true,
       "protected_content_pass": true,
       "missing_protected_terms": [],
-      "median_cleanup_latency_ms": 0.0425
+      "median_cleanup_latency_ms": 0.0452
     },
     {
       "id": "prose-02",
@@ -37,7 +37,7 @@
       "exact_match": true,
       "protected_content_pass": true,
       "missing_protected_terms": [],
-      "median_cleanup_latency_ms": 0.0488
+      "median_cleanup_latency_ms": 0.0499
     },
     {
       "id": "prose-03",
@@ -47,7 +47,7 @@
       "exact_match": true,
       "protected_content_pass": true,
       "missing_protected_terms": [],
-      "median_cleanup_latency_ms": 0.0643
+      "median_cleanup_latency_ms": 0.0627
     },
     {
       "id": "question-01",
@@ -57,7 +57,7 @@
       "exact_match": true,
       "protected_content_pass": true,
       "missing_protected_terms": [],
-      "median_cleanup_latency_ms": 0.0571
+      "median_cleanup_latency_ms": 0.052
     },
     {
       "id": "punctuation-01",
@@ -67,7 +67,7 @@
       "exact_match": true,
       "protected_content_pass": true,
       "missing_protected_terms": [],
-      "median_cleanup_latency_ms": 0.0565
+      "median_cleanup_latency_ms": 0.0513
     },
     {
       "id": "paragraph-01",
@@ -77,7 +77,7 @@
       "exact_match": true,
       "protected_content_pass": true,
       "missing_protected_terms": [],
-      "median_cleanup_latency_ms": 0.0706
+      "median_cleanup_latency_ms": 0.0672
     },
     {
       "id": "correction-01",
@@ -87,7 +87,7 @@
       "exact_match": true,
       "protected_content_pass": true,
       "missing_protected_terms": [],
-      "median_cleanup_latency_ms": 0.0572
+      "median_cleanup_latency_ms": 0.0543
     },
     {
       "id": "correction-02",
@@ -97,7 +97,7 @@
       "exact_match": true,
       "protected_content_pass": true,
       "missing_protected_terms": [],
-      "median_cleanup_latency_ms": 0.0813
+      "median_cleanup_latency_ms": 0.0793
     },
     {
       "id": "protected-01",
@@ -107,7 +107,7 @@
       "exact_match": true,
       "protected_content_pass": true,
       "missing_protected_terms": [],
-      "median_cleanup_latency_ms": 0.0648
+      "median_cleanup_latency_ms": 0.057
     },
     {
       "id": "protected-02",
@@ -117,7 +117,7 @@
       "exact_match": true,
       "protected_content_pass": true,
       "missing_protected_terms": [],
-      "median_cleanup_latency_ms": 0.0608
+      "median_cleanup_latency_ms": 0.054
     },
     {
       "id": "protected-03",
@@ -127,7 +127,7 @@
       "exact_match": true,
       "protected_content_pass": true,
       "missing_protected_terms": [],
-      "median_cleanup_latency_ms": 0.0589
+      "median_cleanup_latency_ms": 0.0526
     },
     {
       "id": "protected-04",
@@ -137,7 +137,7 @@
       "exact_match": true,
       "protected_content_pass": true,
       "missing_protected_terms": [],
-      "median_cleanup_latency_ms": 0.0683
+      "median_cleanup_latency_ms": 0.0642
     },
     {
       "id": "vocabulary-01",
@@ -147,7 +147,7 @@
       "exact_match": true,
       "protected_content_pass": true,
       "missing_protected_terms": [],
-      "median_cleanup_latency_ms": 0.0814
+      "median_cleanup_latency_ms": 0.0773
     },
     {
       "id": "developer-01",
@@ -157,7 +157,7 @@
       "exact_match": true,
       "protected_content_pass": true,
       "missing_protected_terms": [],
-      "median_cleanup_latency_ms": 0.0772
+      "median_cleanup_latency_ms": 0.0718
     },
     {
       "id": "developer-02",
@@ -167,7 +167,7 @@
       "exact_match": true,
       "protected_content_pass": true,
       "missing_protected_terms": [],
-      "median_cleanup_latency_ms": 0.065
+      "median_cleanup_latency_ms": 0.0601
     },
     {
       "id": "workflow-01",
@@ -177,7 +177,7 @@
       "exact_match": true,
       "protected_content_pass": true,
       "missing_protected_terms": [],
-      "median_cleanup_latency_ms": 0.0789
+      "median_cleanup_latency_ms": 0.0799
     },
     {
       "id": "list-01",
@@ -187,7 +187,7 @@
       "exact_match": true,
       "protected_content_pass": true,
       "missing_protected_terms": [],
-      "median_cleanup_latency_ms": 0.0703
+      "median_cleanup_latency_ms": 0.0653
     },
     {
       "id": "correction-03",
@@ -197,7 +197,7 @@
       "exact_match": true,
       "protected_content_pass": true,
       "missing_protected_terms": [],
-      "median_cleanup_latency_ms": 0.0664
+      "median_cleanup_latency_ms": 0.0606
     },
     {
       "id": "punctuation-02",
@@ -207,7 +207,7 @@
       "exact_match": true,
       "protected_content_pass": true,
       "missing_protected_terms": [],
-      "median_cleanup_latency_ms": 0.0714
+      "median_cleanup_latency_ms": 0.0665
     },
     {
       "id": "developer-03",
@@ -217,11 +217,11 @@
       "exact_match": true,
       "protected_content_pass": true,
       "missing_protected_terms": [],
-      "median_cleanup_latency_ms": 0.0771
+      "median_cleanup_latency_ms": 0.071
     }
   ],
   "evidence": {
-    "code_commit": "588a7ea3958e2c22ffeae4a9fe70a38a037c5dbd",
+    "code_commit": "3be3d18e66458aa3fc9aad8622547c4bfb8f81d2",
     "corpus_sha256": "7BEC73454BA498DC072808E9414E4A1F1C2E4C094CC651349D6A289F785AA72C"
   }
 }

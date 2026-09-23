@@ -125,3 +125,32 @@ def test_the_setting_turns_it_off_completely():
     )
 
     assert "Pethrova" in result.text
+
+
+def test_the_repair_log_says_what_happened_without_saying_what_was_said(caplog):
+    """The first real dictation could not be diagnosed from the log.
+
+    It repaired nothing, and "ran and found nothing" was indistinguishable
+    from "never had a document", because only a successful repair was logged.
+    Both cases now say so - in counts, never in words, because this path may
+    not log what the writer dictated or what their document contains.
+    """
+    import logging
+
+    pipeline = CorrectionPipeline(
+        lambda: {},
+        DictationSettings(mode=DictationMode.FAST),
+    )
+
+    with caplog.at_level(logging.INFO, logger="echo_link_core.correction"):
+        pipeline.deterministic("I agree with Pethrova", document_context=DOCUMENT)
+        pipeline.deterministic("I agree with Pethrova")
+
+    text = caplog.text
+    assert "context_characters=" in text
+    assert "repairs=1" in text
+    assert "reason=no-document-context" in text
+
+    # Nothing the writer said, and nothing their document says.
+    for secret in ("Pethrova", "Petrova", "Kahneman", "Tversky", "replication"):
+        assert secret not in text

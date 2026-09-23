@@ -991,9 +991,16 @@ class DictationEngine:
                 # A document that cannot be read is the ordinary case, not a
                 # fault: the target may be a terminal, a password box, or an
                 # application with no text pattern. Dictation must proceed with
-                # no context rather than fail.
-                logger.debug("Document context unavailable", exc_info=True)
+                # no context rather than fail. Logged at info, not debug,
+                # because the first real dictation against this feature could
+                # not be diagnosed from the log at all - characters only,
+                # never the document text.
+                logger.info("Dictation document context failed", exc_info=True)
                 return
+            logger.info(
+                "Dictation document context captured characters=%d",
+                len(context),
+            )
             with self._document_context_lock:
                 if self._document_context[0] == session_id:
                     self._document_context = (session_id, context)

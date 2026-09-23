@@ -627,6 +627,30 @@ def _sentence_initial_common_word(
     return True
 
 
+@lru_cache(maxsize=8)
+def document_name_inventory(document: str) -> frozenset[str]:
+    """The single-word names a document already uses, as spelled there.
+
+    Cached because it is asked for twice per dictation - once to repair and
+    once to report how many names were available - and rebuilding it is the
+    expensive half of the repair.
+
+    Single words only. A multiword name is left to the validator, matching
+    _runtime_opaque_entities, which found that tokenizing every long name
+    "made otherwise-correct generations fail before validation". The
+    four-character floor keeps short function-word typos such as "Wen" out of
+    the inventory entirely, so they can never become a repair target.
+    """
+    text = str(document or "")
+    if not text.strip():
+        return frozenset()
+    return frozenset(
+        name
+        for name in _named_entities(text, text)
+        if " " not in name and len(name) >= 4
+    )
+
+
 def repair_dictated_names(text: str, document: str) -> tuple[str, int]:
     """Spell a dictated name the way the document the writer is in already spells it.
 
@@ -658,11 +682,7 @@ def repair_dictated_names(text: str, document: str) -> tuple[str, int]:
     source = str(text or "")
     if not source.strip() or not str(document or "").strip():
         return source, 0
-    inventory = {
-        name
-        for name in _named_entities(document, document)
-        if " " not in name and len(name) >= 4
-    }
+    inventory = document_name_inventory(document)
     if not inventory:
         return source, 0
 
