@@ -2817,6 +2817,34 @@ class EchoLinkWindow(QMainWindow):
                     # essay 7, a refused Friendly returned "Another benefit are
                     # the WAY a hamster..." with the writer's errors intact.
                     #
+                    # UNRESOLVED, 2026-09-12, and left alone rather than guessed
+                    # at. For a single-paragraph section this branch cannot be
+                    # taken at all: a tone request's `source` IS the section's
+                    # current correction, and `existing_correction` is now the
+                    # same string, so `existing_correction != source.strip()` is
+                    # false and control falls to the deterministic repair below.
+                    # Reproduced by driving _execute_palette_sentence_job with a
+                    # rejected model answer: the payload came back as the rules
+                    # text, which is the essay-7 outcome this branch was written
+                    # to prevent.
+                    #
+                    # It is NOT a regression from correction_for_section. Before
+                    # that, `existing_correction` was whatever was on the card,
+                    # which for the section the writer is looking at is also
+                    # `source` - so the branch was already dead there, and only
+                    # came alive for BACKGROUND sections, where the text it
+                    # carried belonged to somebody else. It fired exactly when
+                    # it had the wrong answer.
+                    #
+                    # The fix is probably to drop the `!=` test and keep the
+                    # correction whenever a tone request carries one. That
+                    # changes which text a writer gets when a tone fails, so it
+                    # is a correction-quality change and this project measures
+                    # those through Word, never by reasoning. Whoever picks this
+                    # up: reconstruct the essay-7 case first, because the
+                    # comment above is the only record of what `source` held
+                    # when it was measured.
+                    #
                     # Reporting the section as failed was tried first and was
                     # worse still - it disables Replace, so seven sections were
                     # dismissed uncorrected and the essay went from 0 unknown
