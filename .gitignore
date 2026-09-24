@@ -39,3 +39,16 @@ progress.png
 # not measuring what ships. Copying it here closes that gap; it is a 67 MB
 # build artefact and must never be committed.
 resources/polish-host/
+
+# Same rule as resources/polish-host above, for the copy that was set aside on
+# 2026-09-01 rather than deleted. It is the same 67 MB binary under a dated
+# name, so it must never be committed either.
+resources/polish-host.disabled-*/
+
+# dist-onefile/ holds the single-file ManuscriptV2.exe built from
+# EchoLinkOneFile.spec. dist/ is already ignored; this is the same kind of
+# output at a different path, and the exe is 330 MB.
+dist-onefile/
+
+# A backup written while editing settings.json, not part of the project.
+.claude/settings.json.bak
