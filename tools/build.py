@@ -28,6 +28,16 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--installer", action="store_true")
     result.add_argument("--dry-run", action="store_true")
     result.add_argument(
+        "--allow-unsigned",
+        action="store_true",
+        help=(
+            "Build a release without a code-signing certificate. The artifact "
+            "is a real release - no probe harness, no testing label - but "
+            "Windows SmartScreen will warn on every machine until it is "
+            "signed. Explicit because it is not the shape a release ships in."
+        ),
+    )
+    result.add_argument(
         "--testing-unlocked",
         action="store_true",
         help="Build an obvious local test package with subscription enforcement disabled",
@@ -166,6 +176,14 @@ def main(argv: list[str] | None = None) -> int:
             "WARNING: building a TESTING UNLOCKED package. "
             "Do not publish or sell this artifact."
         )
+    elif signing is None:
+        # A release with no signature is a legitimate artifact and an unusual
+        # one, so it says so every time rather than only in the docs.
+        print(
+            "WARNING: building an UNSIGNED release. It installs and runs, but "
+            "Windows SmartScreen warns on every machine and the publisher "
+            "reads as unknown. Sign it before distributing."
+        )
     subprocess.run(browser_pyinstaller, cwd=ROOT, check=True)
     subprocess.run(pyinstaller, cwd=ROOT, check=True)
     executable = ROOT / "dist" / "ManuscriptV2" / "ManuscriptV2.exe"
@@ -261,15 +279,17 @@ def _release_signing_thumbprint(
     *,
     testing_unlocked: bool,
     environ: Mapping[str, str],
+    allow_unsigned: bool = False,
 ) -> str | None:
     supplied = value or environ.get("MANUSCRIPT_SIGNING_THUMBPRINT", "")
     normalized = re.sub(r"\s+", "", supplied).upper()
     if not normalized:
-        if testing_unlocked:
+        if testing_unlocked or allow_unsigned:
             return None
         raise SystemExit(
             "Production builds require a trusted code-signing certificate. "
-            "Pass --signing-thumbprint or set MANUSCRIPT_SIGNING_THUMBPRINT."
+            "Pass --signing-thumbprint or set MANUSCRIPT_SIGNING_THUMBPRINT, "
+            "or pass --allow-unsigned to build a release without one."
         )
     if not re.fullmatch(r"[0-9A-F]{40}", normalized):
         raise SystemExit(
@@ -331,6 +351,7 @@ def _resolve_signing(args, environ) -> tuple | None:
         args.signing_thumbprint,
         testing_unlocked=args.testing_unlocked,
         environ=environ,
+        allow_unsigned=getattr(args, "allow_unsigned", False),
     )
     if thumbprint:
         return ("sha1", thumbprint)
@@ -428,17 +449,21 @@ def _write_subscription_manifest(*, testing_unlocked: bool = False) -> Path:
     if not isinstance(origin, str) or not origin.strip():
         raise SystemExit("Source subscription configuration is invalid.")
     origin = origin.strip()
-    if not testing_unlocked and not _is_public_https_origin(origin):
-        raise SystemExit(
-            "Production builds require a public HTTPS subscription origin."
-        )
+    # No origin gate any more. It existed because a production build enforced
+    # subscription and therefore had to contact a real server. Manuscript is
+    # not subscription-gated (2026-09-24), nothing is contacted, and demanding
+    # a public HTTPS host made a release build impossible to produce without
+    # inventing a domain - which would then be baked into the shipped product.
     target = ROOT / "build" / "generated" / "subscription.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         json.dumps(
             {
                 "origin": origin,
-                "subscription_required": not testing_unlocked,
+                # Never enforced. Kept false in BOTH channels because the
+                # product is not subscription-gated; the channel now says only
+                # whether the probe harness is aboard.
+                "subscription_required": False,
                 "build_channel": (
                     "testing-unlocked" if testing_unlocked else "production"
                 ),
@@ -454,12 +479,12 @@ def _write_subscription_manifest(*, testing_unlocked: bool = False) -> Path:
 def _release_download_base_url(value: str, *, testing_unlocked: bool, environ: Mapping[str, str]) -> str:
     supplied = (value or environ.get("MANUSCRIPT_RELEASE_DOWNLOAD_BASE_URL", "")).strip()
     if not supplied:
-        if testing_unlocked:
-            return ""
-        raise SystemExit(
-            "Production installers require a public HTTPS release download base URL. "
-            "Pass --release-download-base-url or set MANUSCRIPT_RELEASE_DOWNLOAD_BASE_URL."
-        )
+        # Optional since 2026-09-24. It only ever fed the update manifest, and
+        # there is no update server yet. Absent, the manifest records no
+        # download URL and update_check simply has nothing to offer, which is
+        # honest; a placeholder host would have update checks pointing at a
+        # domain that does not resolve.
+        return ""
     if not _is_public_https_origin(supplied):
         raise SystemExit(
             "The release download base URL must be a public HTTPS origin, no path."

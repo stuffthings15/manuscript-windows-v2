@@ -207,8 +207,16 @@ def test_production_build_rejects_placeholder_entitlement_origin(
     )
     monkeypatch.setattr(build_tool, "ROOT", root)
 
-    with pytest.raises(SystemExit, match="public HTTPS subscription origin"):
-        build_tool._write_subscription_manifest()
+    # No longer refused. The gate existed because a release enforced
+    # subscription and so had to reach a real server; Manuscript is not
+    # subscription-gated (2026-09-24) and nothing is contacted, so requiring a
+    # public host only forced a domain to be invented and then shipped.
+    release_path = build_tool._write_subscription_manifest()
+    assert json.loads(release_path.read_text(encoding="utf-8")) == {
+        "origin": "https://replace-before-release.invalid",
+        "subscription_required": False,
+        "build_channel": "production",
+    }
 
     testing_path = build_tool._write_subscription_manifest(testing_unlocked=True)
     assert json.loads(testing_path.read_text(encoding="utf-8")) == {
@@ -231,21 +239,21 @@ def test_production_build_rejects_placeholder_entitlement_origin(
     ],
 )
 def test_production_build_rejects_nonpublic_or_malformed_origins(
-    tmp_path: Path,
-    monkeypatch,
     origin: str,
 ) -> None:
-    root = tmp_path / "project"
-    resources = root / "resources"
-    resources.mkdir(parents=True)
-    (resources / "subscription.json").write_text(
-        json.dumps({"origin": origin}),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(build_tool, "ROOT", root)
+    """Retargeted 2026-09-24 from the subscription origin to the download URL.
 
-    with pytest.raises(SystemExit, match="public HTTPS subscription origin"):
-        build_tool._write_subscription_manifest()
+    _is_public_https_origin is still the gate on --release-download-base-url,
+    which IS fetched over the network by update_check, so these cases keep
+    their teeth. They stopped applying to the subscription manifest only
+    because nothing reads that origin in a build that does not enforce
+    subscription.
+    """
+
+    with pytest.raises(SystemExit, match="public HTTPS origin"):
+        build_tool._release_download_base_url(
+            origin, testing_unlocked=False, environ={}
+        )
 
 
 def test_production_build_accepts_public_https_entitlement_origin(
@@ -267,7 +275,7 @@ def test_production_build_accepts_public_https_entitlement_origin(
     )
     assert result == {
         "origin": origin,
-        "subscription_required": True,
+        "subscription_required": False,
         "build_channel": "production",
     }
 
@@ -356,12 +364,15 @@ def test_signing_uses_sha256_timestamping_and_trust_verification() -> None:
     ]
 
 
-def test_production_installer_requires_a_release_download_base_url() -> None:
+def test_the_release_download_base_url_is_optional_but_validated() -> None:
     resolve = getattr(build_tool, "_release_download_base_url", None)
     assert callable(resolve)
 
-    with pytest.raises(SystemExit, match="release download base URL"):
-        resolve("", testing_unlocked=False, environ={})
+    # Optional since 2026-09-24: it only feeds the update manifest and there
+    # is no update server yet. Absent, no download URL is recorded and
+    # update_check has nothing to offer, which beats pointing every installed
+    # copy at a host that does not resolve.
+    assert resolve("", testing_unlocked=False, environ={}) == ""
     assert resolve("", testing_unlocked=True, environ={}) == ""
     assert (
         resolve("https://releases.example.com", testing_unlocked=False, environ={})
