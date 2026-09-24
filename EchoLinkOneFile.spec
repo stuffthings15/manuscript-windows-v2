@@ -107,6 +107,24 @@ a = Analysis(
     datas=datas,
     hiddenimports=hiddenimports,
     excludes=[
+        # THE HARNESS IS REMOVED, NOT MERELY LEFT OUT OF hiddenimports.
+        #
+        # Found 2026-09-24 by reading the first production archive ever built:
+        # tools.windows_workflow_probe was in it, with build_channel already
+        # "production". The conditional in hiddenimports only ever ADDED the
+        # module for a testing build; nothing took it away for a release, and
+        # src/echo_link_app/main.py imports it directly -
+        # "from tools import windows_workflow_probe" inside
+        # _run_workflow_probe_cli - which PyInstaller's analysis follows even
+        # though the import sits in a function body.
+        #
+        # So the comment below hiddenimports, claiming a shipped build "cannot
+        # import it even if this gate is defeated", was false from the day it
+        # was written. It was never caught because the code-signing gate meant
+        # no production build had ever been produced to look inside.
+        #
+        # excludes is what actually drops a module from the archive.
+        *([] if IS_TESTING_BUILD else ["tools.windows_workflow_probe"]),
         "IPython",
         "matplotlib",
         "notebook",
