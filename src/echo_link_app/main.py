@@ -31,7 +31,10 @@ from echo_link_core.recommendation import (
     local_hardware_profile,
     recommend_local_speech,
 )
-from echo_link_core.subscription import subscription_enforcement_required
+from echo_link_core.subscription import (
+    is_testing_unlocked_build,
+    subscription_enforcement_required,
+)
 from echo_link_core.storage import SCHEMA_VERSION, EchoLinkStore
 from echo_link_core.transcription import cuda_available, discover_local_models, local_model_path
 from echo_link_core.version import build_commit, product_version
@@ -87,7 +90,7 @@ def _subscription_required_for_runtime() -> bool:
 def _internal_test_command_allowed(
     args: argparse.Namespace,
     *,
-    subscription_required: bool,
+    subscription_required: bool,  # noqa: ARG001 - see the comment below
 ) -> bool:
     uses_internal_command = any(
         (
@@ -97,13 +100,20 @@ def _internal_test_command_allowed(
             args.internal_evaluation,
         )
     )
-    # A production build sets subscription_required, which refuses these.
-    # The harness itself is also left out of a production archive entirely -
-    # see EchoLink.spec - so a shipped build cannot import it even if this
-    # gate is defeated. A testing build keeps both, because
+    # Gated on the BUILD CHANNEL, not on subscription. Until 2026-09-24 this
+    # read "not subscription_required", which was only ever correct because
+    # the sole build with subscription off was also the sole build carrying
+    # the harness. Manuscript is no longer subscription-gated, so that
+    # equivalence is gone and keying on it here would have exposed
+    # --workflow-probe - keystroke synthesis, the microphone, a spawned
+    # process - in every shipped build. That is the 2026-08-16 incident.
+    #
+    # The harness is also left out of a production archive entirely, see
+    # EchoLink.spec, so a shipped build cannot import it even if this gate is
+    # defeated. A testing build keeps both, because
     # tools/installer_lifecycle_probe.py drives --workflow-probe against the
     # INSTALLED executable and that is how release acceptance works.
-    return not uses_internal_command or not subscription_required
+    return not uses_internal_command or is_testing_unlocked_build()
 
 
 def _run_workflow_probe_cli(args: argparse.Namespace) -> int:

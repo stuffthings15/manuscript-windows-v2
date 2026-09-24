@@ -55,10 +55,8 @@ class _DataBlob(ctypes.Structure):
     _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
 
 
-def subscription_enforcement_required(
-    config_path: str | Path | None = None,
-) -> bool:
-    """Fail closed unless the package is explicitly marked as a local test build."""
+def _build_manifest(config_path: str | Path | None = None) -> dict[str, Any] | None:
+    """The shipped subscription.json, or None when it cannot be trusted."""
 
     path = (
         Path(config_path)
@@ -68,13 +66,61 @@ def subscription_enforcement_required(
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def is_testing_unlocked_build(config_path: str | Path | None = None) -> bool:
+    """Is this the local test package, the only one carrying the probe harness?
+
+    Split out from subscription enforcement on 2026-09-24. They used to be the
+    same question, and that was a latent hazard: main.py gated the internal
+    test commands on "is subscription off", so ANY build that did not enforce
+    subscription would also expose --workflow-probe. That was survivable only
+    while "subscription off" and "testing build" meant the same thing. Once
+    Manuscript stopped being subscription-gated, the old coupling would have
+    opened the probe on every shipped build.
+
+    Fail closed the strict way: anything unreadable, missing or not explicitly
+    marked testing-unlocked is treated as a real build, so the probe stays shut.
+    """
+
+    payload = _build_manifest(config_path)
+    if payload is None:
+        return False
+    return payload.get("build_channel") == TESTING_UNLOCKED_BUILD_CHANNEL
+
+
+def subscription_enforcement_required(
+    config_path: str | Path | None = None,
+) -> bool:
+    """Fail closed unless the package explicitly says it is not subscription-gated.
+
+    Manuscript is not a subscription product (decided 2026-09-24), so a release
+    build ships subscription_required=false and this returns False. The
+    fail-closed part that still matters is the manifest being missing or
+    corrupt: that returns True, because a build whose configuration cannot be
+    read is not a build that should be trusted to say it is free.
+
+    The build_channel is deliberately NOT consulted here any more. Tying these
+    together is what made "not subscription-gated" impossible to express
+    without also marking the package as a test build.
+    """
+
+    payload = _build_manifest(config_path)
+    if payload is None:
         return True
-    if not isinstance(payload, dict):
+    # A half-written manifest stays locked. Saying subscription_required=false
+    # without naming a channel is not a claim the build makes about itself, it
+    # is a file that lost a key, and the original design was right to refuse
+    # it. What changed is only WHICH channels may say it: both of them now,
+    # rather than testing-unlocked alone.
+    if payload.get("build_channel") not in (
+        PRODUCTION_BUILD_CHANNEL,
+        TESTING_UNLOCKED_BUILD_CHANNEL,
+    ):
         return True
-    return not (
-        payload.get("subscription_required") is False
-        and payload.get("build_channel") == TESTING_UNLOCKED_BUILD_CHANNEL
-    )
+    return payload.get("subscription_required") is not False
 
 
 def subscription_origin(config_path: str | Path | None = None) -> str:
