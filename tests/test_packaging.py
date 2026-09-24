@@ -113,7 +113,7 @@ def test_installer_has_safe_unique_identity():
     text = (ROOT / "packaging" / "EchoLink.iss").read_text(encoding="utf-8")
     assert "ManuscriptV2Setup" in text
     assert "65BD5BC9-6E5E-4E2D-9BB1-B49EA46CB73E" in text
-    assert "PrivilegesRequired=lowest" in text
+    assert "PrivilegesRequired=admin" in text
     assert "Manuscript" in text
     assert 'AppMutex={#MyAppMutex}' in text
     assert 'AppUserModelID: "{#MyAppUserModelID}"' in text

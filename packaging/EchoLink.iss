@@ -12,10 +12,10 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppMutex={#MyAppMutex}
-DefaultDirName={localappdata}\Programs\Manuscript Windows Version 2
+DefaultDirName={autopf}\Manuscript Windows Version 2
 DefaultGroupName=Manuscript Windows Version 2
 DisableProgramGroupPage=yes
-PrivilegesRequired=lowest
+PrivilegesRequired=admin
 OutputDir=..\installer-output
 OutputBaseFilename=ManuscriptV2Setup
 Compression=lzma2
@@ -34,8 +34,8 @@ ArchitecturesInstallIn64BitMode=x64compatible
 Source: "..\dist\ManuscriptV2\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Registry]
-Root: HKCU; Subkey: "Software\Google\Chrome\NativeMessagingHosts\com.manuscript.v2.polish"; ValueType: string; ValueName: ""; ValueData: "{app}\browser-extension\com.manuscript.v2.polish.json"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Microsoft\Edge\NativeMessagingHosts\com.manuscript.v2.polish"; ValueType: string; ValueName: ""; ValueData: "{app}\browser-extension\com.manuscript.v2.polish.json"; Flags: uninsdeletekey
+Root: HKLM; Subkey: "Software\Google\Chrome\NativeMessagingHosts\com.manuscript.v2.polish"; ValueType: string; ValueName: ""; ValueData: "{app}\browser-extension\com.manuscript.v2.polish.json"; Flags: uninsdeletekey
+Root: HKLM; Subkey: "Software\Microsoft\Edge\NativeMessagingHosts\com.manuscript.v2.polish"; ValueType: string; ValueName: ""; ValueData: "{app}\browser-extension\com.manuscript.v2.polish.json"; Flags: uninsdeletekey
 
 [Icons]
 Name: "{autoprograms}\Manuscript Windows Version 2"; Filename: "{app}\{#MyAppExeName}"; AppUserModelID: "{#MyAppUserModelID}"
