@@ -394,6 +394,47 @@ def _group_sentence_suggestions(
         _append_bounds(split, text, cursor, right)
     merged = split
 
+    # WHICH PART OF THE TEXT BECAME A SECTION, and which part did not.
+    #
+    # Essay 17 of the animal-pet corpus, 2026-09-23: paragraph 8 came back
+    # corrected for its first 579 characters and byte-identical for its last
+    # 119, which still read "sould probly probly ... responsiblity". The
+    # deterministic engine repairs every one of those words on its own, so the
+    # tail either never became a section or became one and was then refused -
+    # and those need opposite fixes. Nothing in the log could tell them apart,
+    # because no layer recorded which spans were actually built.
+    #
+    # Offsets and lengths only, never the text. A gap here is the whole signal:
+    # text this function did not cover cannot be corrected by anything
+    # downstream, however good the correction is.
+    if merged:
+        covered = sum(right - left for left, right, _count in merged)
+        gaps = [
+            (previous, left)
+            for (_, previous, _), (left, _, _) in zip(merged, merged[1:])
+            if left > previous and text[previous:left].strip()
+        ]
+        head = merged[0][0]
+        tail = len(text) - merged[-1][1]
+        if head and text[:head].strip():
+            gaps.insert(0, (0, head))
+        if tail and text[merged[-1][1]:].strip():
+            gaps.append((merged[-1][1], len(text)))
+        logger.info(
+            "Review spans built characters=%d sections=%d covered=%d uncovered=%d gaps=%s",
+            len(text),
+            len(merged),
+            covered,
+            sum(right - left for left, right in gaps),
+            [f"[{left},{right})" for left, right in gaps] or "none",
+        )
+    else:
+        logger.info(
+            "Review spans built characters=%d sections=0 covered=0 uncovered=%d gaps=whole-text",
+            len(text),
+            len(text),
+        )
+
     grouped: dict[tuple[int, int, int], list[object]] = {
         (left, right, count): [] for left, right, count in merged
     }
