@@ -113,7 +113,17 @@ def _internal_test_command_allowed(
     # defeated. A testing build keeps both, because
     # tools/installer_lifecycle_probe.py drives --workflow-probe against the
     # INSTALLED executable and that is how release acceptance works.
-    return not uses_internal_command or is_testing_unlocked_build()
+    if not uses_internal_command:
+        return True
+    # A source checkout is not a shipped build. tools/windows_workflow_probe.py
+    # is sitting in the tree and can be run directly, so refusing here defends
+    # nothing and only breaks the way the probe is actually driven - by
+    # tests/test_windows_workflow_probe_cli.py and by anyone working on it.
+    # The property worth keeping is that a FROZEN build a writer installed
+    # cannot be talked into it.
+    if not getattr(sys, "frozen", False):
+        return True
+    return is_testing_unlocked_build()
 
 
 def _run_workflow_probe_cli(args: argparse.Namespace) -> int:
