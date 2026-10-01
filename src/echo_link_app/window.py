@@ -344,6 +344,7 @@ class EchoLinkWindow(QMainWindow):
             self.polish_engine,
             mode_provider=lambda: self.engine.settings.polish_mode,
             consent_provider=lambda: self.engine.settings.polish_download_consent,
+            faithful_provider=lambda: self.engine.settings.polish_faithful,
         )
         # Keep the mature UI boundary stable while routing its work through PolishEngine.
         self.writing_assistant = _AcceptedPlanWritingAssistant(

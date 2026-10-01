@@ -146,6 +146,7 @@ class OllamaInferenceRuntime:
                 max_tokens=request.plan.max_output_tokens,
                 require_gpu=request.plan.require_full_gpu,
                 defer_meaning_validation=True,
+                faithful=request.faithful,
             )
         except RuntimeError as exc:
             if "timed out" not in str(exc).casefold():
@@ -178,6 +179,7 @@ class OllamaInferenceRuntime:
                     max_tokens=request.plan.max_output_tokens,
                     require_gpu=request.plan.require_full_gpu,
                     defer_meaning_validation=True,
+                    faithful=request.faithful,
                 )
             except RuntimeError as retry_exc:
                 if (
@@ -202,6 +204,7 @@ class OllamaInferenceRuntime:
                     max_tokens=request.plan.max_output_tokens,
                     require_gpu=request.plan.require_full_gpu,
                     defer_meaning_validation=True,
+                    faithful=request.faithful,
                 )
         elapsed = max(0.0, time.perf_counter() - started)
         expected_model = (

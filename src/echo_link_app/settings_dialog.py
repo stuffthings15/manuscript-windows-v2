@@ -371,6 +371,17 @@ class SettingsDialog(QDialog):
             "downloaded or uploaded."
         )
         polish_form.addRow("", self.polish_download_consent_check)
+        self.polish_faithful_check = QCheckBox(
+            "Keep my meaning exactly (recommended)"
+        )
+        self.polish_faithful_check.setChecked(self.settings.polish_faithful)
+        self.polish_faithful_check.setToolTip(
+            "On: the AI fixes grammar and applies the tone but never changes "
+            "what you said. Off: the AI may also restructure, drop filler, and "
+            "repair confused claims so the text reads sensibly. Names, numbers, "
+            "dates, URLs, and code stay exact either way."
+        )
+        polish_form.addRow("", self.polish_faithful_check)
         polish_privacy = QLabel(
             "No writing or benchmark text is stored. The benchmark cache keeps only "
             "hardware details, speed, and resource measurements."
@@ -998,6 +1009,7 @@ class SettingsDialog(QDialog):
             polish_model_pack_id=self.settings.polish_model_pack_id,
             polish_policy_version=max(1, int(self.settings.polish_policy_version)),
             polish_download_consent=self.polish_download_consent_check.isChecked(),
+            polish_faithful=self.polish_faithful_check.isChecked(),
             correction_timeout_seconds=self.settings.correction_timeout_seconds,
             gpu_idle_release_seconds=self.gpu_release_spin.value(),
             start_with_windows=self.startup_check.isChecked(),

@@ -731,6 +731,52 @@ def _semantic_validation_windows(
     return tuple(pairs)
 
 
+# What still refuses when the writer has turned meaning preservation off.
+# These are corruption, not intent: nothing a writer means by "fix it properly"
+# includes an empty answer, an em dash, a rewritten URL or code span, or a
+# model that never ran. Everything else PolishValidator produces describes a
+# change of meaning, which is the thing the writer said they do not want kept.
+_HARD_FAILURE_PREFIXES = (
+    "empty output",
+    "em dash is not allowed",
+    "code or identifiers changed",
+    "protected facts or tokens changed",
+    "full AI correction did not run",
+    "generation did not run",
+    "retry runtime failed",
+)
+
+
+def _unlock_meaning_guards(validation: ValidationResult) -> ValidationResult:
+    """Keep corruption failures; turn meaning failures into advisories.
+
+    Added 2026-09-30 at the owner's repeated instruction. The faithful path
+    is untouched: this is only ever applied when CorrectionRequest.faithful
+    is False, and the advisories keep the record of what moved so the HUD log
+    still says what the model did.
+    """
+    if validation.accepted:
+        return validation
+    hard = tuple(
+        failure
+        for failure in validation.failures
+        if failure.startswith(_HARD_FAILURE_PREFIXES)
+    )
+    soft = tuple(
+        failure
+        for failure in validation.failures
+        if not failure.startswith(_HARD_FAILURE_PREFIXES)
+    )
+    if hard:
+        return validation
+    return ValidationResult(
+        True,
+        validation.semantic_similarity,
+        (),
+        (*validation.advisories, *soft),
+    )
+
+
 class PolishValidator:
     def __init__(self, classifier: MiniLMPolishClassifier) -> None:
         self.classifier = classifier
@@ -1323,6 +1369,7 @@ class PolishEngine:
                     language=request.language,
                     protected_terms=request.protected_terms,
                     plan=plan,
+                    faithful=request.faithful,
                 )
             )
         except Exception as exc:  # noqa: BLE001 - the runtime raises many types
@@ -1836,6 +1883,7 @@ class PolishEngine:
                             language=request.language,
                             protected_terms=attempt_protected_terms,
                             plan=accepted_plan,
+                            faithful=request.faithful,
                         )
                     )
                 except (
@@ -1924,8 +1972,12 @@ class PolishEngine:
                 request.task is PolishTask.TONE
                 or request.command in _STAGED_STYLE_COMMANDS
             ):
-                candidate = _restore_tone_actor_pronouns(normalized, candidate)
-                candidate = _restore_tone_modals(normalized, candidate)
+                # With meaning preservation off these would put the owner's
+                # actor and modals straight back into a rewrite the writer
+                # asked for, so they stand down with the guards.
+                if request.faithful:
+                    candidate = _restore_tone_actor_pronouns(normalized, candidate)
+                    candidate = _restore_tone_modals(normalized, candidate)
                 candidate = _restore_source_phrase_casing(normalized, candidate)
             safety_validation = self.validator.validate(
                 normalized,
@@ -1942,6 +1994,8 @@ class PolishEngine:
                 candidate,
                 command=request.command,
             )
+            if not request.faithful:
+                safety_validation = _unlock_meaning_guards(safety_validation)
             quality = self._evaluate_quality(
                 normalized,
                 candidate,
@@ -2556,6 +2610,7 @@ class PolishEngine:
                             language=request.language,
                             protected_terms=segment_terms,
                             plan=plan,
+                            faithful=request.faithful,
                         )
                     )
                 except (
@@ -3390,10 +3445,12 @@ class PolishWritingAssistantAdapter:
         *,
         mode_provider: Callable[[], PolishMode],
         consent_provider: Callable[[], bool],
+        faithful_provider: Callable[[], bool] = lambda: True,
     ) -> None:
         self.engine = engine
         self.mode_provider = mode_provider
         self.consent_provider = consent_provider
+        self.faithful_provider = faithful_provider
         self._thread_result = threading.local()
 
     @property
@@ -3448,6 +3505,7 @@ class PolishWritingAssistantAdapter:
     ) -> WritingResult:
         mode = PolishMode.coerce(self.mode_provider())
         consent = bool(self.consent_provider())
+        faithful = bool(self.faithful_provider())
         protected = tuple(protected_terms)
         plan_callback = _ignored.get("plan_callback")
         self._thread_result.value = None
@@ -3466,6 +3524,7 @@ class PolishWritingAssistantAdapter:
                     protected_terms=protected,
                     manual=True,
                     download_consent=consent,
+                    faithful=faithful,
                     document=document,
                     plan_callback=plan_callback,
                 )
@@ -3540,6 +3599,7 @@ class PolishWritingAssistantAdapter:
                 protected_terms=protected,
                 manual=True,
                 download_consent=consent,
+                faithful=faithful,
                 preverified_fallback_available=(
                     proofread is not None
                     and command in _STAGED_STYLE_COMMANDS
@@ -4806,6 +4866,21 @@ def _generation_instruction(
         "Do not add a named entity or fact. Never use an em dash; use a comma, colon, "
         "semicolon, or parentheses instead. "
     )
+    if not request.faithful:
+        # The writer has turned meaning preservation off. Said up front,
+        # because every other sentence in this instruction and in the core
+        # rules tells the model to keep the claims exactly, and a quiet
+        # exception at the end would lose to them the way the tone did.
+        safety = (
+            "The writer has turned off meaning preservation and wants the text "
+            "to read sensibly above all. Where the source is confused, "
+            "contradictory, padded, or self-undermining, rewrite it so it makes "
+            "sense: restructure, merge or split sentences, drop filler, and "
+            "repair muddled claims. Keep every name, number, date, URL, and code "
+            "span exact, and keep the text about the same subject. "
+            "Never use an em dash; use a comma, colon, semicolon, or "
+            "parentheses instead. "
+        )
     tone_instruction = tone_contract_instruction(request.command)
     if tone_instruction and request.task is PolishTask.TONE:
         # The tone comes FIRST, and the Proofread checklist is left out.

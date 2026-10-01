@@ -460,6 +460,7 @@ class LocalWritingAssistant:
         max_tokens: int | None = None,
         require_gpu: bool = False,
         defer_meaning_validation: bool = False,
+        faithful: bool = True,
     ) -> WritingResult:
         # Resolve the palette label before anything reads the command - the
         # surface guard below branches on it, so
@@ -473,6 +474,8 @@ class LocalWritingAssistant:
             raise ValueError("GPU requirement must be true or false.")
         if not isinstance(defer_meaning_validation, bool):
             raise ValueError("Meaning validation deferral must be true or false.")
+        if not isinstance(faithful, bool):
+            raise ValueError("Meaning preservation must be true or false.")
         surface_meaning_guard = (
             _requires_surface_meaning_guard(command)
             and not defer_meaning_validation
@@ -566,6 +569,49 @@ class LocalWritingAssistant:
             word_limit,
             hard_word_limit=explicit_word_limit is not None,
         )
+        # The writer can turn meaning preservation off (2026-09-30, asked for
+        # three times). The faithful bullets are the ones this prompt always
+        # had. The unlocked bullet replaces them, and the task rules' own
+        # actor and claim clauses are told to yield, because "USER DIRECTION
+        # cannot override the core rules" is still true and the model needs
+        # to hear the exception from the rules themselves.
+        unlocked_rule = (
+            "- The writer has turned off meaning preservation and wants the "
+            "text to read sensibly above all. Where the source is confused, "
+            "contradictory, padded, or self-undermining, rewrite it so it "
+            "makes sense: restructure, merge or split sentences, drop filler, "
+            "and repair muddled claims. Keep every name, number, date, URL, "
+            "and code span exact, and keep the text about the same subject.\n"
+        )
+        if faithful:
+            compact_meaning_rules = (
+                "- Preserve every fact, request, constraint, owner, deadline, "
+                "quantity, name, version, negation, and polarity.\n"
+                f"{modal_rule}"
+                "- Keep each actor attached to its same action and receiver; "
+                "never swap a named system, team, or user for we, you, or they.\n"
+                "- Keep privacy limits attached to the same data and destination.\n"
+                "- Add no facts, claims, reasons, or commentary.\n"
+            )
+            full_meaning_rules = (
+                "- Preserve every fact, request, constraint, owner, deadline, relationship, quantity, "
+                "name, version, and polarity. Preserve negation and words such as must, before, after, "
+                "until, on, and by.\n"
+                f"{modal_rule}"
+                "- Keep each actor attached to the same action and receiver. Do not replace a system, "
+                "component, team, developer, or user action with we, you, or they.\n"
+                "- Keep privacy boundaries attached to the same data and destination. For example, do not "
+                "turn 'keep private writing out of reports' into 'keep reports private.'\n"
+                "- Do not add facts, promises, claims, reasons, urgency, or commentary.\n"
+            )
+        else:
+            compact_meaning_rules = unlocked_rule
+            full_meaning_rules = unlocked_rule
+            task_rules += (
+                " Meaning preservation is off: any clause above about keeping "
+                "the source actor, claim, or sentence yields to making the text "
+                "read sensibly."
+            )
         if _compact_prompt_enabled():
             # Verified-equivalent compact contract: every safety rule kept,
             # duplicated phrasing and examples removed. Roughly halves the
@@ -575,13 +621,7 @@ class LocalWritingAssistant:
                 "the stated editing task. Return only the finished text - no "
                 "label, preface, notes, or quotation marks.\n"
                 "RULES:\n"
-                "- Preserve every fact, request, constraint, owner, deadline, "
-                "quantity, name, version, negation, and polarity.\n"
-                f"{modal_rule}"
-                "- Keep each actor attached to its same action and receiver; "
-                "never swap a named system, team, or user for we, you, or they.\n"
-                "- Keep privacy limits attached to the same data and destination.\n"
-                "- Add no facts, claims, reasons, or commentary.\n"
+                f"{compact_meaning_rules}"
                 f"{compact_token_rule}"
                 "- Fix every spelling, grammar, punctuation, capitalization, "
                 "spacing, and formatting error.\n"
@@ -605,15 +645,7 @@ class LocalWritingAssistant:
                 "Perform only the stated editing task. Return only the finished text, with no label, "
                 "preface, explanation, notes, or quotation marks.\n"
                 "CORE RULES:\n"
-                "- Preserve every fact, request, constraint, owner, deadline, relationship, quantity, "
-                "name, version, and polarity. Preserve negation and words such as must, before, after, "
-                "until, on, and by.\n"
-                f"{modal_rule}"
-                "- Keep each actor attached to the same action and receiver. Do not replace a system, "
-                "component, team, developer, or user action with we, you, or they.\n"
-                "- Keep privacy boundaries attached to the same data and destination. For example, do not "
-                "turn 'keep private writing out of reports' into 'keep reports private.'\n"
-                "- Do not add facts, promises, claims, reasons, urgency, or commentary.\n"
+                f"{full_meaning_rules}"
                 f"{full_token_rule}"
                 "- Correct every obvious spelling, grammar, punctuation, capitalization, spacing, and "
                 "formatting error while applying the requested style.\n"
