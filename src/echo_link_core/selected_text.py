@@ -42,7 +42,6 @@ COMMANDS = {
     "Improve": "Improve clarity, grammar, wording, and flow while preserving meaning.",
     "Rephrase": "Express the same meaning with fresh, natural wording.",
     "Rewrite": "Rewrite for clarity and natural flow while preserving meaning.",
-    "Shorten": "Make the text concise. Keep every important fact and request.",
     "Expand": "Expand the text with clearer detail, but do not invent facts.",
     "Summarize": "Summarize the text accurately and concisely.",
     "Formal": "Rewrite in a formal, professional tone while preserving meaning.",
@@ -97,7 +96,6 @@ TONE_COMMANDS = frozenset(
     {
         "Improve",
         "Rephrase",
-        "Shorten",
         "Friendly",
         "Formal",
         "Professional",
@@ -464,7 +462,7 @@ class LocalWritingAssistant:
         defer_meaning_validation: bool = False,
     ) -> WritingResult:
         # Resolve the palette label before anything reads the command - the
-        # surface-guard and Shorten checks below both branch on it, so
+        # surface guard below branches on it, so
         # resolving at the COMMANDS check would leave them seeing "Clear".
         command = resolve_command(command)
         bounded_timeout = _validated_timeout(timeout)
@@ -483,12 +481,6 @@ class LocalWritingAssistant:
         source = raw_source.strip()
         if not source:
             raise ValueError("Select text first.")
-        source_word_count = len(_WORD.findall(source))
-        shorten_retry_rule = (
-            f" For Shorten, return no more than {source_word_count} words."
-            if command == "Shorten"
-            else ""
-        )
         leading = raw_source[: len(raw_source) - len(raw_source.lstrip())]
         trailing = raw_source[len(raw_source.rstrip()) :]
         if command not in COMMANDS:
@@ -572,7 +564,7 @@ class LocalWritingAssistant:
             command,
             target_language,
             word_limit,
-            hard_word_limit=explicit_word_limit is not None or command == "Shorten",
+            hard_word_limit=explicit_word_limit is not None,
         )
         if _compact_prompt_enabled():
             # Verified-equivalent compact contract: every safety rule kept,
@@ -734,7 +726,7 @@ class LocalWritingAssistant:
                 f"{prompt}\n\nRETRY RULE: Your prior answer omitted one or more written-number "
                 "facts. Regenerate the full result. You MUST include every quantity with its related "
                 f"noun: {'; '.join(number_fact_phrases) or 'None'}. Put these facts only in the normal "
-                f"rewritten sentences. Do not repeat this reminder or append a list.{shorten_retry_rule}"
+                f"rewritten sentences. Do not repeat this reminder or append a list."
             )
             candidate = self._generate(
                 model,
@@ -825,7 +817,7 @@ class LocalWritingAssistant:
                 f"SOURCE FORCE WORDS: {'; '.join(source_force_words) or 'None'}. You MUST also include every "
                 f"quantity with its related noun: {'; '.join(number_fact_phrases) or 'None'}. Put these "
                 f"facts only in the normal rewritten sentences. Do not repeat this reminder or append a list."
-                f"{shorten_retry_rule}"
+                f""
             )
             candidate = self._generate(
                 model,
@@ -851,121 +843,6 @@ class LocalWritingAssistant:
                 command=command,
             ):
                 raise RuntimeError("Local AI changed a meaning constraint.")
-        if command == "Shorten":
-            candidate = _apply_safe_shorten_compression(candidate)
-            maximum_words = source_word_count
-            if len(_WORD.findall(candidate)) > maximum_words:
-                anchor_values = _concision_anchor_values(candidate, number_fact_phrases)
-                concision_source, anchor_replacements = _protect_additional_text(
-                    candidate,
-                    anchor_values,
-                )
-                combined_replacements = {**replacements, **anchor_replacements}
-                anchor_expansion = sum(
-                    max(0, len(_WORD.findall(value)) - 1)
-                    for value in anchor_replacements.values()
-                )
-                visible_word_limit = max(4, maximum_words - anchor_expansion)
-                concision_token_rule = (
-                    "Tokens beginning ECHOLINKTOKEN are immutable fixed phrases. Copy each token "
-                    "exactly once and in order. "
-                    if combined_replacements
-                    else ""
-                )
-                concision_retry_prompt = (
-                    "You are Manuscript's private local writing assistant. Return only the finished text. "
-                    "Shorten the meaning-safe draft below without deleting any clause or changing who did "
-                    "what to whom. Combine wording and remove filler only. Preserve every fact, actor, action, "
-                    "boundary, relationship, quantity, name, and level of force. Preserve before/after, "
-                    "privacy exclusions, build behavior, and all written-number facts. "
-                    f"{concision_token_rule}"
-                    f"Written-number facts with nouns: {'; '.join(number_fact_phrases) or 'None'}. "
-                    f"Hard visible-word limit before token expansion: {visible_word_limit}. Do not append "
-                    "notes or a fact list.\n\n"
-                    f"MEANING-SAFE DRAFT:\n{concision_source}"
-                )
-                candidate = self._generate(
-                    model,
-                    concision_retry_prompt,
-                    _remaining_timeout(deadline),
-                    keep_alive=bounded_keep_alive,
-                    context_window=bounded_context,
-                    max_tokens=bounded_max_tokens,
-                )
-                _raise_if_expired(deadline)
-                candidate = _canonicalize_immutable_tokens(
-                    candidate,
-                    concision_source,
-                    combined_replacements,
-                )
-                if _immutable_tokens_changed(
-                    concision_source,
-                    candidate,
-                    combined_replacements,
-                ):
-                    raise RuntimeError("The result changed protected content.")
-                if len(_WORD.findall(candidate)) > visible_word_limit:
-                    excess = len(_WORD.findall(candidate)) - visible_word_limit
-                    tighter_token_rule = (
-                        "Copy every ECHOLINKTOKEN exactly once and in order. "
-                        if combined_replacements
-                        else ""
-                    )
-                    tighter_prompt = (
-                        "Return only the shortened text below. "
-                        f"{tighter_token_rule}"
-                        "Remove filler and combine wording, but do not delete or alter any protected phrase, "
-                        "fact, action, actor, relationship, or constraint. "
-                        f"The prior result is {excess} visible words too long. Hard limit: "
-                        f"{visible_word_limit} visible words before token expansion.\n\n"
-                        f"TEXT TO SHORTEN:\n{candidate}"
-                    )
-                    candidate = self._generate(
-                        model,
-                        tighter_prompt,
-                        _remaining_timeout(deadline),
-                        keep_alive=bounded_keep_alive,
-                        context_window=bounded_context,
-                        max_tokens=bounded_max_tokens,
-                    )
-                    _raise_if_expired(deadline)
-                    candidate = _canonicalize_immutable_tokens(
-                        candidate,
-                        concision_source,
-                        combined_replacements,
-                    )
-                    if _immutable_tokens_changed(
-                        concision_source,
-                        candidate,
-                        combined_replacements,
-                    ):
-                        raise RuntimeError("The result changed protected content.")
-                for token, value in anchor_replacements.items():
-                    candidate = candidate.replace(token, value)
-                candidate = _restore_candidate_semantics(source, candidate, replacements)
-                if (
-                    not defer_meaning_validation
-                    and (
-                        _numeric_literal_change(protected, candidate) is not None
-                        or _missing_number_fact_phrases(
-                            number_fact_phrases,
-                            _expand_protected_for_validation(candidate, replacements),
-                        )
-                    )
-                ):
-                    raise RuntimeError("The result changed protected content.")
-                if surface_meaning_guard and not _meaning_constraints_preserved(
-                    source,
-                    _expand_protected_for_validation(candidate, replacements),
-                    command=command,
-                ):
-                    raise RuntimeError("Local AI changed a meaning constraint.")
-                if not candidate or "```" in candidate:
-                    raise RuntimeError("Local AI returned invalid text.")
-                if _obviously_incomplete_edit(protected, candidate, command):
-                    raise RuntimeError("Local AI returned incomplete text.")
-                if len(_WORD.findall(candidate)) > maximum_words:
-                    raise RuntimeError("Local AI exceeded the requested word limit.")
         if "\u2014" in candidate:
             dash_retry_prompt = (
                 f"{prompt}\n\nRETRY RULE: Your prior answer used an em dash. "
@@ -1003,8 +880,6 @@ class LocalWritingAssistant:
                 )
             if "\u2014" in candidate:
                 raise RuntimeError("Local AI used a forbidden em dash.")
-            if command == "Shorten" and len(_WORD.findall(candidate)) > source_word_count:
-                raise RuntimeError("Local AI exceeded the requested word limit.")
         if not candidate or "```" in candidate:
             raise RuntimeError("Local AI returned invalid text.")
         if command == "Translate" and _translation_was_not_performed(protected, candidate):
@@ -1210,8 +1085,6 @@ def _requested_word_limit(source: str, command: str, instruction: str) -> int | 
     source_words = len(_WORD.findall(source))
     if command == "Summarize":
         return min(source_words, max(12, math.ceil(source_words * 0.65)))
-    if command == "Shorten":
-        return min(source_words, max(4, math.ceil(source_words * 0.9)))
     if command == "Caveman":
         return min(source_words, max(4, math.ceil(source_words * 0.9)))
     return None
@@ -1422,34 +1295,6 @@ def _number_fact_phrase(source: str, match: re.Match[str]) -> str:
     return f"{phrase} {qualifier}"
 
 
-def _concision_anchor_values(
-    candidate: str,
-    number_fact_phrases: tuple[str, ...],
-) -> tuple[str, ...]:
-    values = list(number_fact_phrases)
-    patterns = (
-        r"\bthree users who (?:wrote|had written) several pages\b",
-        r"\b(?:opened slowly|introduced delays)\b",
-        r"\b(?:fail\w*|did not)\s+to?\s*(?:insert|incorporate|place)\w*\s+corrected text"
-        r"(?:\s+into\s+the\s+active document)?\b",
-        r"\b(?:private\s+user|user(?:'s)?\s+private)\s+(?:writing|data|text)\s+out\s+of\s+"
-        r"test reports?\b",
-        r"\bfifteen days retention\b",
-        r"\b(?:approved|authorized) fallback\b",
-        r"\b(?:the\s+)?small icon\b",
-        r"\b(?:the\s+)?correction card\b",
-        r"\b(?:a\s+)?spelling fix\b",
-        r"\bthe first sentence\b",
-        r"\bthe next morning\b",
-        r"\bthe text (?:didn(?:'|\u2019)t|did not) change\b",
-        r"\bthe HUD stayed on the first sentence\b",
-        r"\banother tester\b",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, candidate, re.IGNORECASE)
-        if match is not None:
-            values.append(match.group(0))
-    return tuple(values)
 
 
 def _protect_additional_text(
@@ -1596,10 +1441,6 @@ def _task_rules(
             "roughly the same detail and length while retaining every factual clause and constraint."
         ),
         "Rewrite": "Improve clarity and flow while retaining every factual clause and constraint.",
-        "Shorten": (
-            "Compress every paragraph by combining overlapping sentences and removing repetition, "
-            "filler, and needless modifiers. Keep every key fact, request, owner, boundary, and constraint."
-        ),
         "Expand": "Add useful explanation only when it follows from the source; never invent details.",
         "Summarize": "State the key decision, actor, action, date, status, and open issue when present.",
         "Formal": (
@@ -2549,139 +2390,6 @@ def _restore_source_cardinality(source: str, candidate: str) -> str:
     return candidate
 
 
-def _apply_safe_shorten_compression(candidate: str) -> str:
-    candidate = re.sub(
-        r"\brequested a formal tone,\s*but the local AI returned\b",
-        "requested a formal tone. The local AI returned",
-        candidate,
-        flags=re.IGNORECASE,
-    )
-    candidate = re.sub(
-        r"\bshorter draft that (?:removed|omitted)\b",
-        "shorter draft, removing",
-        candidate,
-        flags=re.IGNORECASE,
-    )
-    candidate = re.sub(
-        r"\bThese issues make review confusing,\s*as users cannot tell which "
-        r"(.+?) are active,\s*or if replacements?\s+(?:(?:is|are)\s+)?finished\b",
-        r"Users cannot tell which \1 are active or whether replacements are finished",
-        candidate,
-        flags=re.IGNORECASE,
-    )
-    candidate = re.sub(
-        r"\bThe project team was ready\b",
-        "The team was ready",
-        candidate,
-        flags=re.IGNORECASE,
-    )
-    candidate = re.sub(
-        r"\bThe first shared build was slow, putting periods in weird spots and failing to insert "
-        r"corrected text into the active document\b",
-        "The slow first shared build put periods in weird spots and failed to insert corrected text "
-        "into the active document",
-        candidate,
-        flags=re.IGNORECASE,
-    )
-    candidate = re.sub(
-        r"\bThey need various styles:",
-        "They need styles:",
-        candidate,
-        flags=re.IGNORECASE,
-    )
-    candidate = re.sub(
-        r"\bThe next morning, the team received a detailed report from\b",
-        "The next morning, the team got a report from",
-        candidate,
-        flags=re.IGNORECASE,
-    )
-    candidate = re.sub(r"\bEach user liked\b", "All liked", candidate, flags=re.IGNORECASE)
-    candidate = re.sub(
-        r"\bThis (?:causes|makes) (?:review )?confusion as users can't tell which "
-        r"(two or three sentences) are active or if replacements are (?:complete|finished)\.",
-        r"Users still can't tell which \1 are active or whether replacements are finished.",
-        candidate,
-        flags=re.IGNORECASE,
-    )
-    candidate = re.sub(
-        r"\bThey need styles:\s*(.+?)\.\s+Without opening the main application window\.",
-        r"They need \1 styles without opening the main application window.",
-        candidate,
-        flags=re.IGNORECASE,
-    )
-    candidate = re.sub(
-        r"\bThe team agrees to rebuild interaction around a compact, dependable card that\b",
-        "The team agrees to rebuild a compact, dependable card that",
-        candidate,
-        flags=re.IGNORECASE,
-    )
-    candidate = re.sub(
-        r"\bReviewers need clear red marks under changed words, visible Accept and Dismiss controls, "
-        r"and a reliable way to move to the next sentence\b",
-        "Reviewers need clear red marks on changes, visible Accept and Dismiss controls, and reliable "
-        "movement to the next sentence",
-        candidate,
-        flags=re.IGNORECASE,
-    )
-    candidate = re.sub(
-        r"\bThe revised local workflow reads active selection, separates complete sentences,?\s+and "
-        r"sends each small group to an installed AI model for spelling, grammar, punctuation, and "
-        r"basic formatting checks\.",
-        "The revised local workflow reads active selection, separates complete sentences, and sends "
-        "each group to an installed AI model to check spelling, grammar, punctuation, and basic formatting.",
-        candidate,
-        flags=re.IGNORECASE,
-    )
-    candidate = re.sub(
-        r"\bThe model returns one clean suggestion while maintaining every original paragraph and "
-        r"line break unless the user requests a structural rewrite\.",
-        "It returns one clean suggestion while preserving every original paragraph and line break "
-        "unless the user requests restructuring.",
-        candidate,
-        flags=re.IGNORECASE,
-    )
-    candidate = re.sub(
-        r"^If the selection disappears while the card is open",
-        "If selection vanishes while the card is open",
-        candidate,
-    )
-    candidate = re.sub(
-        r"\bbefore applying one safe paste\b",
-        "before one safe paste",
-        candidate,
-        flags=re.IGNORECASE,
-    )
-    candidate = re.sub(
-        rf"\bbefore applying one ({_IMMUTABLE_TOKEN.pattern})",
-        r"before one \1",
-        candidate,
-        flags=re.IGNORECASE,
-    )
-    candidate = re.sub(
-        r"\bthe normal Windows clipboard after any approved fallback\b",
-        "the Windows clipboard after an approved fallback",
-        candidate,
-        flags=re.IGNORECASE,
-    )
-    candidate = re.sub(
-        r"\bThe developers rushed their review due to the deadline\. They documented changes briefly\.",
-        "Deadline pressure made developers rush review and document changes briefly.",
-        candidate,
-        flags=re.IGNORECASE,
-    )
-    candidate = re.sub(
-        r"\bThe final decision belongs to the user after local evidence is visible and understandable\.",
-        "The user makes the final decision after seeing clear local evidence.",
-        candidate,
-        flags=re.IGNORECASE,
-    )
-    candidate = re.sub(
-        r"\bThe application should work locally, explain failures clearly, and avoid hidden uploads\b",
-        "The local application should clearly explain failures and avoid hidden uploads",
-        candidate,
-        flags=re.IGNORECASE,
-    )
-    return candidate
 
 
 def _apply_safe_caveman_splits(candidate: str) -> str:

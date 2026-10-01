@@ -21,11 +21,10 @@ from echo_link_core.selected_text import LocalWritingAssistant
 from echo_link_app.review_spans import _review_spans
 
 
-# The visible menu, 2026-09-30: Diplomatic and Professional in, Shorten out,
-# on the owner's instruction. Shorten keeps its CRITERIA entry and its
-# compression check below so "--tones Shorten" still measures it; it is simply
-# not one of the tones a writer is offered. See the comment on
-# RewritePalette.tone_combo for why it went.
+# The visible menu, 2026-09-30. Shorten was first dropped from the menu and
+# then deleted outright on the owner's instruction: command, contract, prompt,
+# compression helpers and criteria are all gone, so there is nothing left for
+# "--tones Shorten" to measure.
 TONES = (
     "Clear",
     "Improve",
@@ -52,7 +51,6 @@ CRITERIA = {
     "Clear": "Clear, natural, readable wording and flow with all errors corrected and meaning preserved.",
     "Improve": "Clearer grammar, diction, structure, and flow without a needless tone change.",
     "Rephrase": "Materially different natural wording and syntax with the same details and force.",
-    "Shorten": "Substantially shorter, concise, and free of repetition while keeping all key facts.",
     "Friendly": (
         "Visibly warm, conversational, people-centered, and helpful without slang, fake enthusiasm, "
         "or invented thanks. Contractions, gentle transitions, approachable vocabulary, and "
@@ -843,7 +841,6 @@ TARGET CRITERIA: {CRITERIA[tone]}
 Objective spelling, grammar, punctuation, completeness, fact, number, ownership, timing,
 privacy-boundary, and structure checks are performed separately by deterministic code. Do not
 score or discuss those areas. Do not treat ordinary tense or agreement correction as a style flaw.
-For Shorten, compression length is also checked separately; judge whether the wording is concise.
 {tone_note}
 
 Score each field from 0 to 5:
@@ -948,10 +945,9 @@ def run_probe(
                     else ()
                 ),
             ]
-            shorten_ceiling = 0.995 if source_text == QUICK_SOURCE_TEXT else 0.93
             # Computed but never recorded. The length check this probe was meant
             # to apply was lost; see the debt register in docs/ARCHITECTURE.md.
-            length_ok = 0.35 <= ratio <= shorten_ceiling if tone == "Shorten" else ratio >= 0.65  # noqa: F841
+            length_ok = ratio >= 0.65  # noqa: F841
             cases.append(
                 {
                     "tone": tone,
@@ -1009,13 +1005,7 @@ def run_probe(
                 and not case["deterministic_relation_errors"]
                 and case["paragraph_count_ok"]
                 and case["line_break_structure_ok"]
-                and (
-                    0.35 <= float(case["length_ratio"]) <= (
-                        0.995 if source_text == QUICK_SOURCE_TEXT else 0.93
-                    )
-                    if case["tone"] == "Shorten"
-                    else float(case["length_ratio"]) >= 0.65
-                )
+                and float(case["length_ratio"]) >= 0.65
             )
         except Exception as exc:
             case["error"] = f"{type(exc).__name__}: {exc}"

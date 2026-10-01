@@ -493,10 +493,10 @@ def test_tone_commands_tell_the_model_to_keep_every_modal():
     from echo_link_core.selected_text import _task_rules
 
     friendly = _task_rules("Friendly", "", None, hard_word_limit=False)
-    shorten = _task_rules("Shorten", "", None, hard_word_limit=False)
+    formal = _task_rules("Formal", "", None, hard_word_limit=False)
     assert "modal verb" in friendly
     assert "Do not swap one modal for another" in friendly
-    assert "modal verb" in shorten
+    assert "modal verb" in formal
 
 
 def test_a_tone_rewrite_gets_the_writers_own_modal_back():
@@ -552,8 +552,7 @@ def test_a_proofread_does_not_pass_as_a_friendly_rewrite():
         if unchanged and not _FRIENDLY_STYLE_SIGNAL.search(candidate):
 
     A proofread differs from the source, so it never reached the warmth test at
-    all and shipped as a verified Friendly rewrite. Shorten has no equivalent
-    escape hatch, and Shorten is the one tone that demonstrably works. Measured
+    all and shipped as a verified Friendly rewrite. Measured
     through Word with a 27B judge, essay 7 scored 1 of 8 paragraphs on Friendly
     and the judge's own words for six of them were that the writing "lacks
     warmth" or is "clear but loses warmth in striving for correctness".

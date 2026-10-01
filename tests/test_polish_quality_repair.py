@@ -19,7 +19,6 @@ from echo_link_core.polish import (
 from echo_link_core.polish_spelling import PolishRuleEngine
 from echo_link_core.selected_text import (
     _apply_fast_proofread_rules,
-    _apply_safe_shorten_compression,
     _linked_source_facts_preserved,
     _task_rules,
 )
@@ -817,7 +816,6 @@ def test_all_visible_tones_have_strict_contracts():
         "Clear",
         "Improve",
         "Rephrase",
-        "Shorten",
         "Friendly",
         "Formal",
         "Professional",
@@ -851,18 +849,6 @@ def test_concise_contract_explicitly_forbids_clause_loss():
     assert "constraint" in instruction
 
 
-def test_rephrase_and_shorten_contracts_keep_content_words_and_actors():
-    rephrase = TONE_CONTRACTS["Rephrase"].instruction.casefold()
-    shorten = TONE_CONTRACTS["Shorten"].instruction.casefold()
-
-    assert "content nouns" in rephrase
-    assert "critical verbs" in rephrase
-    assert "retain at least 85 percent of the source words" not in rephrase
-    assert "complete natural sentence" in rephrase
-    assert "do not duplicate" in rephrase
-    assert "do not begin a sentence with because or while" in rephrase
-    assert "actors" in shorten
-    assert "factual clauses" in shorten
 
 
 def test_proofread_prompt_requests_polished_vocabulary_and_sentence_structure():
@@ -1556,18 +1542,6 @@ def test_fact_guard_accepts_caveman_split_without_losing_two_failures():
     assert _linked_source_facts_preserved(source, candidate)
 
 
-def test_safe_shorten_compresses_locked_review_failure_without_losing_facts():
-    source = (
-        "The third tester requested a formal tone, but the local AI returned a shorter draft "
-        "that removed two details and altered names that needed to remain exact. These issues "
-        "make review confusing, as users cannot tell which two or three sentences are active, "
-        "or if replacement is finished."
-    )
-    result = _apply_safe_shorten_compression(source)
-    assert len(result.split()) < len(source.split())
-    assert "two details" in result
-    assert "names" in result
-    assert "two or three sentences" in result
 
 
 def test_visible_tone_prompt_includes_shared_strict_contract():

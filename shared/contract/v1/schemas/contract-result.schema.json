@@ -193,8 +193,8 @@
         },
         "writing_commands": {
           "type": "array",
-          "minItems": 27,
-          "maxItems": 27,
+          "minItems": 26,
+          "maxItems": 26,
           "uniqueItems": true,
           "items": {
             "enum": [
@@ -202,7 +202,6 @@
               "Improve",
               "Rephrase",
               "Rewrite",
-              "Shorten",
               "Expand",
               "Summarize",
               "Formal",

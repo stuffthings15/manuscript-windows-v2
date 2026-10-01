@@ -94,14 +94,6 @@ TONE_CONTRACTS: dict[str, ToneContract] = {
         structure="preserve facts and paragraph boundaries; change sentence construction",
         prohibited=("copied source phrasing",),
     ),
-    "Shorten": _contract(
-        "Shorten",
-        "Remove repetition and filler while retaining all actors, factual clauses, "
-        "important details, and boundaries.",
-        vocabulary="concise",
-        sentence_length="short",
-        prohibited=("lost key details",),
-    ),
     "Friendly": _contract(
         "Friendly",
         "Make every paragraph visibly warm, approachable, and conversational. Recast existing "

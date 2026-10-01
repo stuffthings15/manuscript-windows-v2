@@ -281,13 +281,6 @@ QUEUE: tuple[tuple[str, str, tuple[tuple[str, str], ...], str], ...] = (
     # 14 of 19 Friendly refusals on 2026-08-20 were real modal shifts, where
     # "hesitation blocks progress" became "hesitation can block progress".
     (
-        "give Shorten a measurable target, not only things to retain",
-        QUALITY,
-        ((_SHORTEN_BEFORE, _SHORTEN_AFTER),),
-        "Shorten",
-        "tone",
-    ),
-    (
         "tell Rephrase what counts as rephrased",
         QUALITY,
         ((_REPHRASE_BEFORE, _REPHRASE_AFTER),),

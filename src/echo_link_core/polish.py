@@ -94,7 +94,6 @@ _STAGED_STYLE_COMMANDS = frozenset(
         "Rewrite",
         "Improve",
         "Rephrase",
-        "Shorten",
         "Friendly",
         "Formal",
         "Professional",
@@ -4269,8 +4268,7 @@ def _friendly_rewrite_is_visible(source: str, candidate: str) -> bool:
     counted as a verified Friendly rewrite and shipped as one. Measured through
     Word on 2026-08-18 with a 27B judge, essay 7 scored 1 of 8 paragraphs on
     Friendly, and the judge's own words for the failure were "clear but loses
-    warmth in striving for correctness". Shorten has no such escape hatch, and
-    Shorten is the one tone that demonstrably works.
+    warmth in striving for correctness".
 
     The signal is widened to match what this product already tells the model
     and the judge that warmth is: not only the explicit words, but contractions

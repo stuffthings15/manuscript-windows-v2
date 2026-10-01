@@ -33,6 +33,7 @@ being asked for explicitly, and the runner prints what it is about to do and
 how long it takes before it does it.
 """
 from __future__ import annotations
+from animal_essay_corpus_inventory import VISIBLE_TONES  # noqa: E402
 
 import argparse
 from datetime import datetime, timezone
@@ -63,7 +64,9 @@ CORRECTIONS_LOWEST = 90.0
 TONE_PERCENT = 95.0
 # The six in the palette, on the owner's instruction of 2026-08-16. The gate
 # measures what the product offers, not everything the engine can do.
-PALETTE_TONES = ("Clear", "Improve", "Rephrase", "Shorten", "Formal", "Friendly")
+# The menu, from the tuple that defines it. Hard-coding it meant this had
+# gone stale at the pre-2026-09-30 six.
+PALETTE_TONES = tuple(VISIBLE_TONES)
 # The judge, named here rather than left to the tool's default.
 #
 # tone_correctness defaults to gemma4:12b-it-q4_K_M, which is not installed on

@@ -10,7 +10,6 @@ from echo_link_core.selected_text import (
     LocalWritingAssistant,
     _apply_fast_proofread_rules,
     _apply_safe_caveman_splits,
-    _apply_safe_shorten_compression,
     _canonicalize_immutable_tokens,
     _immutable_tokens_changed,
     _linked_source_facts_preserved,
@@ -1257,7 +1256,6 @@ def test_local_writing_generation_requires_exact_response_model(
     (
         "Improve",
         "Rephrase",
-        "Shorten",
         "Friendly",
         "Formal",
         "Professional",
@@ -2134,29 +2132,6 @@ def test_caveman_prompt_gets_a_concision_target(monkeypatch):
     LocalWritingAssistant().run(source, command="Caveman", model="local-model")
 
 
-def test_derived_shorten_limit_retries_once_and_then_fails_closed(monkeypatch):
-    source = "Alpha beta gamma delta epsilon zeta eta theta iota kappa."
-    expanded = "Alpha beta gamma delta epsilon zeta eta theta iota kappa lambda."
-    prompts = []
-
-    def fake_urlopen(request, timeout):
-        body = json.loads(request.data.decode("utf-8"))
-        prompts.append(body["prompt"])
-        return _Response({"response": expanded})
-
-    monkeypatch.setattr("echo_link_core.local_transport._open_request", fake_urlopen)
-    with pytest.raises(RuntimeError, match="word limit"):
-        LocalWritingAssistant().run(
-            source,
-            command="Shorten",
-            model="local-model",
-        )
-
-    assert len(prompts) == 3
-    assert "Hard output limit: 9 words" in prompts[0]
-    assert "MEANING-SAFE DRAFT" in prompts[1]
-    assert "Hard visible-word limit before token expansion: 10" in prompts[1]
-    assert "prior result is 1 visible words too long" in prompts[2]
 
 
 def test_new_number_is_rejected_without_retry(monkeypatch):
@@ -2218,7 +2193,6 @@ def test_translation_requires_target_language_output_and_preserves_tokens(monkey
         "Rewrite",
         "Improve",
         "Rephrase",
-        "Shorten",
         "Friendly",
         "Formal",
         "Professional",
@@ -2641,26 +2615,8 @@ def test_tone_rewrite_does_not_add_line_breaks_to_one_paragraph(monkeypatch):
     assert result.text == "The team reviewed the logs. They fixed the issue."
 
 
-def test_safe_shorten_compression_removes_words_without_losing_build_or_controls():
-    source = (
-        "The project team was ready. The first shared build was slow, putting periods in weird spots "
-        "and failing to insert corrected text into the active document. Reviewers need clear red marks "
-        "under changed words, visible Accept and Dismiss controls, and a reliable way to move to the next sentence."
-    )
-
-    result = _apply_safe_shorten_compression(source)
-
-    assert len(result.split()) < len(source.split())
-    assert "failed to insert corrected text" in result
-    assert "Accept and Dismiss controls" in result
 
 
-def test_safe_shorten_compression_handles_a_protected_safe_paste_token():
-    source = "Find the same text before applying one ECHOLINKTOKEN4X."
-
-    result = _apply_safe_shorten_compression(source)
-
-    assert result == "Find the same text before one ECHOLINKTOKEN4X."
 
 
 def test_safe_caveman_split_keeps_launch_facts_in_one_paragraph():
@@ -3107,27 +3063,6 @@ def test_reported_draft_change_is_not_allowed_to_become_an_ai_command(monkeypatc
     assert "AI must remove" not in result.text
 
 
-def test_shorten_keeps_paragraph_preservation_as_a_user_requirement(monkeypatch):
-    candidate = (
-        "The workflow reads active selection, separates complete sentences, and sends each group to "
-        "the model for checks. The model returns one clean suggestion while maintaining every original "
-        "paragraph and line break unless the user requests a structural rewrite."
-    )
-    monkeypatch.setattr(
-        "echo_link_core.local_transport._open_request",
-        lambda _request, _timeout: _Response({"response": candidate}),
-    )
-
-    result = LocalWritingAssistant().run(
-        "The workflow reads active selection, separates complete sentences, and sends each group to "
-        "the model for checks. The model returns one clean suggestion. Every original paragraph and "
-        "line break must remain in place unless the user requests a structural rewrite.",
-        command="Shorten",
-        model="local-model",
-    )
-
-    assert "Every original paragraph and line break must stay" in result.text
-    assert "while maintaining every original paragraph" not in result.text
 
 
 def test_passive_style_requirement_restores_the_source_owner(monkeypatch):
@@ -3328,18 +3263,6 @@ def test_linked_feedback_facts_accept_spelling_correction_synonym():
     assert _linked_source_facts_preserved(source, candidate)
 
 
-def test_shorten_compresses_singular_replacement_status_without_losing_facts():
-    candidate = (
-        "The third tester requested a formal tone. The local AI returned a shorter draft, removing "
-        "two details and changing names that needed to remain exact. These issues make review confusing, "
-        "as users cannot tell which two or three sentences are active, or if replacement is finished."
-    )
-
-    shortened = _apply_safe_shorten_compression(candidate)
-
-    assert "two or three sentences" in shortened
-    assert "replacements are finished" in shortened
-    assert len(shortened.split()) < len(candidate.split())
 
 def test_final_cleanup_repairs_simplified_transition_punctuation():
     source = (

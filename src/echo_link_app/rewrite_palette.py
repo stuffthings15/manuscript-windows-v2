@@ -2148,7 +2148,6 @@ class RewritePalette(QDialog):
             "Clear": "Clear",
             "Improve": "Improve",
             "Rephrase": "Rephrase",
-            "Shorten": "Shorten",
             "Friendly": "Friendly",
             "Formal": "Formal",
             "Professional": "Professional",
