@@ -36,6 +36,7 @@ from application_log_cursor import capture_cursor, lines_since  # noqa: E402
 from restart_app_and_wait import app_is_running  # noqa: E402
 import harness_state  # noqa: E402
 from animal_essay_corpus_probe import CORPUS, _essay_files, load_essays  # noqa: E402
+from animal_essay_corpus_inventory import VISIBLE_TONES  # noqa: E402
 from repro_accept_advance import (  # noqa: E402
     counter_text,
     hud_window,
@@ -1541,7 +1542,12 @@ def main() -> int:
     parser.add_argument(
         "--tone",
         default="",
-        choices=["", "Clear", "Improve", "Rephrase", "Shorten", "Formal", "Friendly"],
+        # Taken from VISIBLE_TONES rather than written out again. This list was
+        # a fourth copy of the menu and it had already drifted: on 2026-09-30
+        # the menu gained Diplomatic and Professional and dropped Shorten, and
+        # this still offered the old six, so the two new tones could not be
+        # measured in Word at all while Shorten still could.
+        choices=["", *VISIBLE_TONES],
         help=(
             "apply this tone to every section before accepting it. Without it "
             "the run only proofreads, which is all this harness could ever do "
