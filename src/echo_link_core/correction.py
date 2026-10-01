@@ -664,7 +664,16 @@ def _protect_text(
     protected_terms: Iterable[str],
     *,
     protect_detected: bool = True,
+    keep_source_case: bool = False,
 ) -> tuple[str, dict[str, str]]:
+    # keep_source_case: a token gives back the exact text it replaced rather
+    # than the protected value's spelling. Matching is case-insensitive, so
+    # without it one capitalised value recapitalised every lowercase
+    # occurrence of the same word. Found 2026-09-30: a sentence-start
+    # "Learning" was harvested as a name and "before learning much" came back
+    # "before Learning much" in a Friendly rewrite. Off by default because
+    # dictation relies on the opposite: a saved vocabulary term restores in
+    # the writer's saved casing, which is the point of saving it.
     values = [value for value in protected_terms if value]
     if protect_detected:
         values.extend(match.group(0) for match in _PROTECTED_PATTERN.finditer(text))
@@ -686,7 +695,7 @@ def _protect_text(
             token_index += 1
             occupied.append((start, end))
             spans.append((start, end, token, value))
-            replacements[token] = value
+            replacements[token] = match.group(0) if keep_source_case else value
     result = text
     for start, end, token, _value in sorted(spans, reverse=True):
         result = result[:start] + token + result[end:]

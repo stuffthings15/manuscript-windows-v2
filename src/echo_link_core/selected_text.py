@@ -509,6 +509,9 @@ class LocalWritingAssistant:
             source,
             protected_values,
             protect_detected=False,
+            # The writer's own bytes at each spot. See _protect_text and
+            # tests/test_a_protected_word_keeps_its_own_case.py.
+            keep_source_case=True,
         )
         protected_literals = _strict_protected_literals(source)
         # Naming the token system on text that contains no tokens taught small
