@@ -20,6 +20,7 @@ URL_PATTERN = re.compile(r"https?://[^\s\"']+")
 ALLOWED_ENDPOINTS = ("http://127.0.0.1", "http://localhost")
 ALLOWED_REMOTE_ENDPOINTS = {
     Path("src/echo_link_core/subscription.py"): {"https://{parsed.hostname}"},
+    Path("src/echo_link_core/update_check.py"): {"https://{parsed.hostname}"},
 }
 BANNED_IMPORTS = (
     "import openai",

@@ -70,12 +70,24 @@ class DictationSettings:
     whisper_mode: bool = False
     append_trailing_space: bool = True
     local_refinement_enabled: bool = True
+    # Let a dictated name be checked against the document it is being typed
+    # into. Without this the corrector sees one utterance and nothing else, so
+    # a cited author's name it has never met reads as a misspelling and gets
+    # "corrected" into something the writer did not say. The document is only
+    # evidence about which capitalised words are real names; no document text
+    # is ever sent to the model.
+    document_context_enabled: bool = True
     # Empty means the hardware policy must choose an accepted local AI pack.
     ollama_model: str = ""
     polish_mode: PolishMode = PolishMode.AUTO
     polish_model_pack_id: str = ""
     polish_policy_version: int = 1
     polish_download_consent: bool = False
+    # Keep the writer's meaning exactly. OFF lets the local AI rewrite
+    # for sense: restructure, drop filler, repair muddled claims. Asked
+    # for on 2026-09-30. Default stays ON because OFF means the model may
+    # change what the writer said, and that is the writer's call to make.
+    polish_faithful: bool = True
     correction_timeout_seconds: float = 20.0
     gpu_idle_release_seconds: int = OLLAMA_IDLE_UNLOAD_SECONDS
     start_with_windows: bool = False
@@ -176,6 +188,7 @@ class DictationSettings:
         values["polish_download_consent"] = bool(
             values.get("polish_download_consent", False)
         )
+        values["polish_faithful"] = bool(values.get("polish_faithful", True))
         allowed = set(cls.__dataclass_fields__)
         return cls(**{key: value for key, value in values.items() if key in allowed})
 

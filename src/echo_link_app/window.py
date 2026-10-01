@@ -10,6 +10,7 @@ import threading
 import logging
 import math
 import time
+from contextlib import nullcontext
 from datetime import datetime
 from difflib import ndiff
 
@@ -117,6 +118,12 @@ from echo_link_core.windows_selection import (
 
 logger = logging.getLogger(__name__)
 
+# The HUD reads up to 500,000 characters because it has to correct all of it.
+# This read only has to recognise how a name is spelled, and it happens once
+# per dictation, so it asks for far less. correction.py bounds what it actually
+# scans again on its own side.
+DOCUMENT_CONTEXT_CHARACTERS = 20_000
+
 
 
 
@@ -195,6 +202,50 @@ def _unique_document_text(document: str, expected: str) -> str | None:
     return matches[0] if len(matches) == 1 else None
 
 
+
+def _is_the_same_capture(current, incoming) -> bool:
+    """Is this focus signal about the same work as the review already in hand?
+
+    THE SAME DOCUMENT WITH A MOVED CARET IS NOT A NEW CAPTURE. This used to be
+    `current == record`, comparing whole SelectionRecords - which include the
+    caret anchor. So an identical document reported again with the caret one
+    character further along compared unequal, the guard did not fire, and the
+    prepared review was thrown away and rebuilt from nothing.
+
+    Measured across 98 automated runs of two documents on 2026-09-04 and 05.
+    Twenty-two runs accepted NOTHING at all, and the separation is total:
+
+        succeeded (76): the next focus signal arrived 22.6s to 57.5s later
+        failed    (22): it arrived 3.3s to 4.7s later
+
+    In all 22 failures the replacing capture was the same size as the one it
+    replaced, and in all 22 the caret anchor had moved - x from 801 to 915 or
+    993, y identical. Nothing had been typed. The review was discarded because
+    the caret had shifted inside an unchanged document.
+
+    That race is why the same corpus and the same product code scored 66.7 on
+    one baseline run and 33.3 on the next, and why 36 experiments in a row
+    discarded at 33.3 against a bar of 66.7 - the metric was measuring a coin
+    flip, and every one of those discards was noise.
+
+    Compared here: the window, the scope, the text, and the digest when both
+    carry one. Not the anchor, and not the selection offsets, because those
+    describe where the writer is rather than what there is to correct.
+    """
+    if current is None or incoming is None:
+        return False
+    if current.text != incoming.text or current.scope != incoming.scope:
+        return False
+    if (
+        current.window.handle != incoming.window.handle
+        or current.window.process_id != incoming.window.process_id
+    ):
+        return False
+    if current.document_digest and incoming.document_digest:
+        return current.document_digest == incoming.document_digest
+    return True
+
+
 def _normalized_document_text(value: str) -> str:
     """One spelling of a document's text, for comparing two captures of it.
 
@@ -266,6 +317,7 @@ class EchoLinkWindow(QMainWindow):
             store,
             event_callback=self.bridge.session_event.emit,
             level_callback=self.bridge.level_changed.emit,
+            document_context_provider=self._read_document_context,
         )
         self.hotkey: GlobalPushToTalk | None = None
         self.hands_free_hotkey: GlobalPushToTalk | None = None
@@ -292,6 +344,7 @@ class EchoLinkWindow(QMainWindow):
             self.polish_engine,
             mode_provider=lambda: self.engine.settings.polish_mode,
             consent_provider=lambda: self.engine.settings.polish_download_consent,
+            faithful_provider=lambda: self.engine.settings.polish_faithful,
         )
         # Keep the mature UI boundary stable while routing its work through PolishEngine.
         self.writing_assistant = _AcceptedPlanWritingAssistant(
@@ -300,6 +353,12 @@ class EchoLinkWindow(QMainWindow):
             self._share_completed_polish_result,
         )
         self._installed_writing_models: set[str] = set()
+        # Why the writing AI is not serving corrections, in the writer's own
+        # words, or "" when it is. _show_ready_state reported the hotkeys and
+        # the speech model and said nothing about this one, so a machine that
+        # came up rules-only looked entirely healthy until a review card
+        # rendered with no AI in it.
+        self._writing_ai_reason: str = ""
         # Lets the prewarm retry give up at once when the window closes,
         # instead of sitting out its delay in a daemon thread.
         self._warm_retry_stop = threading.Event()
@@ -1469,6 +1528,31 @@ class EchoLinkWindow(QMainWindow):
     def _capture_selected_text_for_palette(self) -> None:
         self._capture_selected_text_for_review(show_palette=True)
 
+    def _read_document_context(self, target_window) -> str:
+        """Read the document being dictated into, for name evidence only.
+
+        Called by the engine on its own thread the moment recording starts, so
+        the UI Automation cost is spent while the writer is still speaking
+        rather than between the last word and the text appearing. That ordering
+        is the point: a read on the dictation path cost 0.5 seconds and delayed
+        the activation cue on 2026-07-29.
+
+        The text never leaves this machine and is never sent to the model. It
+        is used only to decide how a name the writer already uses is spelled.
+        """
+        if not sys.platform.startswith("win"):
+            return ""
+        handle = int(getattr(target_window, "handle", 0) or 0)
+        if handle <= 0:
+            return ""
+        reader = WindowsSelectionReader(max_characters=DOCUMENT_CONTEXT_CHARACTERS)
+        context_factory = getattr(reader, "automation_thread_context", None)
+        context = context_factory() if callable(context_factory) else nullcontext()
+        with context:
+            detected = reader.read_document()
+        record = getattr(detected, "record", None)
+        return str(getattr(record, "text", "") or "")
+
     def _capture_selected_text_for_review(self, *, show_palette: bool) -> None:
         logger.info("Selected-text hotkey/capture requested")
         if (
@@ -1557,6 +1641,25 @@ class EchoLinkWindow(QMainWindow):
             self.tabs.setCurrentIndex(1)
             update_status_label(self.writing_state, str(exc), assertive=True)
             return
+        # Name the document, on this path too. The automatic monitor logs
+        # "editable focus detected title=..." and the shortcut logged nothing
+        # carrying a title, so the app's log could say a review was built and
+        # never say what it was built from. That is not cosmetic: on
+        # 2026-09-08 the batch harness scored a 20 essay run a crash on 8
+        # errors and 2 dead, and every one of the 5 failures still traceable
+        # in the un-rotated log was a document this app had captured
+        # correctly - essay 10 built a review of 22 sections at 9005
+        # characters, which is exactly essay 10, and then waited five minutes
+        # for a line this path never wrote. The two paths race, the shortcut
+        # wins whenever the monitor has not settled within about 16 seconds of
+        # the document opening, and only one of them was visible from
+        # outside.
+        logger.info(
+            "Writing HUD shortcut capture prepared title=%r scope=%s chars=%d",
+            record.window.title,
+            record.scope,
+            len(record.text),
+        )
         self.selected_text_record = record
         self.writing_source.setPlainText(record.text)
         self.writing_result_edit.clear()
@@ -1732,7 +1835,8 @@ class EchoLinkWindow(QMainWindow):
         # UI Automation can report the same focused range on every poll. Do
         # not rebuild the badge for that duplicate signal: replacing its page
         # between mouse-down and mouse-up cancels a real click on Windows.
-        if self._badge_clear_timer is not None and self.selected_text_record == record:
+        unchanged = _is_the_same_capture(self.selected_text_record, record)
+        if self._badge_clear_timer is not None and unchanged:
             # The capture that was about to be cleared came straight back
             # (Word focus flap); keep the existing badge untouched.
             self._badge_clear_timer.stop()
@@ -1741,8 +1845,13 @@ class EchoLinkWindow(QMainWindow):
             palette_visible
             and self.rewrite_palette.automatic
             and self.rewrite_palette.view == "badge"
-            and self.selected_text_record == record
+            and unchanged
         ):
+            # The caret may have moved even though nothing was typed, so the
+            # record is refreshed WITHOUT rebuilding the review. The badge then
+            # still follows the caret, which is the only thing the anchor is
+            # for.
+            self.selected_text_record = record
             return
         self.selected_text_record = record
         self.writing_source.setPlainText(record.text)
@@ -2135,11 +2244,17 @@ class EchoLinkWindow(QMainWindow):
                 # hour. The reason is usually momentary (another program holding
                 # the GPU at launch) and every later request re-plans, so this
                 # is a warning about the warm-up, not a permanent state.
-                logger.warning(
-                    "Adaptive Polish came up rules-only: %s",
+                reason = (
                     plan.downgrade_reason
                     or plan.reason
-                    or "no installed pack fits this hardware",
+                    or "no installed pack fits this hardware"
+                )
+                logger.warning("Adaptive Polish came up rules-only: %s", reason)
+                # Laundered, because downgrade_reason can name the pack or the
+                # runtime, and those names are kept out of user-facing text.
+                self._writing_ai_reason = (
+                    user_ai_status(reason)
+                    or "Local AI is not available. Corrections use built-in rules."
                 )
             # Load the selected model now, in this startup daemon thread, so
             # the user's first correction does not pay the multi-second cold
@@ -2165,8 +2280,23 @@ class EchoLinkWindow(QMainWindow):
                         # A missing bundled host is not a failed model. The
                         # adaptive runtime still has its verified compatibility
                         # backend, which must receive the normal acceptance probe.
+                        # The reason was kept on the runtime and never
+                        # logged, so on 2026-10-01 the installed build fell
+                        # back from its bundled host at every start with no
+                        # way to tell why. It is an exception message from
+                        # the runtime or the host, which redacts paths and
+                        # never carries writing.
                         logger.info(
-                            "Bundled local AI preparation failed; probing fallback"
+                            "Bundled local AI preparation failed; probing "
+                            "fallback reason=%s",
+                            str(
+                                getattr(
+                                    self.polish_engine.runtime,
+                                    "last_downgrade_reason",
+                                    "",
+                                )
+                                or "unrecorded"
+                            )[:300],
                         )
                     warmed = self.polish_engine._accept_plan(
                         plan,
@@ -2244,6 +2374,8 @@ class EchoLinkWindow(QMainWindow):
                         warmed.use_llm,
                         loaded,
                     )
+                    if loaded:
+                        self._writing_ai_reason = ""
                     return loaded
                 else:
                     self.ai_coordinator.clear(token=token)
@@ -2253,6 +2385,9 @@ class EchoLinkWindow(QMainWindow):
             # Startup probing is optional and runs in a daemon thread. Any
             # normal provider failure must leave the app in rules-only mode.
             logger.warning("Adaptive Polish setup fell back to rules", exc_info=True)
+            self._writing_ai_reason = (
+                "Local AI could not start. Corrections use built-in rules."
+            )
             self.ai_coordinator.clear(token=token)
         finally:
             self.ai_coordinator.finish_update(token)
@@ -2512,9 +2647,16 @@ class EchoLinkWindow(QMainWindow):
             protected_terms,
             self.selected_text_record.text or "",
             # Read here, on the GUI thread, because the worker below must not
-            # touch a widget. This is the correction already on the card, kept
-            # so a failed tone does not cost the writer their proofread.
-            self.rewrite_palette.current_replacement_text(),
+            # touch a widget. This is the correction THIS SECTION already has,
+            # kept so a failed tone does not cost the writer their proofread.
+            #
+            # It used to read current_replacement_text(), which is whatever is
+            # on the card. Those agree for the section the writer is looking at
+            # and differ for every section corrected ahead of them in the
+            # background - and a background section then had the CARD's text
+            # written into it. See correction_for_section for what that did to
+            # 122 sections of the acceptance tier.
+            self.rewrite_palette.correction_for_section(suggestion_id),
         )
         with self._palette_ai_lock:
             if self._palette_ai_shutdown:
@@ -2690,6 +2832,34 @@ class EchoLinkWindow(QMainWindow):
                     # instead loses the tone AND the correction: measured on
                     # essay 7, a refused Friendly returned "Another benefit are
                     # the WAY a hamster..." with the writer's errors intact.
+                    #
+                    # UNRESOLVED, 2026-09-12, and left alone rather than guessed
+                    # at. For a single-paragraph section this branch cannot be
+                    # taken at all: a tone request's `source` IS the section's
+                    # current correction, and `existing_correction` is now the
+                    # same string, so `existing_correction != source.strip()` is
+                    # false and control falls to the deterministic repair below.
+                    # Reproduced by driving _execute_palette_sentence_job with a
+                    # rejected model answer: the payload came back as the rules
+                    # text, which is the essay-7 outcome this branch was written
+                    # to prevent.
+                    #
+                    # It is NOT a regression from correction_for_section. Before
+                    # that, `existing_correction` was whatever was on the card,
+                    # which for the section the writer is looking at is also
+                    # `source` - so the branch was already dead there, and only
+                    # came alive for BACKGROUND sections, where the text it
+                    # carried belonged to somebody else. It fired exactly when
+                    # it had the wrong answer.
+                    #
+                    # The fix is probably to drop the `!=` test and keep the
+                    # correction whenever a tone request carries one. That
+                    # changes which text a writer gets when a tone fails, so it
+                    # is a correction-quality change and this project measures
+                    # those through Word, never by reasoning. Whoever picks this
+                    # up: reconstruct the essay-7 case first, because the
+                    # comment above is the only record of what `source` held
+                    # when it was measured.
                     #
                     # Reporting the section as failed was tried first and was
                     # worse still - it disables Replace, so seven sections were
@@ -3327,9 +3497,12 @@ class EchoLinkWindow(QMainWindow):
         if record is None:
             return
         text = _normalized_document_text(record.text)
-        if not text or text in self._reviewed_texts:
+        if not text:
             return
-        self._reviewed_texts.append(text)
+        if text not in self._reviewed_texts:
+            self._reviewed_texts.append(text)
+        # A repeated review still completed. Suppress duplicate cache entries,
+        # never the completion acknowledgement used by the user-test harness.
         logger.info(
             "Writing HUD review finished; will not auto-offer this text again "
             "chars=%d remembered=%d",
@@ -3646,6 +3819,20 @@ class EchoLinkWindow(QMainWindow):
         speech_status = self.engine.transcriber.status()
         if not speech_status["available"]:
             self._set_status("Speech AI unavailable. Open Settings to repair it.", COLORS["amber"])
+        elif self._writing_ai_reason:
+            # SAY IT HERE, because nothing else does.
+            #
+            # Coming up rules-only turns the product's main feature off, and it
+            # was visible only as a WARNING in a log the writer has no reason to
+            # open. This panel already reports a hotkey that would not register
+            # and a speech model that would not load; the corrector going
+            # missing is at least as worth saying.
+            #
+            # Amber rather than red: the cause is usually momentary - another
+            # program holding the GPU at launch - and every later request
+            # re-plans, so this describes the warm-up rather than a permanent
+            # state.
+            self._set_status(self._writing_ai_reason, COLORS["amber"])
         else:
             self._set_status("Ready", COLORS["green"])
 
@@ -4177,7 +4364,7 @@ class EchoLinkWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
-        if answer is QMessageBox.StandardButton.Yes:
+        if answer == QMessageBox.StandardButton.Yes:
             self.store.clear_recovery_items()
             self._refresh_recovery()
 
@@ -4405,7 +4592,7 @@ class EchoLinkWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
-        if answer is QMessageBox.StandardButton.Yes:
+        if answer == QMessageBox.StandardButton.Yes:
             stop_audio_playback()
             self.store.clear_speech_improvement_logs()
             self._refresh_speech_logs()
@@ -4425,7 +4612,7 @@ class EchoLinkWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
-        if answer is QMessageBox.StandardButton.Yes:
+        if answer == QMessageBox.StandardButton.Yes:
             self.store.clear_history()
             self._refresh_history(update_dictate=True)
 

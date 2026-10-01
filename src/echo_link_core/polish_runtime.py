@@ -146,6 +146,7 @@ class OllamaInferenceRuntime:
                 max_tokens=request.plan.max_output_tokens,
                 require_gpu=request.plan.require_full_gpu,
                 defer_meaning_validation=True,
+                faithful=request.faithful,
             )
         except RuntimeError as exc:
             if "timed out" not in str(exc).casefold():
@@ -178,6 +179,7 @@ class OllamaInferenceRuntime:
                     max_tokens=request.plan.max_output_tokens,
                     require_gpu=request.plan.require_full_gpu,
                     defer_meaning_validation=True,
+                    faithful=request.faithful,
                 )
             except RuntimeError as retry_exc:
                 if (
@@ -202,6 +204,7 @@ class OllamaInferenceRuntime:
                     max_tokens=request.plan.max_output_tokens,
                     require_gpu=request.plan.require_full_gpu,
                     defer_meaning_validation=True,
+                    faithful=request.faithful,
                 )
         elapsed = max(0.0, time.perf_counter() - started)
         expected_model = (
@@ -520,6 +523,10 @@ class NamedPipeLlamaRuntime:
                 "instruction": request.instruction,
                 "language": request.language,
                 "protected_terms": list(request.protected_terms),
+                # The writer's "Keep my meaning exactly" switch. The host
+                # chooses its system prompt from it; an older host ignores
+                # the field and stays faithful, which is the safe default.
+                "faithful": bool(request.faithful),
             }
         )
         if payload.get("ok") is not True or not isinstance(payload.get("text"), str):

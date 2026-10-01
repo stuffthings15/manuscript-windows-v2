@@ -72,6 +72,10 @@ TIMEOUT_PER_ESSAY_SECONDS = 600
 # as no score at all, which is far worse than a crash: a crash is obvious.
 _DEAD = "dead"
 _PARTIAL = "partial"
+# run_essays_batch.outcome returns this when a document's paragraph count moved
+# between going into Word and coming out. It carries no score, like the two
+# above, because structural damage is not something a mean can express.
+_RESHAPED = "reshaped"
 _CAPTURE_MISMATCH = "captured from"
 
 
@@ -79,36 +83,15 @@ _MONITOR: subprocess.Popen | None = None
 
 
 def _start_monitor() -> None:
-    """Show the on-screen panel, if it is not already up.
+    """Show the on-screen panel. Delegates, so there is one implementation.
 
-    pythonw, not python, so no console window appears and nothing flashes into
-    the foreground. The panel itself refuses focus three different ways - see
-    autoresearch_monitor - because a window that steals focus mid-experiment
-    corrupts the very run it is reporting on.
+    This used to be the ONLY place the viewer was launched, which meant any
+    measurement that did not go through the essay runner wrote a correct status
+    file that nothing rendered. It now lives beside the status writer, where it
+    belongs: showing the panel is part of what a measurement is, not a side
+    effect of one command.
     """
-    # The guard here used to be "a status file exists, so a panel is already
-    # up", and it was wrong twice over. The status file has to be written before
-    # the panel starts - the panel quits after four missing reads - so that test
-    # was always true by the time it ran, and it suppressed the launch every
-    # time. It also could not tell a live panel from one left behind by a killed
-    # run. A module-level handle answers the only question worth asking: has
-    # THIS runner already started one.
-    global _MONITOR
-    if _MONITOR is not None and _MONITOR.poll() is None:
-        return
-    launcher = Path(sys.executable).with_name("pythonw.exe")
-    try:
-        _MONITOR = subprocess.Popen(  # noqa: S603 - a fixed path in this repository
-            [
-                str(launcher if launcher.exists() else sys.executable),
-                str(ROOT / "tools/autoresearch_monitor.py"),
-            ],
-            cwd=ROOT,
-            creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0)),
-        )
-    except OSError:
-        # The display is a convenience. Never lose an experiment over it.
-        pass
+    autoresearch_status.start_monitor()
 
 
 def _tally() -> dict[str, object]:
@@ -302,6 +285,28 @@ def _packs_that_served(since_line: int) -> set[str]:
     deterministic rules, and rules cannot do tone at all. The same essay then
     scores 35.7, 7.1 or 28.6 depending only on GPU timing - which is exactly the
     spread that made every tone verdict this session worthless.
+
+    SERVED, NOT ATTEMPTED. This reads `Accepted AI plan`, not `Polish plan`.
+    A `Polish plan` line is logged for every ATTEMPT, and the app retries down
+    the pack ladder when output fails validation:
+
+        12b  -> validation failed: residual missing sentence spacing
+        e4b  -> the same validation failure
+        e2b  -> the same validation failure
+        rules -> section returned unchanged
+
+    None of those smaller packs produced a correction anybody used, so counting
+    them says a run was served by three packs when it was served by one.
+    Measured on the 2026-09-02 baseline: 171 accepted plans, ALL on the 12b,
+    ZERO on e4b or e2b, and two cascades - and the run was refused. With twenty
+    documents rather than five, at least one cascade per run is close to
+    certain, so on the attempt reading this metric could essentially never
+    complete.
+
+    The guard keeps its teeth, because the failure it was built for is a pack
+    that actually ANSWERED. The 2026-09-01 case above is exactly that: 33 of 629
+    requests were served by e4b, those answers were accepted and scored, and
+    they still count here.
     """
     try:
         lines = APP_LOG.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -309,7 +314,7 @@ def _packs_that_served(since_line: int) -> set[str]:
         return set()
     packs = set()
     for line in lines[since_line:]:
-        found = re.search(r"Polish plan pack=(\S+) model=", line)
+        found = re.search(r"Accepted AI plan pack=(\S+) model=", line)
         if found and found.group(1) != "-":
             packs.add(found.group(1))
     return packs
@@ -356,7 +361,13 @@ def _row_status(row: str) -> str:
     """
     if _CAPTURE_MISMATCH in row:
         return "capture-mismatch"
-    for marker in (_DEAD, _PARTIAL):
+    # _RESHAPED is here so the ledger can tell a document that came back a
+    # different shape from a COM fault. Without it the row matched nothing and
+    # fell through to "unknown", and the loop printed `crash: unknown` for the
+    # one failure whose cause is already known by name. The loop exists to
+    # separate a harness failure from a product failure; an unnamed crash is
+    # the least useful thing it can say.
+    for marker in (_DEAD, _PARTIAL, _RESHAPED):
         if f" {marker}" in row:
             return marker
     if " complete" in row:

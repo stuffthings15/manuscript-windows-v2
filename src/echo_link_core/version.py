@@ -79,6 +79,31 @@ def _commit_from_git(root: Path) -> str | None:
     return None
 
 
+# THE PRODUCT VERSION, in one place.
+#
+# It was declared four times and agreed nowhere: pyproject.toml, the Inno Setup
+# script and the Win32 VERSIONINFO each said 0.1.0 while the bundled .NET host
+# said 2.0.0, and nothing checked that any of them matched. Worse, none of them
+# reached the running app - identity at runtime was build_commit(), a git hash,
+# with no tags in the repository. A writer reporting a problem could not say
+# which version they had, and neither could anyone reading the report.
+#
+# A hash still answers "exactly which code", which is what a bug report needs,
+# so it is kept. This answers "which release", which is what a human needs, and
+# tests/test_the_version_is_one_number.py holds the packaging files to it.
+PRODUCT_VERSION = "0.1.0"
+
+
+def product_version() -> str:
+    """The release a writer would name, as opposed to the commit they would paste."""
+    return PRODUCT_VERSION
+
+
+def build_identity() -> str:
+    """Version and commit together, for a status line or a bug report."""
+    return f"{product_version()} ({build_commit()})"
+
+
 def build_commit() -> str:
     configured = (os.environ.get("ECHOLINK_BUILD_COMMIT") or "").strip()
     if configured:
@@ -93,3 +118,5 @@ def build_commit() -> str:
         if commit:
             return commit
     return "unknown"
+
+__all__ = ["PRODUCT_VERSION", "build_commit", "build_identity", "product_version"]

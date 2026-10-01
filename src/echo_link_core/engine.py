@@ -122,8 +122,18 @@ class DictationEngine:
         inserter=None,
         event_callback: Callable[[SessionEvent], None] | None = None,
         level_callback: Callable[[float], None] | None = None,
+        document_context_provider: Callable[[WindowSnapshot], str] | None = None,
     ):
         self.store = store
+        # Reading the target document is a UI Automation call, and one of those
+        # on the dictation hot path cost 0.5 seconds and delayed the activation
+        # cue on 2026-07-29 (fixed by b5d505f, which moved it off the UI
+        # thread). So the read is started when recording starts and collected
+        # when correction needs it - seconds later, by which time it is done.
+        # Never on the correction path, and never blocking.
+        self._document_context_provider = document_context_provider
+        self._document_context_lock = threading.Lock()
+        self._document_context: tuple[int, str] = (0, "")
         loaded_settings = DictationSettings.from_dict(store.get_settings().to_dict())
         # Persisted model names are preferences from an earlier run. Each app
         # start must re-accept a model for the current hardware and runtime.
@@ -550,6 +560,7 @@ class DictationEngine:
                 recovery_session_key=f"{time.time_ns()}-{session_id}",
                 hands_free=bool(hands_free),
             )
+            self._begin_document_context(session_id, captured_target, settings_snapshot)
             microphone_started = time.monotonic()
             try:
                 self.recorder.start(
@@ -960,6 +971,51 @@ class DictationEngine:
                 self._queue_condition.wait(min(0.1, remaining))
             return True
 
+    def _begin_document_context(
+        self,
+        session_id: int,
+        target_window: WindowSnapshot,
+        settings: DictationSettings,
+    ) -> None:
+        """Start reading the target document, off this thread, and do not wait."""
+        with self._document_context_lock:
+            self._document_context = (session_id, "")
+        provider = self._document_context_provider
+        if provider is None or not settings.document_context_enabled:
+            return
+
+        def _read() -> None:
+            try:
+                context = str(provider(target_window) or "")
+            except Exception:
+                # A document that cannot be read is the ordinary case, not a
+                # fault: the target may be a terminal, a password box, or an
+                # application with no text pattern. Dictation must proceed with
+                # no context rather than fail. Logged at info, not debug,
+                # because the first real dictation against this feature could
+                # not be diagnosed from the log at all - characters only,
+                # never the document text.
+                logger.info("Dictation document context failed", exc_info=True)
+                return
+            logger.info(
+                "Dictation document context captured characters=%d",
+                len(context),
+            )
+            with self._document_context_lock:
+                if self._document_context[0] == session_id:
+                    self._document_context = (session_id, context)
+
+        threading.Thread(
+            target=_read,
+            daemon=True,
+            name=f"echo-link-document-context-{session_id}",
+        ).start()
+
+    def _collect_document_context(self, session_id: int) -> str:
+        with self._document_context_lock:
+            stored_id, context = self._document_context
+        return context if stored_id == session_id else ""
+
     def _process(self, audio: np.ndarray) -> None:
         raw_text = ""
         deterministic_text = ""
@@ -980,9 +1036,13 @@ class DictationEngine:
                         self._queue_status(message.rstrip("."), job.sequence),
                     ),
                 )
+            document_context = self._collect_document_context(job.capture.session_id)
             with self._correction_lock:
                 self.correction.update_settings(settings)
-                deterministic = self.correction.deterministic(raw_text)
+                deterministic = self.correction.deterministic(
+                    raw_text,
+                    document_context=document_context,
+                )
             deterministic_text = deterministic.text
             final_text = deterministic.text
             if not deterministic.text.strip():
@@ -1029,7 +1089,11 @@ class DictationEngine:
                         raise RuntimeError("Accepted local AI is not ready.")
                     with self._correction_lock:
                         self.correction.update_settings(settings)
-                        result = self.correction.correct(raw_text, DictationMode.ACCURACY)
+                        result = self.correction.correct(
+                            raw_text,
+                            DictationMode.ACCURACY,
+                            document_context=document_context,
+                        )
                     final_text = result.text
                     warning = _join_warning(warning, result.warning)
                 except Exception:
@@ -1080,7 +1144,11 @@ class DictationEngine:
                 refine_started = time.monotonic()
                 with self._correction_lock:
                     self.correction.update_settings(settings)
-                    refined = self.correction.correct(raw_text, DictationMode.REFINE)
+                    refined = self.correction.correct(
+                        raw_text,
+                        DictationMode.REFINE,
+                        document_context=document_context,
+                    )
                 # The refinement pass, timed at the point of use. Characters
                 # only - never the text itself.
                 # in AND out, because these were both reported as "characters"

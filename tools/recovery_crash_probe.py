@@ -95,12 +95,12 @@ class ChildCorrection:
     def __init__(self, stage: str) -> None:
         self.stage = stage
 
-    def deterministic(self, _raw_text: str) -> CorrectionResult:
+    def deterministic(self, _raw_text: str, *_args, **_kwargs) -> CorrectionResult:
         if self.stage == "deterministic_correction":
             os._exit(CRASH_EXIT)
         return CorrectionResult(FINAL_TEXT + " ", "deterministic")
 
-    def correct(self, _raw_text: str, _mode: DictationMode) -> CorrectionResult:
+    def correct(self, _raw_text: str, _mode: DictationMode, **_kwargs) -> CorrectionResult:
         if self.stage == "accuracy_refinement":
             os._exit(CRASH_EXIT)
         return CorrectionResult(FINAL_TEXT + " ", "deterministic")

@@ -11,9 +11,21 @@ from .developer_text import format_developer_text
 from .learning import apply_learned_corrections
 from .local_transport import LocalTransportError, LoopbackJSONTransport
 from .models import DictationMode, DictationSettings, OLLAMA_KEEP_ALIVE
+from .polish_entities import (
+    _runtime_opaque_entities,
+    document_name_inventory,
+    repair_dictated_names,
+)
 
 
 logger = logging.getLogger(__name__)
+
+# How much of the surrounding document is worth scanning for names. Dictation
+# is latency-bound in a way the proofread path is not: the measured baseline is
+# 2.01s mean refinement, 0.8s warm, and a whole dictation runs in 1.1 to 1.6s.
+# The HUD reads up to 500,000 characters; scanning that per utterance would
+# spend the budget on evidence-gathering for a handful of names.
+MAX_DOCUMENT_CONTEXT_CHARACTERS = 4_000
 
 _QUESTION_START = re.compile(
     r"^(?:who|what|when|where|why|how|can|could|would|should|will|do|does|did|is|are|am|was|were|have|has|had)\b",
@@ -481,6 +493,8 @@ class CorrectionPipeline:
         self,
         raw_text: str,
         mode: DictationMode | None = None,
+        *,
+        document_context: str = "",
     ) -> CorrectionResult:
         selected_mode = mode or self._settings.mode
         snippet = expand_snippet(raw_text, dict(self._snippet_provider() or {}))
@@ -495,14 +509,29 @@ class CorrectionPipeline:
                 text += " "
             return CorrectionResult(text, "developer")
         text = deterministic_cleanup(raw_text, vocabulary)
+        # Before learning, so an explicit learned correction still has the last
+        # word, and in the deterministic pass rather than beside the model so
+        # that Fast mode - which never calls a writing model at all - gets the
+        # repair too. Fast is where a mis-heard name is least defended.
+        text = self._repair_names(text, document_context)
         text = self._apply_learning(text, vocabulary)
         if self._settings.append_trailing_space and text and not text.endswith(" "):
             text += " "
         return CorrectionResult(text, "deterministic")
 
-    def correct(self, raw_text: str, mode: DictationMode | None = None) -> CorrectionResult:
+    def correct(
+        self,
+        raw_text: str,
+        mode: DictationMode | None = None,
+        *,
+        document_context: str = "",
+    ) -> CorrectionResult:
         selected_mode = mode or self._settings.mode
-        base = self.deterministic(raw_text, selected_mode)
+        base = self.deterministic(
+            raw_text,
+            selected_mode,
+            document_context=document_context,
+        )
         if base.source == "snippet":
             return base
         if selected_mode in (DictationMode.FAST, DictationMode.DEVELOPER):
@@ -523,7 +552,11 @@ class CorrectionPipeline:
         refined = coordinator.refine(
             base.text.strip(),
             model=model,
-            protected_terms=tuple(vocabulary.values()) + tuple(learned.values()),
+            protected_terms=(
+                tuple(vocabulary.values())
+                + tuple(learned.values())
+                + self._document_entities(base.text, document_context)
+            ),
             timeout=self._settings.correction_timeout_seconds,
         )
         if refined.source not in {"ollama", "ai"}:
@@ -533,6 +566,63 @@ class CorrectionPipeline:
         if self._settings.append_trailing_space and final and not final.endswith(" "):
             final += " "
         return CorrectionResult(final, refined.source, refined.warning)
+
+    def _repair_names(self, text: str, document_context: str) -> str:
+        """Spell a dictated name the way the document already spells it."""
+        if not self._settings.document_context_enabled:
+            logger.info("Dictation name repair skipped reason=setting-off")
+            return text
+        context = str(document_context or "").strip()
+        if not context:
+            # Logged as its own case on purpose. The first real dictation
+            # against this feature repaired nothing, and the log could not say
+            # whether the repair had run and found nothing or had never had a
+            # document to work from - the two look identical when only a
+            # successful repair is logged. Counts only, never the words.
+            logger.info("Dictation name repair skipped reason=no-document-context")
+            return text
+        bounded = context[-MAX_DOCUMENT_CONTEXT_CHARACTERS:]
+        repaired, repairs = repair_dictated_names(text, bounded)
+        logger.info(
+            "Dictation name repair ran context_characters=%d names_in_document=%d repairs=%d",
+            len(bounded),
+            len(document_name_inventory(bounded)),
+            repairs,
+        )
+        return repaired
+
+    def _document_entities(self, text: str, document_context: str) -> tuple[str, ...]:
+        """Names the writer just dictated, corroborated by the document around them.
+
+        The entities come from the UTTERANCE; the document is only evidence
+        about which capitalised words are real names rather than typos. That
+        distinction is the whole design. A document-as-prompt-context version
+        of this was built for the proofread path on 2026-08-07, measured at 0,
+        240 and 800 characters, and reverted unshipped: it did nothing for
+        "Wether" or "Cair" and made "esay" worse. Protected terms are a hard
+        constraint the model cannot rewrite, which is a different mechanism
+        from the hint that failed.
+
+        _runtime_opaque_entities is reused rather than reimplemented because it
+        is already tuned against the opposite failure. It tokenizes single-word
+        and versioned names only, because tokenizing every long name "made
+        otherwise-correct generations fail before validation" - and this path
+        punishes that harder than the proofread path does: one missing token
+        drops the entire refinement (see refine(), which returns the
+        deterministic text on a protected-token mismatch) and the writer is
+        never told.
+        """
+        if not self._settings.document_context_enabled:
+            return ()
+        context = str(document_context or "").strip()
+        if not context:
+            return ()
+        # _document_occurrences scans the document once per candidate word, so
+        # the cost is O(candidates x context). The tail is the text nearest the
+        # caret for the ordinary case of dictating at the end of what you have
+        # written; a page captured around a caret mid-document is bounded the
+        # same way rather than scanned in full.
+        return _runtime_opaque_entities(text, context[-MAX_DOCUMENT_CONTEXT_CHARACTERS:])
 
     def _apply_learning(self, text: str, vocabulary: dict[str, str]) -> str:
         if not self._settings.personal_learning_enabled:
@@ -574,7 +664,16 @@ def _protect_text(
     protected_terms: Iterable[str],
     *,
     protect_detected: bool = True,
+    keep_source_case: bool = False,
 ) -> tuple[str, dict[str, str]]:
+    # keep_source_case: a token gives back the exact text it replaced rather
+    # than the protected value's spelling. Matching is case-insensitive, so
+    # without it one capitalised value recapitalised every lowercase
+    # occurrence of the same word. Found 2026-09-30: a sentence-start
+    # "Learning" was harvested as a name and "before learning much" came back
+    # "before Learning much" in a Friendly rewrite. Off by default because
+    # dictation relies on the opposite: a saved vocabulary term restores in
+    # the writer's saved casing, which is the point of saving it.
     values = [value for value in protected_terms if value]
     if protect_detected:
         values.extend(match.group(0) for match in _PROTECTED_PATTERN.finditer(text))
@@ -596,7 +695,7 @@ def _protect_text(
             token_index += 1
             occupied.append((start, end))
             spans.append((start, end, token, value))
-            replacements[token] = value
+            replacements[token] = match.group(0) if keep_source_case else value
     result = text
     for start, end, token, _value in sorted(spans, reverse=True):
         result = result[:start] + token + result[end:]

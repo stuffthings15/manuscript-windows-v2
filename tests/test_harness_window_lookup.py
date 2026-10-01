@@ -39,6 +39,17 @@ BATCH_PATH_MODULES = (
     "repro_accept_advance.py",
     "repro_zero_of_zero.py",
     "word_essay_session.py",
+    # Added 2026-09-30 when run_essays_batch took its --tone choices from
+    # VISIBLE_TONES, which lives in this module.
+    "animal_essay_corpus_inventory.py",
+    # Added 2026-09-07 when the rotation-aware log cursor moved out of the batch
+    # into its own module, and this test caught the omission on the same run.
+    # It opens no windows today, which is exactly the state this list exists to
+    # keep true: the rule is about every module the batch imports, not about the
+    # ones that happen to search a control tree right now.
+    "application_log_cursor.py",
+    # Added 2026-09-08 with the liveness check the capture wait now asks.
+    "restart_app_and_wait.py",
 )
 
 # Matched against the PARSED TREE, not the text.

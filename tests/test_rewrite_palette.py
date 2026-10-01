@@ -1196,7 +1196,7 @@ def test_ai_proofread_prefetches_next_replacement_before_user_decision(app):
     palette.show_sentence_result(
         first_attempt,
         first_id,
-        "Echo-Link is ready.",
+        "Echo-Link is ready. A clean sentence. A third sentence.",
         "First AI proofread ready.",
     )
     app.processEvents()
@@ -1223,7 +1223,7 @@ def test_advancing_while_prefetch_runs_keeps_rule_text_locked(app):
     palette.show_sentence_result(
         first_attempt,
         first_id,
-        "Echo-Link is ready.",
+        "Echo-Link is ready. A clean sentence. A third sentence.",
         "First AI proofread ready.",
     )
     app.processEvents()
@@ -1269,7 +1269,10 @@ def test_background_prefetch_keeps_current_ai_result_visibly_ready(app):
     palette.show_sentence_result(
         first_attempt,
         first_id,
-        "Echo-Link is ready.",
+        # Faithful to the section it answers. The stub here used to drop two of
+        # the section's three sentences, which answer_abandons_the_source now
+        # refuses; this test is about the PREFETCH, not about content.
+        "Echo-Link is ready. A clean sentence. A third sentence.",
         "Local AI proofread ready.",
     )
     app.processEvents()
@@ -1280,7 +1283,7 @@ def test_background_prefetch_keeps_current_ai_result_visibly_ready(app):
         palette.apply_suggestion_button.accessibleName().casefold()
     )
     assert palette.status.text() == "Local AI proofread ready."
-    assert palette.after_text.toPlainText() == "Echo-Link is ready."
+    assert palette.after_text.toPlainText() == "Echo-Link is ready. A clean sentence. A third sentence."
     palette.finish_choice()
 
 
@@ -1300,7 +1303,9 @@ def test_background_prefetch_failure_does_not_hide_current_result(app):
     palette.show_sentence_result(
         first_attempt,
         first_id,
-        "Echo-Link is ready.",
+        # Faithful, for the same reason as the test above. This one is about
+        # what a FAILED prefetch does to the card already on screen.
+        "Echo-Link is ready. A clean sentence. A third sentence.",
         "Local AI proofread ready.",
     )
     app.processEvents()
@@ -1315,7 +1320,7 @@ def test_background_prefetch_failure_does_not_hide_current_result(app):
 
     assert palette.view == "card"
     assert palette.card_position.text() == "1 of 2"
-    assert palette.after_text.toPlainText() == "Echo-Link is ready."
+    assert palette.after_text.toPlainText() == "Echo-Link is ready. A clean sentence. A third sentence."
     assert palette.apply_suggestion_button.isEnabled()
     palette.finish_choice()
 
@@ -1518,7 +1523,7 @@ def test_advancing_to_prefetched_result_restores_its_ready_state(app):
     palette.show_sentence_result(
         first_attempt,
         first_id,
-        "Echo-Link is ready.",
+        "Echo-Link is ready. A clean sentence. A third sentence.",
         "CUDA | qwen3:8b correction ready.",
     )
     app.processEvents()
@@ -1793,6 +1798,18 @@ def test_palette_grows_and_shrinks_with_the_suggestion_text(app):
     suggestion_id = palette.suggestions[0].suggestion_id
 
     compact_size = palette.size()
+
+    # Short first, then long. The order used to be the other way round, and a
+    # two-word answer replacing a long correction for the SAME section is no
+    # longer a sequence the product produces: answer_abandons_the_source refuses
+    # it, because throwing away a paragraph that way is the defect it exists for.
+    # Both sizes are still measured on one palette and every assertion below is
+    # unchanged - this test is about geometry.
+    palette.show_sentence_result(0, suggestion_id, "The draft.", "Short rewrite ready.")
+    app.processEvents()
+    palette._reassert_current_view_size()
+    shrunk_size = palette.size()
+
     palette.show_sentence_result(
         0,
         suggestion_id,
@@ -1804,11 +1821,6 @@ def test_palette_grows_and_shrinks_with_the_suggestion_text(app):
     app.processEvents()
     palette._reassert_current_view_size()
     grown_size = palette.size()
-
-    palette.show_sentence_result(0, suggestion_id, "The draft.", "Short rewrite ready.")
-    app.processEvents()
-    palette._reassert_current_view_size()
-    shrunk_size = palette.size()
 
     assert grown_size.width() > compact_size.width()
     assert grown_size.height() > compact_size.height()
@@ -2090,9 +2102,10 @@ def test_palette_timeout_then_tone_rewrite_shows_text_unlocks_accept_and_resizes
         "Clear",
         "Improve",
         "Rephrase",
-        "Shorten",
         "Formal",
         "Friendly",
+        "Diplomatic",
+        "Professional",
     ),
 )
 def test_palette_maps_every_requested_tone_to_its_local_writing_command(app, option):
@@ -3915,7 +3928,7 @@ def test_dismissing_a_section_does_count_as_progress(app):
     # Dismiss is disabled until the section's AI step finishes, so finish it.
     attempt, suggestion_id, *_ = requests[0]
     palette.show_sentence_result(
-        attempt, suggestion_id, "Echo-Link is ready.", "AI proofread ready."
+        attempt, suggestion_id, "Echo-Link is ready. A clean sentence. A third sentence.", "AI proofread ready."
     )
     app.processEvents()
 
@@ -4562,18 +4575,27 @@ def test_a_batch_answer_is_filed_to_each_paragraph_in_order(app):
     app.processEvents()
 
     attempt, first_id, source, *_ = requests[0]
-    count = len(source.split(chr(10) * 2))
-    answer = (chr(10) * 2).join(f"Warm paragraph {n}." for n in range(1, count + 1))
+    paragraphs = source.split(chr(10) * 2)
+    count = len(paragraphs)
+    # Warm versions of the paragraphs THEY ANSWER, not placeholders. The blocks
+    # used to read "Warm paragraph 1." and share no word with their section,
+    # which answer_abandons_the_source now refuses - correctly, since that is
+    # what a lost paragraph looks like. This test is about ORDER: that each
+    # block reaches its own section and no section gets two.
+    warm = [f"Warmly, {text.strip()}" for text in paragraphs]
+    answer = (chr(10) * 2).join(warm)
     palette.show_sentence_result(attempt, first_id, answer, "Friendly ready.")
     app.processEvents()
 
     texts = _replacement_texts(palette)
-    assert "Warm paragraph 1." in texts
+    assert warm[0] in texts
     if count > 1:
         # Every paragraph of the answer reached its OWN section, and no
         # section received more than its own paragraph.
-        assert "Warm paragraph 2." in texts
+        assert warm[1] in texts
         assert not any(chr(10) * 2 in value for value in texts)
+        # ... and in order, which a set membership check alone would not show.
+        assert texts.index(warm[0]) < texts.index(warm[1])
     palette.finish_choice()
 
 
@@ -4776,3 +4798,216 @@ def test_the_state_file_names_this_process_from_startup(app, tmp_path, monkeypat
     published = json.loads(session_state.state_path().read_text(encoding="utf-8"))
 
     assert published.get("build") == session_state.build_identifier()
+
+
+def test_a_background_section_carries_its_own_correction_not_the_cards(
+    app, tmp_path, monkeypatch
+):
+    """The wrong-variable defect that put the title into 122 sections.
+
+    A tone job carries the correction the section already has, so a tone that
+    cannot be applied hands that back rather than costing the writer their
+    proofread. That text was read from the CARD - `current_replacement_text()`
+    - which is right for the section the writer is looking at and wrong for
+    every section corrected ahead of them in the background.
+
+    On the acceptance tier of 2026-09-11 the background section then received
+    the CARD's text, and the card during a prefetch burst is the document's
+    title. 122 sections came back as "Artificial Intelligence in Education."
+    where the writer's paragraph had been.
+
+    This drives the real path: the card shows section one while a job is
+    started for section two, and the job must carry section two's text.
+    """
+    capture = (
+        "Echo-Link are ready today.\n"
+        "The teh report is here.\n"
+        "A third paragraph stands alone."
+    )
+    monkeypatch.setenv("ECHOLINK_DISABLE_PALETTE_AI", "0")
+    window = EchoLinkWindow(
+        EchoLinkStore(tmp_path / "echo-link.db"), enable_hotkey=False
+    )
+    window.selected_text_record = _selection(capture)
+    palette = window.rewrite_palette
+    requests = []
+    palette.sentence_rewrite_requested.connect(lambda *a: requests.append(a))
+    palette.show_capture(capture)
+    app.processEvents()
+    palette.badge_button.click()
+    app.processEvents()
+
+    sections = [
+        str(getattr(item, "suggestion_id", "")) for item in palette._review_suggestions
+    ]
+    assert len(sections) >= 3, "this test needs the card and a background section"
+
+    # Finish the first section so the card is actually showing something. Until
+    # it does, the card is blank and the defect cannot be told from the fix.
+    first_attempt, first_id, *_ = requests[0]
+    palette.show_sentence_result(
+        first_attempt, first_id, "Echo-Link is ready today.", "Ready."
+    )
+    app.processEvents()
+
+    on_the_card = palette.current_replacement_text()
+    background = sections[2]
+    its_own = palette.correction_for_section(background)
+    assert on_the_card, "the card is blank, so this test proves nothing"
+    assert its_own and its_own != on_the_card, (
+        "the fixture stopped distinguishing the card from the background "
+        "section, so this test can no longer detect the defect"
+    )
+
+    # Do not let the job actually run; the question is only what it carries.
+    monkeypatch.setattr(window, "_palette_ai_width", lambda: 0)
+    window._run_palette_sentence_rewrite(7, background, its_own, "Friendly")
+    app.processEvents()
+    with window._palette_ai_lock:
+        jobs = list(window._palette_ai_queue)
+
+    assert jobs, "no job was queued"
+    carried = str(jobs[-1][-1]).strip()
+    assert carried == its_own
+    assert carried != on_the_card
+    window.shutdown()
+
+
+def _tone_request(app, capture: str):
+    """Drive the palette to one pending AI request and hand back its identity."""
+    palette = RewritePalette(
+        suggestion_engine=_SuggestionEngine(),
+        ai_proofread=True,
+    )
+    requests = []
+    palette.sentence_rewrite_requested.connect(lambda *args: requests.append(args))
+    palette.show_capture(capture)
+    app.processEvents()
+    palette.badge_button.click()
+    attempt, suggestion_id, *_ = requests[0]
+    return palette, attempt, suggestion_id
+
+
+# The answer that actually replaced essay 18's paragraphs on the acceptance tier
+# of 2026-09-11: the model stopped rewriting and echoed the document's title.
+_ABANDONING_ANSWER = "Artificial Intelligence in Education."
+
+
+def test_an_answer_that_abandons_its_section_never_reaches_the_card(app):
+    """The single-section half of the defect, which had no guard at all.
+
+    A section long enough to carry a tone by itself is sent as a batch of one
+    and never reaches split_tone_batch, so its answer went into the card
+    unchecked. 30 of the 59 damaged batches on the tier were this shape.
+
+    A refused answer is a guard turning an answer down, so it goes through the
+    same path as any other guard refusal: the section is filed FAILED, not
+    completed, and the card offers retry or dismiss. Filing it completed was
+    tried first and is the thing to watch for - _ai_completed_ids is what
+    _mark_ai_provenance reads to decide whether to call the text an AI
+    correction, so it would have relabelled the rules repair as one.
+    """
+    capture = (
+        "Local ordinances commonly address setbacks, water sources, barriers, "
+        "registration and hive counts, and teh rules vary widely between cities."
+    )
+    palette, attempt, suggestion_id = _tone_request(app, capture)
+
+    palette.show_sentence_result(
+        attempt, suggestion_id, _ABANDONING_ANSWER, "Tone ready."
+    )
+    app.processEvents()
+
+    assert "Artificial Intelligence" not in palette.after_text.toPlainText()
+    assert suggestion_id in palette._ai_failed_ids
+    assert suggestion_id not in palette._ai_completed_ids
+    assert not (palette._ai_completed_ids & palette._ai_failed_ids)
+    # Never "Suggested text" on its own, which is what the card says for a
+    # section the model corrected and the guards accepted.
+    assert "not ready" in palette.after_heading.text().casefold()
+    # And the review is not stranded waiting for an answer that never comes.
+    assert palette.view != "loading"
+    palette.finish_choice()
+
+
+def test_a_faithful_answer_still_reaches_the_card(app):
+    """The guard must not stop ordinary work getting through.
+
+    Without this the test above passes just as well on a palette that refuses
+    every answer, which would be a worse product than the defect.
+    """
+    capture = (
+        "Local ordinances commonly address setbacks, water sources, barriers, "
+        "registration and hive counts, and teh rules vary widely between cities."
+    )
+    palette, attempt, suggestion_id = _tone_request(app, capture)
+    faithful = (
+        "Local ordinances commonly address setbacks, water sources, barriers, "
+        "registration and hive counts, and the rules vary widely between cities."
+    )
+
+    palette.show_sentence_result(attempt, suggestion_id, faithful, "Tone ready.")
+    app.processEvents()
+
+    assert palette.after_text.toPlainText() == faithful
+    palette.finish_choice()
+
+
+
+def test_the_card_never_closes_itself_without_telling_the_host(app):
+    # Found 2026-10-01 in the owner's demo recording. The host pauses the
+    # focus monitor while a review is open and resumes it only when the card
+    # reports how it finished. The "nothing to correct" collapse closed the
+    # card through bare finish_choice() unless an Undo notice happened to be
+    # showing, so the host never heard, the monitor stayed paused, and no
+    # document on the machine got an icon for the rest of the session: "the
+    # icon does not appear consistently, sometimes not at all".
+    palette, document = _undoable_palette()
+    app.processEvents()
+    outcomes = []
+    palette.applied.connect(lambda: outcomes.append("applied"))
+    palette.unchanged.connect(lambda: outcomes.append("unchanged"))
+    palette.rejected.connect(lambda: outcomes.append("rejected"))
+
+    palette.apply_suggestion_button.click()
+    app.processEvents()
+    assert document["text"]
+    # The Undo window has passed, which is the state the demo was in: the
+    # card is collapsing as a clean document, not as an Applied notice.
+    palette._applied_notice = False
+    palette._undo_state = None
+    palette._no_issues_timer.stop()
+    palette._no_issues_timer.setInterval(1)
+    palette._no_issues_timer.start()
+    QTest.qWait(120)
+    app.processEvents()
+
+    assert not palette.isVisible()
+    # The change reached the document, so the host must hear "applied".
+    assert outcomes == ["applied"]
+
+
+def test_a_clean_document_collapse_reports_unchanged(app):
+    # The same clean document the "Nothing to correct here" test uses: the AI
+    # returns every section exactly as it was.
+    palette = RewritePalette(ai_proofread=True)
+    outcomes = []
+    palette.applied.connect(lambda: outcomes.append("applied"))
+    palette.unchanged.connect(lambda: outcomes.append("unchanged"))
+    palette.show_capture(
+        "Paragraph one is already correct. Paragraph two needs no changes."
+    )
+    app.processEvents()
+    for suggestion in palette._suggestions:
+        palette._ai_completed_ids.add(str(getattr(suggestion, "suggestion_id", "")))
+    palette._render_suggestions()
+    app.processEvents()
+    assert palette._no_issues_timer.isActive()
+    palette._no_issues_timer.stop()
+    palette._no_issues_timer.setInterval(1)
+    palette._no_issues_timer.start()
+    QTest.qWait(120)
+    app.processEvents()
+
+    assert not palette.isVisible()
+    assert outcomes == ["unchanged"]

@@ -15,22 +15,28 @@ Writes build/corrected/<name>.review.md per essay and a summary table.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+
 from pathlib import Path
 import re
 import shutil
 import sys
 import time
 import traceback
+from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
 for entry in (ROOT / "src", ROOT / "tools"):
     if str(entry) not in sys.path:
         sys.path.insert(0, str(entry))
 
+from application_log_cursor import capture_cursor, lines_since  # noqa: E402
+from restart_app_and_wait import app_is_running  # noqa: E402
 import harness_state  # noqa: E402
 from animal_essay_corpus_probe import CORPUS, _essay_files, load_essays  # noqa: E402
+from animal_essay_corpus_inventory import VISIBLE_TONES  # noqa: E402
 from repro_accept_advance import (  # noqa: E402
     counter_text,
     hud_window,
@@ -437,15 +443,40 @@ def release_document(path) -> None:
     import comtypes.client
 
     wanted = str(path.resolve()).casefold()
+    # EVERY copy of this essay, not only this run's.
+    #
+    # The target is named "<session_tag>-<essay>.docx" with a fresh uuid per
+    # batch, so matching the full path releases the document THIS run opened
+    # and can never release one an earlier run left behind. Measured
+    # 2026-09-09: build/working held 656 files across 192 distinct session
+    # prefixes, several with Word's "~$" owner locks beside them, and two
+    # WINWORD processes were holding two copies of essay 20 at once.
+    #
+    # A leaked window is not inert. The HUD attaches to it, live-review-open
+    # then refuses every focus signal from the real document, and
+    # _hud_source_window_alive correctly reports the source alive because it
+    # genuinely is. That produced every failure of the 2026-09-09 animal
+    # corpus run: eight "save/readback failed: AttributeError: ActiveDocument"
+    # where Word held several documents and the active one was not the
+    # target, three reviews served from the WRONG essay (essay 3's against
+    # essay 2, essay 6's against essay 4), and a card left stuck on the
+    # previous copy that a person had to close by hand.
+    #
+    # Matched on the essay's own name with the session tag stripped, and
+    # anchored on the leading '-' so '-1_Dogs.docx' cannot match
+    # '-11_Dogs.docx'.
     try:
         word = comtypes.client.GetActiveObject("Word.Application", dynamic=True)
     except Exception:  # noqa: BLE001 - Word is not running, so nothing holds it
         return
+    essay_name = re.sub(r"^[0-9a-f]{12}-", "", Path(path).name)
+    suffix = f"-{essay_name}".casefold()
     for open_document in list(word.Documents):
         try:
-            if str(open_document.FullName).casefold() != wanted:
-                continue
+            full = str(open_document.FullName)
         except Exception:  # noqa: BLE001 - Word raises assorted COM errors
+            continue
+        if full.casefold() != wanted and not Path(full).name.casefold().endswith(suffix):
             continue
         try:
             # Positional, not SaveChanges=0: the keyword form silently does
@@ -456,15 +487,34 @@ def release_document(path) -> None:
             print(f"   warning: could not release the document: {exc}", flush=True)
 
 
-def close_word() -> None:
-    import subprocess
+def release_opened_targets(targets) -> None:
+    """Release every disposable copy a run opened, however the run ended.
 
-    subprocess.run(
-        ["taskkill", "/IM", "WINWORD.EXE", "/F"],
-        capture_output=True,
-        check=False,
-    )
-    time.sleep(2.0)
+    release_document runs at the START of each essay, so the LAST essay's
+    copy was never released and Word kept it open after the batch finished.
+    One leaked document per run: build/working reached 656 files across 192
+    session prefixes, and on 2026-09-09 two WINWORD processes were holding
+    two copies of essay 20 at once.
+
+    A leaked window is not inert. The Writing HUD attaches to it, refuses
+    every focus signal from the real document, and the next run is served a
+    review of the wrong essay - see release_document for the full account.
+
+    A FUNCTION rather than a line at the end of main(), because main() can
+    return early when the app fails to start, and a cleanup that only runs
+    on the happy path is the same defect wearing a different hat.
+
+    close_word() still refuses to terminate Word, and release_document still
+    matches only copies of the essay being run, so a writer's own unsaved
+    document is never touched.
+    """
+    for target in targets:
+        release_document(target)
+
+
+def close_word() -> None:
+    """Legacy global termination is forbidden: unrelated work may be unsaved."""
+    raise RuntimeError("Refusing to terminate Word; release only the disposable test document")
 
 
 def restart_app() -> bool:
@@ -496,6 +546,19 @@ def outcome(row: dict) -> str:
         return "error"
     if row["presses"] == 0:
         return "dead"
+    # A review must never change how many paragraphs the document has. `score`
+    # has counted both ends since this harness was written and NOTHING READ THE
+    # ANSWER: on 2026-09-11 essay 16 went in with 15 paragraphs, came out with
+    # 14, and this function called it "complete". The tone judge caught it a
+    # quarter of an hour later, by accident, because its own section counts
+    # stopped lining up - and only because that essay happened to be judged.
+    #
+    # Structural damage outranks a stall. A writer can re-run a stalled essay;
+    # a deleted paragraph break cannot be clicked back.
+    before = row.get("paragraphs_before")
+    after = row.get("paragraphs_after")
+    if before is not None and after is not None and before != after:
+        return "reshaped"
     if row["unchanged"] or row["stalled_at"]:
         return "partial"
     return "complete"
@@ -554,11 +617,13 @@ def diagnose(reason: str, hud) -> list[str]:
     return block
 
 
-def log_lines() -> int:
-    try:
-        return len(LOG.read_text(encoding="utf-8", errors="replace").splitlines())
-    except OSError:
-        return 0
+def log_lines() -> dict:
+    return capture_cursor(LOG)
+
+
+def _lines_since(since: int | dict = 0) -> list[str]:
+    return lines_since(LOG, since)
+
 
 
 def tone_row_error(
@@ -600,19 +665,49 @@ def tone_row_error(
     return None
 
 
-def commands_since(since: int = 0) -> dict[str, int]:
+def review_finished_since(since: int | dict = 0) -> str:
+    """The app's own statement that the review completed, or "".
+
+    The HUD closes when a review is finished, which from the harness looks
+    exactly like the HUD disappearing - and those are opposite outcomes. The app
+    already distinguishes them in its log; nothing was reading it.
+
+    Returns the reported character count so the stop reason carries evidence
+    rather than an assertion.
+    """
+    lines = _lines_since(since)
+    for line in reversed(lines):
+        found = re.search(
+            r"review finished; will not auto-offer this text again (.+)$", line
+        )
+        if found:
+            return found.group(1).strip()
+    return ""
+
+
+def record_review_completion(report: dict, presses: int) -> bool:
+    """Recognize the app acknowledgement before treating its closed HUD as lost."""
+    finished = review_finished_since(report.get("_log_start", 0))
+    if not finished or presses <= 0:
+        return False
+    report["stopped_because"] = (
+        f"the review finished after press {presses}; "
+        f"section {presses}/{presses}, {finished}"
+    )
+    report["completion_acknowledgement"] = finished
+    return True
+
+
+def commands_since(since: int | dict = 0) -> dict[str, int]:
     """Which Polish commands the app actually ran, from its own log.
 
     The harness pressing a tone is not evidence that a tone ran. This reads
     back what the app says it did, so a tone run that silently proofread
     everything is visible as such instead of being reported as a tone result.
     """
-    try:
-        lines = LOG.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return {}
+    lines = _lines_since(since)
     counts: dict[str, int] = {}
-    for line in lines[since:]:
+    for line in lines:
         found = re.search(r"Polish request command=(\w+)", line)
         if found is not None:
             name = found.group(1)
@@ -620,16 +715,13 @@ def commands_since(since: int = 0) -> dict[str, int]:
     return counts
 
 
-def rules_fallbacks_since(since: int = 0) -> int:
+def rules_fallbacks_since(since: int | dict = 0) -> int:
     """Sections that got no AI at all, from the app's own log."""
-    try:
-        lines = LOG.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return 0
-    return sum(1 for line in lines[since:] if "fell back to rules" in line)
+    lines = _lines_since(since)
+    return sum(1 for line in lines if "fell back to rules" in line)
 
 
-def captured_document_title(since: int = 0) -> str | None:
+def captured_document_title(since: int | dict = 0) -> str | None:
     """The document the app reported capturing since `since` log lines.
 
     Read from the app's own log rather than guessed from window focus, because
@@ -640,18 +732,107 @@ def captured_document_title(since: int = 0) -> str | None:
     fires on one - which is exactly what it did on its first run, failing essay
     2 in 7.3 seconds against a line written during essay 1.
     """
+    # BOTH capture paths, because the app has two and only one of them was
+    # readable from here. The automatic focus monitor logs "editable focus
+    # detected"; the writer's shortcut logs "shortcut capture prepared". They
+    # race, and the shortcut wins whenever the monitor has not settled within
+    # about 16 seconds of the document opening.
+    #
+    # Measured 2026-09-08 over the 12 essays of one 20 essay run that the
+    # un-rotated log still held, with no exceptions either way: all 7 where the
+    # monitor won completed, and all 5 where the shortcut won were scored "the
+    # app reported no capture at all" after waiting the full 300 second cap.
+    # The app had captured every one of them correctly. The other 8 sit in a
+    # rotated log where presses can no longer be matched to essays, so they are
+    # not claimed here; the run totals of 10 complete, 8 error and 2 dead are
+    # consistent with them behaving the same way. Reading one path made a
+    # working product look like a crash.
+    #
+    # Still matched on the TITLE and never on the review that follows it,
+    # because "the app never captured" and "the app captured the wrong
+    # document" have to stay distinguishable - a title-less "review prepared"
+    # line would collapse them again.
     focus_line = re.compile(
-        r"Writing HUD editable focus detected title='(?P<title>.*?)' scope="
+        r"Writing HUD (?:editable focus detected|shortcut capture prepared) "
+        r"title='(?P<title>.*?)' scope="
     )
-    try:
-        lines = LOG.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return None
-    for line in reversed(lines[since:]):
+    lines = _lines_since(since)
+    for line in reversed(lines):
         found = focus_line.search(line)
         if found:
             return found.group("title")
     return None
+
+
+# THE WAIT ASKS WHETHER THE APP IS ALIVE, because every proxy has been wrong.
+#
+# Four attempts, each replacing the last: a fixed 10 seconds, then 40 to match
+# the HUD's own timeout, then 120 from a measured maximum of 109 - and the next
+# run captured at 148 - and then "keep waiting while the app's log is growing",
+# which sounded principled and was not.
+#
+# Measured 2026-09-08 over 14 app starts: the log goes SILENT while the model
+# loads for a median of 14.6 seconds, a 90th percentile of 122.8 and a maximum
+# of 131.7. A 30 second quiet window survives 64 percent of starts, which is
+# exactly what turned 9 of 20 essays into "the app reported no capture at all"
+# in a run where the app was working perfectly.
+#
+# A loading app is silent and a dead app is silent. Only the process tells them
+# apart, so the quiet window is now a trigger to ASK rather than an answer: when
+# nothing has been logged for a while, check whether Manuscript is still there.
+# If it is, keep waiting; if it is gone, stop at once. That costs one process
+# query per quiet window rather than one per poll.
+_CAPTURE_QUIET_SECONDS = 30.0
+_CAPTURE_CAP_SECONDS = 300.0
+
+
+def _log_position() -> tuple:
+    """Where the app's log currently ends, for spotting that it is still alive."""
+    try:
+        stat = LOG.stat()
+        return (stat.st_ino, stat.st_size)
+    except OSError:
+        return (0, 0)
+
+
+def wait_for_document_capture(
+    stem: str,
+    since: int | dict,
+    timeout: float = _CAPTURE_CAP_SECONDS,
+    quiet: float = _CAPTURE_QUIET_SECONDS,
+) -> str | None:
+    """Await the asynchronous target capture without accepting an old review.
+
+    Returns the captured title, or the last non-matching one, or None if the app
+    reported no capture at all - the caller tells those apart, because "the app
+    never captured" and "the app captured the wrong document" are different
+    faults and were reported identically for three days.
+    """
+    # The clock is read once per iteration on purpose: the deadline and the
+    # quiet window are two questions about the same instant, and reading twice
+    # makes the loop untestable against a pinned clock.
+    now = time.monotonic()
+    deadline = now + timeout
+    last_change = now
+    position = _log_position()
+    captured = None
+    while True:
+        captured = captured_document_title(since)
+        if captured is not None and stem.casefold() in captured.casefold():
+            return captured
+        moved = _log_position()
+        if moved != position:
+            position = moved
+            last_change = now
+        now = time.monotonic()
+        if now >= deadline:
+            return captured
+        if now - last_change >= quiet:
+            if not app_is_running():
+                return captured
+            # Alive but quiet, which is what loading a model looks like.
+            last_change = now
+        time.sleep(0.2)
 
 
 def _foreground_title() -> str:
@@ -715,11 +896,35 @@ def recover_hud(stem: str, report: dict):
     screen came from another window, that is a failure and it is reported as
     one.
     """
+    # Name whatever is holding the foreground, on every failed attempt.
+    #
+    # This failure has been "the HUD was gone" for three runs and nobody has
+    # ever measured WHAT took the screen. More patience is already refuted -
+    # six attempts with a lengthening wait scored the same 80.0 as three flat
+    # ones, 2026-09-02 - so the question is no longer how long to wait but who
+    # to take it back from, and that cannot be answered without the name.
+    #
+    # Costs one Win32 call on a path that has already failed, and it is the
+    # difference between guessing at a fix and knowing which one to write.
+    def _foreground() -> str:
+        try:
+            from echo_link_core.insertion import active_window
+
+            window = active_window()
+            return f"{window.title!r} class={window.class_name!r} pid={window.process_id}"
+        except Exception:  # noqa: BLE001 - diagnosis must never break the run
+            return "unreadable"
+
     for _attempt in range(3):
         focus_named_word_window(stem)
         time.sleep(2.0)
         hud = hud_window(10.0)
         if hud is None:
+            print(
+                f"    recover_hud attempt {_attempt + 1}: no HUD, "
+                f"foreground is {_foreground()}",
+                flush=True,
+            )
             continue
         # No `since` offset on purpose. That offset exists so the check before
         # the first press cannot read a line left by the PREVIOUS essay, which
@@ -741,19 +946,7 @@ def recover_hud(stem: str, report: dict):
 
 
 def open_in_word(path: Path):
-    """Open one essay and leave exactly that essay open.
-
-    Every other document is closed first. Leaving the previous essay open is
-    what made three batch runs measure the wrong file: --as-a-writer keeps Word
-    running, essay 1's window kept the foreground, and essay 2's hotkey press
-    captured essay 1 - "review prepared sections=10 atomic=0 characters=5065"
-    on 2026-08-17, ten more corrections applied to an essay that was already
-    finished, while essay 2 came back byte-identical to its source.
-
-    The app is not at fault for that and must not be "fixed" for it: it
-    correctly reviews the document in front of the writer. The harness was
-    leaving the wrong one there.
-    """
+    """Open and activate a disposable essay without closing other documents."""
     import comtypes.client
 
     # Attach to the Word that is already running rather than starting another.
@@ -771,22 +964,7 @@ def open_in_word(path: Path):
         time.sleep(2.0)
     word.Visible = True
     target = str(path.resolve())
-    for open_document in list(word.Documents):
-        try:
-            if str(open_document.FullName) == target:
-                continue
-        except Exception:  # noqa: BLE001 - Word raises assorted COM errors
-            continue
-        try:
-            # Positional, not SaveChanges=0. The keyword form silently did
-            # nothing through the dynamic COM wrapper, which is why three
-            # documents were still open after a loop written to close them,
-            # and why the failure has to be printed rather than swallowed: a
-            # close that quietly does not happen is what leaves the wrong
-            # window in front for the next essay.
-            open_document.Close(0)
-        except Exception as exc:  # noqa: BLE001 - Word raises assorted COM errors
-            print(f"   warning: could not close a document: {exc}", flush=True)
+    # Other windows may contain unsaved user work. Activate only our copy.
     document = word.Documents.Open(target)
     try:
         # Activate explicitly rather than trusting the open to raise the
@@ -798,23 +976,32 @@ def open_in_word(path: Path):
     except Exception:  # noqa: BLE001 - Word raises assorted COM errors
         pass
     time.sleep(3.0)
-    remaining = []
-    try:
-        remaining = [str(item.Name) for item in word.Documents]
-    except Exception:  # noqa: BLE001 - Word raises assorted COM errors
-        pass
-    if len(remaining) > 1:
-        print(
-            f"   warning: {len(remaining)} documents open, expected 1: {remaining}",
-            flush=True,
-        )
     return word
 
 
 def paragraphs(value: str) -> list[str]:
+    """Split a document into paragraphs the same way at both ends of a run.
+
+    The two ends do NOT arrive the same way, and that asymmetry is why the cell
+    terminator has to go first. `before` is built from the .docx XML, one entry
+    per w:p (animal_essay_corpus_probe.docx_paragraphs). `after` is Word's COM
+    Content.Text, where every table cell and row terminator is CR+BEL.
+
+    U+0007 is not whitespace, so `.strip()` keeps it and every row end became a
+    non-empty paragraph of its own. Measured on a heading plus a 2x2 table with
+    nothing changed at all: 5 paragraphs in, 8 out. Now that `outcome` fails a
+    run whose paragraph count moved, that is not a cosmetic difference - it
+    would report every document containing a table as damaged, on a perfect
+    run, and a gate that cries wolf is a gate people learn to skip.
+
+    Collapsing CR+BEL to CR is what insertion._word_native_offset already does
+    for the same reason; the trailing replace catches a BEL that arrives
+    without its CR.
+    """
+    flattened = str(value).replace("\r\x07", "\r").replace("\x07", "")
     return [
         line.strip()
-        for line in str(value).replace("\r", "\n").split("\n")
+        for line in flattened.replace("\r", "\n").split("\n")
         if line.strip()
     ]
 
@@ -849,17 +1036,26 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
     _hold_focus(path.stem)
     press_hotkey()
 
-    report: dict = {"presses": 0, "stalled_at": None, "counters": []}
+    report: dict = {"presses": 0, "stalled_at": None, "counters": [], "_log_start": log_start}
     # Which document the app actually captured, from the app's own log, before
     # a single key is pressed. Three runs in a row scored an essay the app had
     # never looked at, and reported err=None while doing it, because nothing
     # here compared the two. A wrong-document run is now an error rather than
     # a quiet zero-change result.
-    captured = captured_document_title(log_start)
-    if captured is not None and path.stem.lower() not in captured.lower():
+    captured = wait_for_document_capture(path.stem, log_start)
+    if captured is None or path.stem.lower() not in captured.lower():
+        # TWO DIFFERENT FAULTS, said differently. "captured from None" meant
+        # both "the app never captured anything" and "the app captured another
+        # document", and telling them apart by hand cost three diagnoses and
+        # two wrong timeout values.
         report["error"] = (
-            f"the review on screen was captured from {captured!r}, "
-            f"not from {path.stem}"
+            f"the app reported no capture at all before {path.stem}; "
+            f"it was still starting or it is stuck"
+            if captured is None
+            else (
+                f"the review on screen was captured from {captured!r}, "
+                f"not from {path.stem}"
+            )
         )
         report["after"] = ""
         return report
@@ -940,6 +1136,29 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
         if hud is None:
             hud = recover_hud(path.stem, report)
         if hud is None:
+            # A finished review and a vanished one look identical from here,
+            # and they are opposite outcomes.
+            #
+            # Measured 2026-09-02 on 03_multi_level_outline: the app logged
+            # `section accepted ... pending 1 -> 0 completed=4 of 4` and then
+            # `review finished; will not auto-offer this text again`. Every
+            # section was applied and the HUD closed because it was DONE. The
+            # harness pressed once more, correctly found no HUD, and reported
+            # "the HUD was gone" - and because that message carries no
+            # `section M/M` marker, the completion rule scored a successful run
+            # as truncated. The whole reliability metric was under-reporting on
+            # the strength of it, and three runs of "the HUD was gone" were read
+            # as a focus fault that never happened: the foreground at every
+            # failed attempt was Word itself, with the right document open.
+            #
+            # The app says which one it is, so ask it rather than guess.
+            finished = review_finished_since(report.get("_log_start", 0))
+            if finished:
+                report["stopped_because"] = (
+                    f"the review finished after press {press - 1}; "
+                    f"section {press - 1}/{press - 1}, {finished}"
+                )
+                break
             report["stopped_because"] = (
                 f"the HUD was gone at press {press} and three attempts to take "
                 "focus back from another window failed"
@@ -1121,7 +1340,11 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
             break
         report["presses"] = press
         time.sleep(6.0)
+        if record_review_completion(report, press):
+            break
         hud = hud_window(8.0)
+        if hud is None and record_review_completion(report, press):
+            break
         if hud is None:
             hud = recover_hud(path.stem, report)
         if hud is None:
@@ -1200,13 +1423,46 @@ def review_one(path: Path, *, max_presses: int = 30, tone: str = "") -> dict:
                 )
                 break
 
-    document = word.ActiveDocument
-    try:
-        document.Save()
-    except Exception:  # noqa: BLE001 - report the text we can still read
-        pass
-    report["after"] = str(document.Content.Text or "")
+    save_review_document(word, path, report)
     return report
+
+
+def save_review_document(word, path: Path, report: dict) -> None:
+    """Save/read back only the disposable target, even after focus changes."""
+    try:
+        # BY NAME, never whichever document happens to be active.
+        #
+        # ActiveDocument raised AttributeError on 8 of 20 essays on
+        # 2026-09-09, several of them AFTER the review had finished - "the
+        # review finished after press 11" - so the product had done the work
+        # and the harness lost it at the last step and scored an error.
+        # Word had more than one document open because earlier runs leaked
+        # theirs, and the active one was not this essay.
+        #
+        # The app already does this correctly in
+        # insertion._word_document_for_record, which finds the document the
+        # capture names rather than trusting focus. Same reasoning here: the
+        # target is known, so ask for it.
+        document = None
+        for candidate in list(word.Documents):
+            try:
+                if Path(str(candidate.FullName)).resolve() == path.resolve():
+                    document = candidate
+                    break
+            except Exception:  # noqa: BLE001 - Word raises assorted COM errors
+                continue
+        if document is None:
+            report["error"] = (
+                f"Word has no document open named {path.name}; "
+                f"nothing was saved"
+            )
+            return
+        document.Save()
+        if not document.Saved:
+            report["error"] = "Word still reports unsaved changes after Save"
+        report["after"] = str(document.Content.Text or "")
+    except Exception as exc:  # noqa: BLE001 - preserve explicit COM save/readback failure
+        report["error"] = f"Word save/readback failed: {type(exc).__name__}: {exc}"
 
 
 def score(before_text: str, after_text: str, dictionary) -> dict:
@@ -1235,6 +1491,24 @@ def score(before_text: str, after_text: str, dictionary) -> dict:
     }
 
 
+
+def _idle_seconds() -> float:
+    """Seconds since anyone touched the machine.
+
+    Delegates to autoresearch_run rather than re-implementing GetLastInputInfo,
+    so the two paths cannot drift on what "idle" means. Its rule matters and is
+    inherited: an idle check that CANNOT answer returns 0.0, meaning assume
+    somebody is here, because a check that cannot answer must never grant
+    permission to seize the screen.
+    """
+    try:
+        import autoresearch_run
+
+        return autoresearch_run.idle_seconds()
+    except Exception:  # noqa: BLE001 - a missing import must not free the gate
+        return 0.0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--from", dest="start", type=int, default=2)
@@ -1244,6 +1518,15 @@ def main() -> int:
         type=int,
         default=1,
         help="runs per essay; one run is a hypothesis, not a result",
+    )
+    parser.add_argument(
+        "--require-idle",
+        type=float,
+        default=0.0,
+        help="stop before a document if somebody has touched the machine "
+        "within this many seconds. program.md requires it of every measuring "
+        "path; typing in another editable window redirects the HUD and the "
+        "run then measures the interruption.",
     )
     parser.add_argument(
         "--no-restart",
@@ -1259,7 +1542,12 @@ def main() -> int:
     parser.add_argument(
         "--tone",
         default="",
-        choices=["", "Clear", "Improve", "Rephrase", "Shorten", "Formal", "Friendly"],
+        # Taken from VISIBLE_TONES rather than written out again. This list was
+        # a fourth copy of the menu and it had already drifted: on 2026-09-30
+        # the menu gained Diplomatic and Professional and dropped Shorten, and
+        # this still offered the old six, so the two new tones could not be
+        # measured in Word at all while Shorten still could.
+        choices=["", *VISIBLE_TONES],
         help=(
             "apply this tone to every section before accepting it. Without it "
             "the run only proofreads, which is all this harness could ever do "
@@ -1274,6 +1562,8 @@ def main() -> int:
             "actually works. Implies --no-restart and never kills Word."
         ),
     )
+    parser.add_argument("--output-root", type=Path, default=ROOT / "build",
+                        help="isolated directory for batch documents and evidence")
     args = parser.parse_args()
     # Killing Word and restarting the app between essays is isolation, not use.
     # It exists because the HUD carried one document's review into the next, and
@@ -1289,31 +1579,77 @@ def main() -> int:
 
     essays = _essay_files(args.corpus)
     corpus_text = [str(item.get("text", "")) for item in load_essays(args.corpus)]
-    work = ROOT / "build" / "batch"
+    work = args.output_root / "batch"
     work.mkdir(parents=True, exist_ok=True)
-    out_dir = ROOT / "build" / "corrected"
+    session_tag = uuid4().hex[:12]
+    working = args.output_root / "working"
+    working.mkdir(parents=True, exist_ok=True)
+    out_dir = args.output_root / "corrected"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     summary: list[dict] = []
+    stopped_for_idle = False
+    # EVERY disposable copy this run opens, so the last one can be released
+    # too. release_document runs at the START of each essay, so the final
+    # essay's copy was never released and Word held it after the batch
+    # ended. Measured 2026-09-09: one WINWORD process still holding
+    # 3c4896e8b782-20_Axolotls_in_Puebla_Mexico after a clean 20/20 run, and
+    # build/working carrying 656 files across 192 session prefixes - one
+    # leaked document per run, for 192 runs.
+    opened_targets: list[Path] = []
     for number in range(args.start, args.end + 1):
         if number > len(essays):
             break
+        # THE IDLE GATE, CHECKED ONLY BEFORE THE FIRST DOCUMENT.
+        #
+        # It was checked before EVERY document for one day, and that made a
+        # multi-document run impossible to finish. THE HARNESS ITSELF TYPES:
+        # it drives Word through SendInput, and GetLastInputInfo counts
+        # synthetic input exactly like a person's. Measured 2026-09-04 - one
+        # synthetic VK_SHIFT takes idle from 308 seconds to 0.
+        #
+        # So document one would run, the harness's own keystrokes would reset
+        # the timer, and document two would be refused as "somebody is at the
+        # keyboard". The loop attempted a baseline 120 times over four hours and
+        # stopped after exactly one document every time, writing nothing. The
+        # gate meant to protect the measurement made it unobtainable.
+        #
+        # Before the first document the question is meaningful: is a person
+        # using this machine right now. After that it cannot be asked this way.
+        # Mid-run interference is caught where it actually shows - the harness
+        # already fails a document with "the review on screen was captured from
+        # 'Claude'" when focus moves to another editable window, which is the
+        # real symptom and needs no timer.
+        if args.require_idle > 0 and number == args.start:
+            idle = _idle_seconds()
+            if idle < args.require_idle:
+                print(  # noqa: T201
+                    f"\nSTOPPING before {essays[number - 1].name}: somebody is "
+                    f"at the keyboard ({idle:.0f}s idle, "
+                    f"{args.require_idle:.0f}s required). Nothing measured from "
+                    f"here would be about the product.",
+                    flush=True,
+                )
+                # An EXIT CODE, not just a break. Stopping quietly is how a
+                # truncated batch became a score: on 2026-09-03 the gate cut the
+                # hard slice after 1 of 3 documents, the cycle scored 0 of 1 as
+                # 0.0, and recorded it as a baseline. A caller cannot tell a
+                # slice that failed from a slice that was never measured unless
+                # this says so.
+                stopped_for_idle = True
+                break
         source = essays[number - 1]
-        target = work / source.name
+        # Word disallows opening two files with the same basename from different
+        # folders. A unique disposable name also makes focus checks unambiguous.
+        target = working / f"{session_tag}-{source.name}"
         before_text = str(corpus_text[number - 1])
 
         outcomes: list[str] = []
         for attempt in range(1, max(1, args.repeat) + 1):
-            # Release the previous run's lock before copying. A writer never
-            # does this, so --as-a-writer leaves Word alone and relies on
-            # word_essay_session closing the document it opened and waiting out
-            # a busy Word instead of killing it.
-            if not args.as_a_writer:
-                close_word()
-            else:
-                # Word still holds the last copy of this document, and a fresh
-                # source cannot be written over a file Word has open.
-                release_document(target)
+            # Release only this disposable output, never another document or Word.
+            if target not in opened_targets:
+                opened_targets.append(target)
+            release_document(target)
             shutil.copy2(source, target)  # every run starts from the original
             if not args.no_restart and not restart_app():
                 # The app did not come up. Every essay after this one will
@@ -1332,6 +1668,7 @@ def main() -> int:
                     "failure, not a corpus result.",
                     flush=True,
                 )
+                release_opened_targets(opened_targets)
                 return 2
             started = time.monotonic()
             try:
@@ -1410,6 +1747,19 @@ def main() -> int:
             row["error"] = row["error"] or tone_row_error(
                 args.tone, row["tone_selected"], row["commands"]
             )
+            # Retain each attempt before the next one replaces the working copy.
+            attempt_dir = args.output_root / "attempts" / f"{number:02d}-{attempt}-{uuid4().hex[:8]}"
+            attempt_dir.mkdir(parents=True, exist_ok=False)
+            if target.is_file():
+                # Canonical output names remain compatible with existing graders.
+                shutil.copy2(target, work / source.name)
+                saved = attempt_dir / source.name
+                shutil.copy2(target, saved)
+                row["saved_document"] = str(saved)
+                row["saved_sha256"] = hashlib.sha256(saved.read_bytes()).hexdigest()
+            else:
+                row["error"] = row["error"] or "saved document missing"
+            row["completion_acknowledgement"] = result.get("completion_acknowledgement", "")
             row["outcome"] = outcome(row)
             outcomes.append(row["outcome"])
             summary.append(row)
@@ -1461,14 +1811,20 @@ def main() -> int:
             "\n".join(lines), encoding="utf-8"
         )
 
-    (ROOT / "build" / "batch-summary.json").write_text(
+    (args.output_root / "batch-summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    # Leave the writer's Word where they left it.
-    if not args.as_a_writer:
-        close_word()
-    print(f"\nsummary: {ROOT / 'build' / 'batch-summary.json'}")
-    return 0
+    # This run's own disposable copies, including the last essay's, which
+    # nothing else releases. See release_opened_targets.
+    release_opened_targets(opened_targets)
+    # Never terminate Word or close unrelated documents on completion.
+    print(f"\nsummary: {args.output_root / 'batch-summary.json'}")
+    # 2 means come back later, the specification word for a tick that
+    # measured nothing. The summary is still written, because the documents
+    # that DID run are real, but the caller must not average them into a
+    # score for the slice - that is how 1 of 3 documents became a 0.0
+    # baseline on 2026-09-03.
+    return 2 if stopped_for_idle else 0
 
 
 if __name__ == "__main__":

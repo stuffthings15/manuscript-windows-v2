@@ -241,7 +241,7 @@ def test_accuracy_never_calls_ai_when_shared_plan_is_not_ready(tmp_path):
         def update_settings(self, _settings):
             pass
 
-        def deterministic(self, raw_text, *_args):
+        def deterministic(self, raw_text, *_args, **_kwargs):
             return CorrectionResult("Deterministic text.", "deterministic")
 
         def correct(self, *_args, **_kwargs):

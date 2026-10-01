@@ -27,10 +27,18 @@ def app():
 class FakeAssistant:
     endpoint = "http://127.0.0.1:11434"
 
-    def __init__(self, *, result: str = "Clean result.", gate=None, started=None):
+    def __init__(
+        self,
+        *,
+        result: str = "Clean result.",
+        gate=None,
+        started=None,
+        error: Exception | None = None,
+    ):
         self.result = result
         self.gate = gate
         self.started = started
+        self.error = error
         self.calls = []
 
     def run(self, text: str, **options):
@@ -39,6 +47,8 @@ class FakeAssistant:
             self.started.set()
         if self.gate is not None:
             assert self.gate.wait(2.0)
+        if self.error is not None:
+            raise self.error
         return SimpleNamespace(text=self.result)
 
 
@@ -94,6 +104,27 @@ def test_assistant_uses_current_draft_and_never_auto_applies_or_saves(app, tmp_p
     assert saved.current_revision == before.current_revision
     assert saved.content == "Current visible draft."
     assert "unsaved draft" in panel.assistant_status.text()
+    panel.close()
+
+
+def test_ollama_not_running_message_reaches_the_status_label_unchanged(app, tmp_path):
+    """The assistant's own install message must reach the writer verbatim.
+
+    user_ai_status() is for the bundled correction engine and hides runtime
+    names on purpose; applying it here used to remap this exact message to
+    the generic "could not finish this section. Retry.", which sends a
+    writer with no Ollama installed toward an action that can never work.
+    """
+    from echo_link_core.selected_text import OLLAMA_NOT_RUNNING_MESSAGE
+
+    assistant = FakeAssistant(error=RuntimeError(OLLAMA_NOT_RUNNING_MESSAGE))
+    panel = _panel(tmp_path, assistant)
+
+    panel.assistant_command_buttons["Proofread"].click()
+    _wait_until(app, lambda: panel.assistant_status.text() != "Running Proofread locally...")
+
+    assert panel.assistant_status.text() == OLLAMA_NOT_RUNNING_MESSAGE
+    assert "ollama" in panel.assistant_status.text().casefold()
     panel.close()
 
 

@@ -22,6 +22,7 @@ from echo_link_app.windows_identity import (
     configure_windows_app_identity,
     create_installer_mutex,
 )
+from echo_link_core.data_protection import DataProtectionError
 from echo_link_core.audio import list_microphones
 from echo_link_core.hotkeys import parse_hotkey, probe_hotkey_registration
 from echo_link_core.paths import data_root, log_path, resource_path
@@ -30,10 +31,13 @@ from echo_link_core.recommendation import (
     local_hardware_profile,
     recommend_local_speech,
 )
-from echo_link_core.subscription import subscription_enforcement_required
+from echo_link_core.subscription import (
+    is_testing_unlocked_build,
+    subscription_enforcement_required,
+)
 from echo_link_core.storage import SCHEMA_VERSION, EchoLinkStore
 from echo_link_core.transcription import cuda_available, discover_local_models, local_model_path
-from echo_link_core.version import build_commit
+from echo_link_core.version import build_commit, product_version
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -86,7 +90,7 @@ def _subscription_required_for_runtime() -> bool:
 def _internal_test_command_allowed(
     args: argparse.Namespace,
     *,
-    subscription_required: bool,
+    subscription_required: bool,  # noqa: ARG001 - see the comment below
 ) -> bool:
     uses_internal_command = any(
         (
@@ -96,7 +100,30 @@ def _internal_test_command_allowed(
             args.internal_evaluation,
         )
     )
-    return not uses_internal_command or not subscription_required
+    # Gated on the BUILD CHANNEL, not on subscription. Until 2026-09-24 this
+    # read "not subscription_required", which was only ever correct because
+    # the sole build with subscription off was also the sole build carrying
+    # the harness. Manuscript is no longer subscription-gated, so that
+    # equivalence is gone and keying on it here would have exposed
+    # --workflow-probe - keystroke synthesis, the microphone, a spawned
+    # process - in every shipped build. That is the 2026-08-16 incident.
+    #
+    # The harness is also left out of a production archive entirely, see
+    # EchoLink.spec, so a shipped build cannot import it even if this gate is
+    # defeated. A testing build keeps both, because
+    # tools/installer_lifecycle_probe.py drives --workflow-probe against the
+    # INSTALLED executable and that is how release acceptance works.
+    if not uses_internal_command:
+        return True
+    # A source checkout is not a shipped build. tools/windows_workflow_probe.py
+    # is sitting in the tree and can be run directly, so refusing here defends
+    # nothing and only breaks the way the probe is actually driven - by
+    # tests/test_windows_workflow_probe_cli.py and by anyone working on it.
+    # The property worth keeping is that a FROZEN build a writer installed
+    # cannot be talked into it.
+    if not getattr(sys, "frozen", False):
+        return True
+    return is_testing_unlocked_build()
 
 
 def _run_workflow_probe_cli(args: argparse.Namespace) -> int:
@@ -169,6 +196,9 @@ def diagnostics() -> dict[str, object]:
     return {
         "app": APP_NAME,
         "runtime": "local-only",
+        # Both: the release a person can name, and the exact code behind
+        # it. --diagnostics is what a support request pastes.
+        "version": product_version(),
         "code_commit": build_commit(),
         "schema_version": SCHEMA_VERSION,
         "speech_model": settings.model_name,
@@ -227,10 +257,42 @@ def diagnostics() -> dict[str, object]:
     }
 
 
+def _explain_unusable_data_folder(exc: BaseException) -> int:
+    """Say why the data folder cannot be used, on screen rather than as a crash.
+
+    data_root() refuses a path that is a network location or that contains a
+    symlink or junction anywhere along it (see data_protection). Both are
+    ordinary on a managed machine: the Windows local application data folder
+    redirected to a share, or the user profile junctioned onto another volume.
+
+    It is reached before anything else - configure_logging() resolves the log
+    path through it - so the failure landed outside the startup handler below
+    and the writer got a raw traceback in a console they do not have. There is
+    no log to point them at either, because the log is what could not be
+    opened.
+    """
+    application = QApplication.instance() or QApplication(sys.argv[:1])
+    application.setApplicationName(APP_NAME)
+    QMessageBox.critical(
+        None,
+        APP_NAME,
+        f"{APP_NAME} could not use its data folder.\n\n{exc}\n\n"
+        f"This usually means the Windows local application data folder is "
+        f"redirected to a network location, or that part of the path is a "
+        f"shortcut. Manuscript keeps your writing on this computer and will "
+        f"not store it on a network share.",
+    )
+    return 1
+
+
 def _run_application(args: argparse.Namespace) -> int:
-    configure_logging()
-    configure_windows_app_identity()
-    lock = QLockFile(str(data_root() / "echo-link.lock"))
+    try:
+        configure_logging()
+        configure_windows_app_identity()
+        lock_path = data_root() / "echo-link.lock"
+    except (DataProtectionError, OSError) as exc:
+        return _explain_unusable_data_folder(exc)
+    lock = QLockFile(str(lock_path))
     lock.setStaleLockTime(0)
     locked = lock.tryLock(100)
     if args.diagnostics:

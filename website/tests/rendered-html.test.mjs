@@ -11,7 +11,7 @@ test("defines the finished Manuscript sales page and metadata", async () => {
   assert.match(page, /Flawless writing powered locally/);
   assert.doesNotMatch(`${page}\n${layout}`, /Forge perfect writing/i);
   assert.match(page, /Start subscription/);
-  assert.match(page, /Private by design/);
+  assert.match(page, /AI runs on your device/);
   assert.doesNotMatch(`${page}\n${layout}`, /for Windows|Manuscript for Windows|WRITING FOR WINDOWS/i);
   assert.match(page, /href="\/privacy"/);
   assert.doesNotMatch(`${page}\n${layout}`, /codex-preview|react-loading-skeleton|Your site is taking shape/);

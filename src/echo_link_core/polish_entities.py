@@ -542,8 +542,38 @@ def _runtime_opaque_entities(text: str, document: str = "") -> tuple[str, ...]:
     return tuple(
         value
         for value in _maximal_named_entities(text, document)
-        if " " not in value or value in versioned
+        if (" " not in value or value in versioned)
+        and not _sentence_case_of_a_word_the_text_writes_lowercase(value, text)
     )
+
+
+def _sentence_case_of_a_word_the_text_writes_lowercase(value: str, text: str) -> bool:
+    """Is this "name" only an ordinary word that happens to open a sentence?
+
+    Found 2026-09-30, traced in Word. A proofread text opened a sentence with
+    "Learning from a mistake" and also said "before learning much". The
+    extractor kept "Learning" as a name - its own lowercase rule looks only
+    FORWARD from the capital, and the lowercase use came earlier - so it was
+    protected. The bundled polish host lists protected values in its prompt,
+    and the model honoured "Learning" by writing it that way everywhere:
+    "before Learning much", and even "forces the owner to Learn more".
+
+    Three conditions, all required, so a real name is not unprotected by a
+    writer's lowercase typo of it alone: the word is ordinary English, every
+    capitalised use of it in this text opens a sentence, and this text also
+    writes it in lowercase. "Bakersfield" fails the second whenever it appears
+    mid-sentence. Narrowed to the protection list on purpose:
+    _named_entities, which feeds the meaning guards, is unchanged.
+    """
+    if " " in value or not value[:1].isupper() or not value[1:].islower():
+        return False
+    if not re.search(rf"(?<!\w){re.escape(value.casefold())}(?!\w)", text):
+        return False
+    for match in re.finditer(rf"(?<!\w){re.escape(value)}(?!\w)", text):
+        prefix = text[: match.start()].rstrip()
+        if prefix and prefix[-1:] not in ".!?\n":
+            return False
+    return _is_ordinary_english_word(value)
 
 
 @lru_cache(maxsize=1)
@@ -625,3 +655,93 @@ def _sentence_initial_common_word(
         if before and not re.search(r"""[.!?]['"\)\]]*$""", before):
             return False
     return True
+
+
+@lru_cache(maxsize=8)
+def document_name_inventory(document: str) -> frozenset[str]:
+    """The single-word names a document already uses, as spelled there.
+
+    Cached because it is asked for twice per dictation - once to repair and
+    once to report how many names were available - and rebuilding it is the
+    expensive half of the repair.
+
+    Single words only. A multiword name is left to the validator, matching
+    _runtime_opaque_entities, which found that tokenizing every long name
+    "made otherwise-correct generations fail before validation". The
+    four-character floor keeps short function-word typos such as "Wen" out of
+    the inventory entirely, so they can never become a repair target.
+    """
+    text = str(document or "")
+    if not text.strip():
+        return frozenset()
+    return frozenset(
+        name
+        for name in _named_entities(text, text)
+        if " " not in name and len(name) >= 4
+    )
+
+
+def repair_dictated_names(text: str, document: str) -> tuple[str, int]:
+    """Spell a dictated name the way the document the writer is in already spells it.
+
+    The transcriber is the weak link, not the corrector. A name the writer has
+    already typed - a cited author, a subject term - comes back from speech one
+    or two letters wrong, and every stage downstream is then defending the
+    wrong word. Measured 2026-09-21: a correctly spelled name survives
+    deterministic cleanup and the entity protector untouched, so protection was
+    never the gap. This is.
+
+    Three gates, each of which exists because removing it breaks something
+    measured:
+
+    - The token must not be an ordinary English word. Without this the guard
+      runs backwards: "When" sits one edit from "Wen" and would be rewritten
+      into a typo, which is the 2026-08-07 incident in reverse.
+    - The match must be unique. Two document names an equal distance away is
+      not evidence, it is a coin flip.
+    - _same_name_respelled decides sameness, not raw distance. It already
+      refuses "Malik" -> "Mali", a truncation that reads as one cheap edit and
+      is a different person.
+
+    Coverage is orthographic only. A phonetic re-spelling - "Cannaman" for
+    "Kahneman", "Fuko" for "Foucault" - is many edits away and out of reach
+    here; this repairs the near miss, not the mishearing. Returns the text and
+    the number of repairs, never the words, because this path must not log what
+    the writer said.
+    """
+    source = str(text or "")
+    if not source.strip() or not str(document or "").strip():
+        return source, 0
+    inventory = document_name_inventory(document)
+    if not inventory:
+        return source, 0
+
+    repairs = 0
+
+    def _repair(match: "re.Match[str]") -> str:
+        nonlocal repairs
+        token = match.group(0)
+        # "Petrova's argument" is how a citation is usually spoken, and the
+        # possessive is part of the token. Comparing "pethrova's" against
+        # "petrova" puts a correctable name two edits out of reach, so the
+        # suffix comes off for the comparison and goes back on the repair.
+        stem, suffix = token, ""
+        if len(token) > 2 and token[-2:].casefold() == "'s":
+            stem, suffix = token[:-2], token[-2:]
+        if len(stem) < 4 or _is_ordinary_english_word(stem):
+            return token
+        folded = stem.casefold()
+        if any(folded == name.casefold() for name in inventory):
+            return token
+        limit = 1 if len(folded) < 8 else 2
+        matches = {
+            name
+            for name in inventory
+            if _same_name_respelled(folded, name.casefold(), limit)
+        }
+        if len(matches) != 1:
+            return token
+        repairs += 1
+        return matches.pop() + suffix
+
+    return re.sub(r"[A-Za-z][A-Za-z']*", _repair, source), repairs

@@ -101,6 +101,32 @@ def current_baseline(name: str, kind: str = "essays") -> float:
     return best
 
 
+def has_baseline(name: str, kind: str = "essays") -> bool:
+    """Is there a kept row for this slice at all, whatever it scored?
+
+    Separate from `current_baseline` because the two questions are different and
+    conflating them cost a night. `current_baseline` returns 0.0 both when a
+    slice has never been measured AND when it was measured and genuinely scored
+    zero - and for a completion metric zero is an ordinary result, not an
+    absence.
+
+    On 2026-09-03 the three-document reliability slice baselined at 0.0 because
+    all three documents fail today. That is the correct number and a perfectly
+    usable bar: any completion at all beats it. The queue refused to run a
+    single experiment on it, because "no bar" and "a bar of zero" looked
+    identical.
+    """
+    tag = slice_tag(name, kind)
+    try:
+        for line in RESULTS.read_text(encoding="utf-8").splitlines()[1:]:
+            parts = line.split("	")
+            if len(parts) >= 5 and parts[3] == "keep" and parts[4].startswith(tag):
+                return True
+    except OSError:
+        return False
+    return False
+
+
 def missing_baseline(name: str, kind: str, *, higher_is_better: bool = True) -> str:
     """Why this slice cannot be experimented on yet, or "" if it can.
 
@@ -116,7 +142,10 @@ def missing_baseline(name: str, kind: str, *, higher_is_better: bool = True) -> 
     """
     if not higher_is_better:
         return ""
-    if current_baseline(name, kind) > 0.0:
+    # Presence of a row, not its value. A slice that was measured and scored
+    # zero has a bar; a slice never measured has none, and they are not the
+    # same thing however identical current_baseline makes them look.
+    if has_baseline(name, kind):
         return ""
     return (
         f"no baseline for {kind} {name}. Measure it unchanged and record the "
@@ -169,7 +198,46 @@ def record(commit: str, score: float | None, memory_gb: float, status: str,
         )
 
 
-def void_row(commit: str, name: str, kind: str, score: float, reason: str) -> int:
+def with_crash_reason(description: str, reason: str | None) -> str:
+    """The description, carrying WHY a crash crashed.
+
+    A crash row records 0.000000 and the experiment's description, and that is
+    all it has ever recorded. The reason was printed to a console and then
+    discarded. Of 26 crash rows in results.tsv on 2026-09-08, exactly one
+    carried any hint of a cause.
+
+    That is why four of six tones have been unmeasurable for weeks with nothing
+    to diagnose: `tone Clear: baseline` crashed four separate times and the file
+    cannot say whether it was the same fault four times or four different ones.
+    The measurement was made, the answer was produced, and the one field that
+    survives did not keep it.
+
+    Tabs and newlines are stripped because results.tsv is tab separated and five
+    columns wide per the specification; a reason carrying either would shift
+    every field after it and corrupt rows that are already correct.
+    """
+    if not reason:
+        return description
+    flat = " ".join(str(reason).replace("	", " ").split())
+    if not flat:
+        return description
+    # Bounded, and at a word rather than mid-token. The reason is a diagnostic
+    # aid in a free-text field, not the diagnosis itself - the run log holds
+    # that - but it has to be enough to tell two faults apart.
+    limit = 300
+    if len(flat) > limit:
+        flat = flat[:limit].rsplit(" ", 1)[0] + " [...]"
+    return f"{description} CRASH: {flat}"
+
+
+def void_row(
+    commit: str,
+    name: str,
+    kind: str,
+    score: float,
+    reason: str,
+    status: str = "keep",
+) -> int:
     """Retire a kept row that should never have set a bar. Returns rows changed.
 
     `current_baseline` takes the MAX of kept scores on a slice, deliberately: the
@@ -201,6 +269,15 @@ def void_row(commit: str, name: str, kind: str, score: float, reason: str) -> in
     caught that. Returning 0 rather than voiding several is the safe direction:
     a bar left too high wastes experiments, a corrected row silently retired
     loses the measurement.
+
+    `status` defaults to "keep" because that is the poisoning case and the
+    caller should have to ask for anything else. A DISCARD can need retiring
+    too, for a different reason: it was judged against a bar that turned out not
+    to be a measurement. On 2026-09-04 eleven experiments were discarded at 0.0
+    against a baseline of 0.0 that the stale-capture defect had produced, so
+    they tested nothing - and because the queue skips what the ledger holds,
+    those rows would have blocked the re-runs forever. Retiring them is what
+    lets the questions be asked again.
     """
     tag = slice_tag(name, kind)
     printed = f"{score:.6f}"
@@ -215,7 +292,7 @@ def void_row(commit: str, name: str, kind: str, score: float, reason: str) -> in
         if len(parts) >= 5
         and parts[0] == commit
         and parts[1] == printed
-        and parts[3] == "keep"
+        and parts[3] == status
         and parts[4].startswith(tag)
     ]
     if len(matches) != 1:
@@ -288,12 +365,20 @@ def main(argv: list[str] | None = None) -> int:
     kind = "essays" if arguments.metric == "total" else f"essays-{arguments.metric}"
     baseline = current_baseline(arguments.essays, kind)
     status = decide(baseline, score)
+    # Read BEFORE the row is written, not after it is printed. The reason was
+    # parsed three lines below this and used only for the console, so the row
+    # that survives never carried it.
+    crash_line = re.search(r"^crash: +(.+)", text, re.MULTILINE)
+    reason = crash_line.group(1).strip() if crash_line else "no score"
     record(
         commit,
         score,
         memory_gb,
         status,
-        f"{slice_tag(arguments.essays, kind)} {arguments.describe}",
+        with_crash_reason(
+            f"{slice_tag(arguments.essays, kind)} {arguments.describe}",
+            reason if score is None else None,
+        ),
     )
 
     if status != "keep":
@@ -302,8 +387,7 @@ def main(argv: list[str] | None = None) -> int:
         _git("reset", "--hard", before)
 
     if score is None:
-        reason = re.search(r"^crash: +(.+)", text, re.MULTILINE)
-        print(f"CRASH {reason.group(1).strip() if reason else 'no score'}")  # noqa: T201
+        print(f"CRASH {reason}")  # noqa: T201
     else:
         print(f"{status.upper()} {score:.2f}  (baseline {baseline:.2f})")  # noqa: T201
     return 0

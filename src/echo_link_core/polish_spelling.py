@@ -267,7 +267,7 @@ _COMPOUND_MINIMUM_FREQUENCY = 1_000_000
 # `absorbant` is one edit from "absorbent" and `accessable` one from
 # "accessible", and requiring two edits of separation took the rule from 10.72%
 # to 3.16% before the frequency floor was applied at all.
-_COMPOUND_MINIMUM_EDIT_SEPARATION = 2
+_COMPOUND_MINIMUM_EDIT_SEPARATION = 3
 
 
 class EnglishDictionary:

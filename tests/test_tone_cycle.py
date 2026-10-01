@@ -163,7 +163,7 @@ def test_no_baseline_means_no_bar_for_a_lower_is_better_metric():
     assert decide(0.0, 18.0, higher_is_better=False) == "keep"
 
 
-def test_a_run_served_by_two_packs_is_a_crash_not_a_score(monkeypatch):
+def test_a_run_served_by_two_packs_is_a_crash_not_a_score(monkeypatch, tmp_path):
     """The cause of the tone spread that made every verdict this session void.
 
     The adaptive runtime silently swaps in the standby pack when the primary
@@ -201,7 +201,7 @@ def test_a_run_served_by_two_packs_is_a_crash_not_a_score(monkeypatch):
     )
     monkeypatch.setattr(cycle.subprocess, "run", lambda *a, **k: judged.append(a))
 
-    percent, reason = cycle.measure("Friendly", Path("build/unused.log"))
+    percent, reason = cycle.measure("Friendly", tmp_path / "unused.log")
 
     assert percent is None
     assert "more than one pack" in reason
@@ -218,14 +218,31 @@ def test_every_pack_that_served_is_reported_not_just_the_last(tmp_path, monkeypa
     the run reported as clean. A check that reports the final value rather than
     whether anything varied is the defect shape that has cost this session most
     of its wrong turns.
+
+    THE FIXTURE CHANGED ON 2026-09-03, THE PROPERTY DID NOT. It used to feed
+    `Polish plan` lines, which the app logs for every ATTEMPT. That is not what
+    this docstring describes: 33 requests were SERVED by the e4b, meaning their
+    answers were accepted and scored, and an accepted answer is logged as
+    `Accepted AI plan`. Reading attempts instead refused a run in which 171
+    corrections were accepted, all of them on the 12b, because two sections had
+    cascaded 12b -> e4b -> e2b -> rules on a validation failure and used none of
+    those answers. The scenario below is the same scenario, written the way the
+    app actually records it.
     """
     import autoresearch_run
 
     log = tmp_path / "echo-link.log"
     log.write_text(
+        # Both kinds of line, interleaved, because a real log carries both: the
+        # attempt, then the acceptance. _served_pack reads the attempts and
+        # _packs_that_served reads the acceptances, and the point of this test
+        # is that they answer different questions.
         "Polish plan pack=gemma4-12b-qat-v1 model=x backend=cuda\n"
+        "Accepted AI plan pack=gemma4-12b-qat-v1 model=x policy=6 reason=-\n"
         "Polish plan pack=gemma4-e4b-qat-v1 model=y backend=cuda\n"
-        "Polish plan pack=gemma4-12b-qat-v1 model=x backend=cuda\n",
+        "Accepted AI plan pack=gemma4-e4b-qat-v1 model=y policy=6 reason=-\n"
+        "Polish plan pack=gemma4-12b-qat-v1 model=x backend=cuda\n"
+        "Accepted AI plan pack=gemma4-12b-qat-v1 model=x policy=6 reason=-\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(autoresearch_run, "APP_LOG", log)
@@ -267,7 +284,7 @@ def test_a_downgraded_pack_is_refused_before_the_batch_runs(monkeypatch):
     assert not any("run_essays_batch" in str(a) for a in ran)
 
 
-def test_an_unknown_pack_does_not_block_the_run(monkeypatch):
+def test_an_unknown_pack_does_not_block_the_run(monkeypatch, tmp_path):
     """A log that cannot be read must not become a permanent refusal.
 
     `_served_pack` returns "unknown" when it cannot find a plan line, which
@@ -289,7 +306,7 @@ def test_an_unknown_pack_does_not_block_the_run(monkeypatch):
     )
     monkeypatch.setattr(cycle.subprocess, "run", lambda *a, **k: None)
 
-    percent, reason = cycle.measure("Friendly", Path("build/unused.log"))
+    percent, reason = cycle.measure("Friendly", tmp_path / "unused.log")
 
     # It proceeds past the pack check; it stops later for a different reason.
     assert "prewarmed" not in reason

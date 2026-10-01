@@ -135,23 +135,68 @@ def test_source_runtime_keeps_explicit_environment_bypass(monkeypatch):
     assert app_main._subscription_required_for_runtime() is False
 
 
-def test_production_runtime_rejects_hidden_test_commands() -> None:
+def test_production_runtime_rejects_hidden_test_commands(monkeypatch) -> None:
+    """The probe gate follows the BUILD CHANNEL, not the subscription flag.
+
+    Until 2026-09-24 this asserted allowed(args, subscription_required=False)
+    is True - that switching subscription off also opened --workflow-probe.
+    That held only while the testing package was the one build with
+    subscription off. Manuscript is no longer subscription-gated, so the old
+    assertion describes a hole: every shipped build would expose keystroke
+    synthesis, the microphone and a spawned process.
+
+    Both values of subscription_required are passed below precisely to show
+    the gate no longer moves with it.
+    """
+
     allowed = getattr(app_main, "_internal_test_command_allowed", None)
     assert callable(allowed)
     parser = app_main.build_parser()
-
-    for arguments in (
+    internal = (
         ["--smoke-test"],
         ["--workflow-probe"],
         ["--workflow-probe-target"],
         ["--internal-evaluation"],
-    ):
+    )
+
+    # Frozen, because that is the only situation the gate defends. A source
+    # checkout has tools/windows_workflow_probe.py in the tree and can run it
+    # directly, so refusing there would protect nothing while breaking the way
+    # the probe is actually driven - see tests/test_windows_workflow_probe_cli.
+    monkeypatch.setattr(app_main.sys, "frozen", True, raising=False)
+
+    monkeypatch.setattr(app_main, "is_testing_unlocked_build", lambda: False)
+    for arguments in internal:
         args = parser.parse_args(arguments)
         assert allowed(args, subscription_required=True) is False
-        assert allowed(args, subscription_required=False) is True
+        assert allowed(args, subscription_required=False) is False
+
+    monkeypatch.setattr(app_main, "is_testing_unlocked_build", lambda: True)
+    for arguments in internal:
+        args = parser.parse_args(arguments)
+        assert allowed(args, subscription_required=True) is True
 
     ordinary = parser.parse_args([])
+    monkeypatch.setattr(app_main, "is_testing_unlocked_build", lambda: False)
     assert allowed(ordinary, subscription_required=True) is True
+
+
+def test_a_source_checkout_may_drive_the_probe(monkeypatch) -> None:
+    """Unfrozen, the gate stands aside, and that is deliberate.
+
+    Found by the full suite on 2026-09-24: keying the gate on the build
+    channel alone broke tests/test_windows_workflow_probe_cli.py, which drives
+    --workflow-probe from source. The first version of this change refused
+    there, which defends nothing - the harness is a file in the repository -
+    and broke the only automated coverage the probe CLI has.
+    """
+    allowed = app_main._internal_test_command_allowed
+    parser = app_main.build_parser()
+    monkeypatch.setattr(app_main.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(app_main, "is_testing_unlocked_build", lambda: False)
+
+    args = parser.parse_args(["--workflow-probe"])
+    assert allowed(args, subscription_required=True) is True
 
 
 def test_entitlement_client_uses_only_the_fixed_https_endpoint():

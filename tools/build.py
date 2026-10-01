@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import ipaddress
 import importlib.util
 import json
@@ -27,6 +28,26 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--installer", action="store_true")
     result.add_argument("--dry-run", action="store_true")
     result.add_argument(
+        "--allow-unsigned",
+        action="store_true",
+        help=(
+            "Build a release without a code-signing certificate. The artifact "
+            "is a real release - no probe harness, no testing label - but "
+            "Windows SmartScreen will warn on every machine until it is "
+            "signed. Explicit because it is not the shape a release ships in."
+        ),
+    )
+    result.add_argument(
+        "--polish-host",
+        default="",
+        help=(
+            "Bundle this already-built Manuscript.PolishHost.exe instead of "
+            "compiling a fresh one. Every compile is a new unsigned hash that "
+            "Smart App Control judges afresh; use the host Windows already "
+            "runs, or a signed one."
+        ),
+    )
+    result.add_argument(
         "--testing-unlocked",
         action="store_true",
         help="Build an obvious local test package with subscription enforcement disabled",
@@ -46,6 +67,17 @@ def parser() -> argparse.ArgumentParser:
             "Path to an Azure Trusted Signing metadata.json. Overrides the "
             "MANUSCRIPT_AZURE_SIGNING_METADATA environment variable. Requires "
             "MANUSCRIPT_AZURE_SIGNING_DLIB to point at Azure.CodeSigning.Dlib.dll."
+        ),
+    )
+    result.add_argument(
+        "--release-download-base-url",
+        default="",
+        help=(
+            "Public HTTPS origin the built installer will be uploaded under, e.g. "
+            "https://releases.example.com. Overrides "
+            "MANUSCRIPT_RELEASE_DOWNLOAD_BASE_URL. Required with --installer "
+            "unless --testing-unlocked; used to write installer-output/"
+            "release-manifest.json for echo_link_core.update_check."
         ),
     )
     return result
@@ -121,6 +153,13 @@ def main(argv: list[str] | None = None) -> int:
             print(str(ROOT / "packaging" / "EchoLink.iss"))
         return 0
 
+    release_download_base_url = ""
+    if args.installer:
+        release_download_base_url = _release_download_base_url(
+            args.release_download_base_url,
+            testing_unlocked=args.testing_unlocked,
+            environ=os.environ,
+        )
     signing = _resolve_signing(args, os.environ)
     signtool = _find_signtool() if signing else None
     if signing and signtool is None:
@@ -131,11 +170,7 @@ def main(argv: list[str] | None = None) -> int:
 
     _write_build_info(testing_unlocked=args.testing_unlocked)
     _write_subscription_manifest(testing_unlocked=args.testing_unlocked)
-    subprocess.run(
-        [sys.executable, str(ROOT / "tools" / "build_polish_host.py")],
-        cwd=ROOT,
-        check=True,
-    )
+    _stage_polish_host(args.polish_host)
     if signing and signtool:
         _sign_files(
             _signable_files(ROOT / "build" / "generated" / "polish-host"),
@@ -146,6 +181,14 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "WARNING: building a TESTING UNLOCKED package. "
             "Do not publish or sell this artifact."
+        )
+    elif signing is None:
+        # A release with no signature is a legitimate artifact and an unusual
+        # one, so it says so every time rather than only in the docs.
+        print(
+            "WARNING: building an UNSIGNED release. It installs and runs, but "
+            "Windows SmartScreen warns on every machine and the publisher "
+            "reads as unknown. Sign it before distributing."
         )
     subprocess.run(browser_pyinstaller, cwd=ROOT, check=True)
     subprocess.run(pyinstaller, cwd=ROOT, check=True)
@@ -181,6 +224,14 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"Build did not create {installer}")
         if signing and signtool:
             _sign_files([installer], signing, signtool)
+        # After signing, not before: the sha256 published here must match the
+        # exact bytes a writer downloads and update_check.py verifies against.
+        manifest = _write_release_manifest(
+            installer,
+            testing_unlocked=args.testing_unlocked,
+            download_base_url=release_download_base_url,
+        )
+        print(manifest)
         print(installer)
     print(executable)
     return 0
@@ -234,15 +285,17 @@ def _release_signing_thumbprint(
     *,
     testing_unlocked: bool,
     environ: Mapping[str, str],
+    allow_unsigned: bool = False,
 ) -> str | None:
     supplied = value or environ.get("MANUSCRIPT_SIGNING_THUMBPRINT", "")
     normalized = re.sub(r"\s+", "", supplied).upper()
     if not normalized:
-        if testing_unlocked:
+        if testing_unlocked or allow_unsigned:
             return None
         raise SystemExit(
             "Production builds require a trusted code-signing certificate. "
-            "Pass --signing-thumbprint or set MANUSCRIPT_SIGNING_THUMBPRINT."
+            "Pass --signing-thumbprint or set MANUSCRIPT_SIGNING_THUMBPRINT, "
+            "or pass --allow-unsigned to build a release without one."
         )
     if not re.fullmatch(r"[0-9A-F]{40}", normalized):
         raise SystemExit(
@@ -304,6 +357,7 @@ def _resolve_signing(args, environ) -> tuple | None:
         args.signing_thumbprint,
         testing_unlocked=args.testing_unlocked,
         environ=environ,
+        allow_unsigned=getattr(args, "allow_unsigned", False),
     )
     if thumbprint:
         return ("sha1", thumbprint)
@@ -401,20 +455,111 @@ def _write_subscription_manifest(*, testing_unlocked: bool = False) -> Path:
     if not isinstance(origin, str) or not origin.strip():
         raise SystemExit("Source subscription configuration is invalid.")
     origin = origin.strip()
-    if not testing_unlocked and not _is_public_https_origin(origin):
-        raise SystemExit(
-            "Production builds require a public HTTPS subscription origin."
-        )
+    # No origin gate any more. It existed because a production build enforced
+    # subscription and therefore had to contact a real server. Manuscript is
+    # not subscription-gated (2026-09-24), nothing is contacted, and demanding
+    # a public HTTPS host made a release build impossible to produce without
+    # inventing a domain - which would then be baked into the shipped product.
     target = ROOT / "build" / "generated" / "subscription.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         json.dumps(
             {
                 "origin": origin,
-                "subscription_required": not testing_unlocked,
+                # Never enforced. Kept false in BOTH channels because the
+                # product is not subscription-gated; the channel now says only
+                # whether the probe harness is aboard.
+                "subscription_required": False,
                 "build_channel": (
                     "testing-unlocked" if testing_unlocked else "production"
                 ),
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return target
+
+
+def _stage_polish_host(prebuilt: str) -> Path:
+    """Put the polish host where EchoLink.spec bundles it from.
+
+    Compiles it by default. With a prebuilt path, copies that exact file
+    instead. Added 2026-10-01: .NET builds are not byte-identical, so each
+    compile is a new unsigned hash, and Smart App Control on this machine
+    allowed one compile and blocked the identical source compiled an hour
+    later inside the installer build. An installed app whose host is blocked
+    silently falls back from the bundled runtime.
+    """
+    target = ROOT / "build" / "generated" / "polish-host" / "Manuscript.PolishHost.exe"
+    if not prebuilt:
+        subprocess.run(
+            [sys.executable, str(ROOT / "tools" / "build_polish_host.py")],
+            cwd=ROOT,
+            check=True,
+        )
+        return target
+    source = Path(prebuilt)
+    if not source.is_file() or source.stat().st_size < 1024 * 1024:
+        raise SystemExit(
+            f"--polish-host must name a self-contained Manuscript.PolishHost.exe: {source}"
+        )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if source.resolve() != target.resolve():
+        shutil.copy2(source, target)
+    print(f"bundling prebuilt polish host {source}")
+    return target
+
+
+def _release_download_base_url(value: str, *, testing_unlocked: bool, environ: Mapping[str, str]) -> str:
+    supplied = (value or environ.get("MANUSCRIPT_RELEASE_DOWNLOAD_BASE_URL", "")).strip()
+    if not supplied:
+        # Optional since 2026-09-24. It only ever fed the update manifest, and
+        # there is no update server yet. Absent, the manifest records no
+        # download URL and update_check simply has nothing to offer, which is
+        # honest; a placeholder host would have update checks pointing at a
+        # domain that does not resolve.
+        return ""
+    if not _is_public_https_origin(supplied):
+        raise SystemExit(
+            "The release download base URL must be a public HTTPS origin, no path."
+        )
+    return supplied
+
+
+def _write_release_manifest(
+    installer: Path,
+    *,
+    testing_unlocked: bool,
+    download_base_url: str,
+) -> Path:
+    # update_check.UpdateClient pins a download URL to the same host and port
+    # as the update-check origin (see _validate_download_url), so this manifest
+    # must publish a URL under that same origin - a fixed /releases/<file> path
+    # keeps that a promise this function can enforce rather than a convention
+    # a release script could get wrong.
+    from echo_link_core.version import PRODUCT_VERSION
+
+    if not re.fullmatch(r"\d+\.\d+\.\d+", PRODUCT_VERSION):
+        raise SystemExit(
+            "PRODUCT_VERSION must be MAJOR.MINOR.PATCH to publish a release manifest."
+        )
+    sha256 = hashlib.sha256(installer.read_bytes()).hexdigest()
+    base = download_base_url.strip()
+    download_url = (
+        f"{base}/releases/{installer.name}"
+        if base
+        else f"https://replace-before-release.invalid/releases/{installer.name}"
+    )
+    target = installer.parent / "release-manifest.json"
+    target.write_text(
+        json.dumps(
+            {
+                "version": PRODUCT_VERSION,
+                "downloadUrl": download_url,
+                "sha256": sha256,
+                "notes": "",
             },
             indent=2,
         )

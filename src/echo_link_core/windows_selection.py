@@ -18,6 +18,37 @@ from .insertion import SelectionRecord, WindowSnapshot, active_window
 logger = logging.getLogger(__name__)
 
 
+def _log_capture_failure(where: str, exc: BaseException) -> None:
+    """Say that a capture path gave up, and why.
+
+    Every outer handler in this file used to be `except Exception: return
+    None` with no logging at all. On an end user's machine a UI Automation
+    failure - a COM apartment problem, security software, an import that did
+    not load - produced the HUD's "No text was captured" card and NOTHING in
+    echo-link.log, leaving support with a screenshot and no evidence.
+
+    That contradicts this repository's own rule in CLAUDE.md: an error is
+    handled, translated, logged with enough context to diagnose it, or
+    propagated - never swallowed silently.
+
+    THE EXCEPTION TYPE AND ITS MESSAGE ONLY, never the captured text. The
+    types raised here are COMError, OSError and uiautomation's own, and none
+    of them carries document content; the same shape is already used by
+    insertion.py for Word save failures.
+
+    INFO rather than WARNING because several of these are ordinary: focus is
+    on a window with no text, or the caret moved while the tree was being
+    read. A log that cries wolf is read as carefully as one that says
+    nothing.
+    """
+    logger.info(
+        "Writing HUD capture path %s gave up: %s: %s",
+        where,
+        type(exc).__name__,
+        exc,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class DetectedSelection:
     record: SelectionRecord
@@ -158,9 +189,9 @@ class WindowsSelectionReader:
                             try:
                                 whole = getattr(pattern, "DocumentRange", None)
                                 if whole is not None:
-                                    whole_text = whole.GetText(
+                                    whole_text = normalize_captured_text(whole.GetText(
                                         self.max_characters + 1
-                                    )
+                                    ))
                                     if (
                                         isinstance(whole_text, str)
                                         and whole_text.strip()
@@ -290,7 +321,8 @@ class WindowsSelectionReader:
                         logger.exception("Word HUD candidate failed")
                     continue
             return None
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - UI Automation raises undocumented types
+            _log_capture_failure("read", exc)
             return None
 
     def read_selection(self) -> DetectedSelection | None:
@@ -320,7 +352,8 @@ class WindowsSelectionReader:
                     own_process_id=self._own_process_id,
                 )
             )
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - UI Automation raises undocumented types
+            _log_capture_failure("has_editable_focus", exc)
             return False
 
     def read_editable_focus(self) -> DetectedSelection | None:
@@ -381,7 +414,8 @@ class WindowsSelectionReader:
                 except Exception:
                     continue
             return None
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - UI Automation raises undocumented types
+            _log_capture_failure("read_editable_focus", exc)
             return None
 
     def read_document(self) -> DetectedSelection | None:
@@ -444,7 +478,8 @@ class WindowsSelectionReader:
                 except Exception:
                     continue
             return None
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - UI Automation raises undocumented types
+            _log_capture_failure("read_document", exc)
             return None
 
     def read_page(self) -> DetectedSelection | None:
@@ -534,7 +569,8 @@ class WindowsSelectionReader:
                 except Exception:
                     continue
             return None
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - UI Automation raises undocumented types
+            _log_capture_failure("read_page", exc)
             return None
 
     def text_rectangles(
@@ -628,7 +664,8 @@ class WindowsSelectionReader:
                 if callable(scroll):
                     scroll(True)
             return _clip_rectangles(_range_rectangles(target), record.control_anchor)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - UI Automation raises undocumented types
+            _log_capture_failure("text_rectangles", exc)
             return ()
 
     def is_record_control_focused(self, record: SelectionRecord) -> bool:
@@ -661,7 +698,8 @@ class WindowsSelectionReader:
             return record.text == text or (
                 record.scope == "selection" and text.count(record.text) == 1
             )
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - UI Automation raises undocumented types
+            _log_capture_failure("is_record_control_focused", exc)
             return False
 
     def restore_selection(self, record: SelectionRecord) -> bool:
@@ -730,7 +768,8 @@ class WindowsSelectionReader:
                 return False
             control, matching_range = matches[0]
             return _focus_and_select(control, matching_range)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - UI Automation raises undocumented types
+            _log_capture_failure("restore_selection", exc)
             return False
 
     def _matching_range(self, control, automation, record, process_id: int):
@@ -909,7 +948,8 @@ class WindowsSelectionMonitor:
                 return
         try:
             detected = self.reader.read()
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - UI Automation raises undocumented types
+            _log_capture_failure("poll_once", exc)
             detected = None
         empty_editable_focus = False
         if detected is None:
@@ -1029,7 +1069,11 @@ def normalize_captured_text(text: str) -> str:
     sees, the digest that identifies the document, and the live read that
     verifies it are all the same string.
     """
-    return str(text or "").replace(_NONBREAKING_SPACE, " ")
+    # Word UIA reports a table cell/row terminator as U+0007, whereas
+    # COM reports CR plus U+0007. The COM span builder skips U+0007 and
+    # keeps CR as a newline. Map the UIA terminator one-for-one to the
+    # same newline so cell boundaries and every later offset agree.
+    return str(text or "").replace(_NONBREAKING_SPACE, " ").replace("\x07", "\n")
 
 
 def _text_digest(text: str) -> str:

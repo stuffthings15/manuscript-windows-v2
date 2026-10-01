@@ -35,6 +35,7 @@ click, the HUD following focus between documents - cannot be proved offscreen
 and stays with `writer_session_probe.py`.
 """
 from __future__ import annotations
+from animal_essay_corpus_inventory import VISIBLE_TONES  # noqa: E402
 
 import argparse
 import json
@@ -351,7 +352,9 @@ def main() -> int:
             hud.tone_combo.itemText(index)
             for index in range(hud.tone_combo.count())
         )
-        expected = ("Clear", "Improve", "Rephrase", "Shorten", "Formal", "Friendly")
+        # The menu, from the tuple that defines it. This was a hard-coded
+        # copy and had gone stale: still the pre-2026-09-30 six.
+        expected = tuple(VISIBLE_TONES)
         if tones != expected:
             report["findings"].append(
                 f"Writing HUD/Rewrite tone: offers {tones}, expected {expected}"

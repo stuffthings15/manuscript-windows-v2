@@ -52,6 +52,7 @@ from echo_link_app.ai_status import user_ai_status
 from echo_link_app.review_spans import (
     FILTERS,
     TONE_BATCH_PARAGRAPHS,
+    answer_abandons_the_source,
     join_tone_batch,
     split_tone_batch,
     tone_request_batches,
@@ -62,6 +63,7 @@ from echo_link_app.review_spans import (
     _shift_remaining_sentence_suggestions,
     _token_diff_opcodes,
 )
+from echo_link_app.target_underline import screen_for_physical_point
 from echo_link_app.theme import COLORS
 from echo_link_app.branding import APP_NAME, ICON_PNG
 from echo_link_core.paths import resource_path
@@ -192,11 +194,24 @@ def _anchor_in_screen_points(
     if sys.platform != "win32" or screen is None:
         return int(left), int(top), int(right), int(bottom)
     scale = max(1.0, float(screen.devicePixelRatio()))
+    # RE-OFFSET FROM THE SCREEN'S ORIGIN, which this did not do at all.
+    #
+    # Dividing a virtual-desktop coordinate by the scale only works when the
+    # screen starts at zero. On a second monitor whose logical origin is
+    # x=1920 at 150 percent, a UI Automation point at physical x=2500 became
+    # 2500/1.5 = 1667 - a position on the PRIMARY monitor, most of a screen
+    # away from the text it was meant to sit beside.
+    #
+    # target_underline._safe_line_rectangles has always done it this way and
+    # is the model; the underline landed correctly while the badge did not.
+    geometry = screen.geometry()
+    origin_x = geometry.left()
+    origin_y = geometry.top()
     return (
-        round(left / scale),
-        round(top / scale),
-        round(right / scale),
-        round(bottom / scale),
+        origin_x + round((left - origin_x) / scale),
+        origin_y + round((top - origin_y) / scale),
+        origin_x + round((right - origin_x) / scale),
+        origin_y + round((bottom - origin_y) / scale),
     )
 
 class RewritePalette(QDialog):
@@ -845,22 +860,41 @@ class RewritePalette(QDialog):
         tone_label.setObjectName("hudEyebrow")
         tone_row.addWidget(tone_label)
         self.tone_combo = TonePicker()
-        # Six on the owner's instruction, 2026-08-16, down from seven on
-        # 2026-08-13 and twenty-two before that. These are the same six Android
-        # cut to under the same instruction the day before, in commit 1aed13d
-        # of that tree: its "Proofread" is this menu's "Clear", which maps to
-        # the Rewrite command and becomes Proofread on an automatic review.
-        # Matching it deliberately, so one product does not offer two different
-        # menus. "Academic" and "Simplified" are what left; both are still
-        # reachable as commands and still carry their tone contracts.
+        # Seven on the owner's instruction, 2026-09-30: Diplomatic and
+        # Professional added, Shorten dropped. Before that six since
+        # 2026-08-16, seven on 2026-08-13, twenty-two before that.
+        #
+        # Shorten leaves the MENU only. It keeps its command, its strict tone
+        # contract and its compression check in
+        # tools/full_page_tone_quality_probe.py, exactly as "Academic" and
+        # "Simplified" did when they left on 2026-08-16. Nothing about it is
+        # deleted; it is simply not offered.
+        #
+        # Why it went: it is the one tone whose job is to remove content, and
+        # it has failed every measurement this project has taken of it - 42.9%
+        # and flat across every experiment, no usable baseline, and on
+        # 2026-09-30 the only failing tone of six, refused by a meaning guard
+        # with "Local AI changed a meaning constraint". A tone that asks the
+        # model to drop words and a guard that refuses answers which drop words
+        # are hard to satisfy at once.
+        #
+        # Diplomatic and Professional were already commands with strict
+        # contracts, so this promotes two that were only reachable
+        # programmatically.
+        #
+        # NOTE: this breaks the deliberate parity with Android, which cut to
+        # the same six under the same instruction in commit 1aed13d of that
+        # tree. One product now offers two different menus until Android
+        # follows.
         self.tone_combo.addItems(
             (
                 "Clear",
                 "Improve",
                 "Rephrase",
-                "Shorten",
                 "Formal",
                 "Friendly",
+                "Diplomatic",
+                "Professional",
             )
         )
         self.tone_combo.setAccessibleName("Rewrite tone")
@@ -1597,6 +1631,54 @@ class RewritePalette(QDialog):
                 suggestion_id,
             )
             return
+        # An answer that threw its section away is a guard turning an answer
+        # down, and the HUD already has exactly one path for that. Delegate to
+        # it rather than returning early from further down this method, which
+        # is what this did first and got three things wrong.
+        #
+        # _ai_failed_ids is the difference between a card that reads honestly
+        # and one that lies. _mark_ai_provenance shows "Suggested text" for a
+        # section in _ai_completed_ids and "Suggested text, built-in rules
+        # only" otherwise, and its docstring records why: a rules-only essay
+        # that claims to be AI-corrected "reads as a working corrector right up
+        # until it is graded". Marking a REFUSED section completed put that
+        # defect back. show_sentence_error files the section as failed, which
+        # is what it is, and the card then says so.
+        #
+        # It also gets right what an early return here could not: a refusal for
+        # a BACKGROUND section must not repaint the card the writer is looking
+        # at (show_sentence_error checks that explicitly), the section stays
+        # reviewable rather than being counted as done, and the review moves on
+        # without retrying the same text forever.
+        #
+        # Batches are not handled here. They need the answer split first, and
+        # the batch path below already has its own refusal that puts every
+        # member back for an individual request.
+        if len(
+            self._ai_batch_members.get(attempt, ())
+        ) <= 1 and answer_abandons_the_source(
+            self._review_text_for(suggestion_id), text
+        ):
+            session_state.record_event(
+                "answer_abandoned_source", section=str(suggestion_id)[:8]
+            )
+            logger.info("Writing HUD answer refused: it abandoned its section")
+            # Says what actually happens. The wording carried over from an
+            # earlier version of this branch, which restored the card before
+            # showing the message, so "showing the built-in correction" was
+            # true of it. This path does the opposite: _show_review_suggestion
+            # CLEARS the pane for a section in _ai_failed_ids and heads it "AI
+            # correction not ready", deliberately, so a rules repair is never
+            # mistaken for an AI one. The message is set assertively and is
+            # read out by a screen reader, so promising text that is not on
+            # screen is worse than saying nothing.
+            self.show_sentence_error(
+                attempt_id,
+                suggestion_id,
+                "The rewrite lost this paragraph's meaning. Retry the AI or "
+                "dismiss this section.",
+            )
+            return
         self._ai_attempts.pop(attempt, None)
         foreground = attempt == self._active_ai_attempt_id
         was_background = self._active_ai_background if foreground else True
@@ -1617,6 +1699,35 @@ class RewritePalette(QDialog):
         members = self._ai_batch_members.pop(attempt, ())
         if len(members) > 1:
             parts = split_tone_batch(rewritten, len(members))
+            if parts is not None:
+                # Counting the blocks is not enough. An answer that repeats one
+                # line five times returns five blocks, passes the count check,
+                # and each block is written over a paragraph. That is the shape
+                # the 122 title sections of 2026-09-11 arrived in, though the
+                # app produced those itself rather than the model - see
+                # correction_for_section. This catches the shape either way.
+                abandoned = [
+                    member
+                    for member, part in zip(members, parts)
+                    if answer_abandons_the_source(self._review_text_for(member), part)
+                ]
+                if abandoned:
+                    session_state.record_event(
+                        "tone_batch_abandoned_source",
+                        members=len(members),
+                        abandoned=len(abandoned),
+                    )
+                    logger.info(
+                        "Writing HUD tone batch refused: %d of %d answers abandoned "
+                        "their section",
+                        len(abandoned),
+                        len(members),
+                    )
+                    # The whole batch goes back, not just the bad blocks. The
+                    # good ones came out of the same collapsed answer and the
+                    # per-section retry below is cheap next to writing one
+                    # wrong paragraph into a writer's document.
+                    parts = None
             if parts is None:
                 session_state.record_event(
                     "tone_batch_refused", members=len(members), section=suggestion_id[:8]
@@ -1767,6 +1878,25 @@ class RewritePalette(QDialog):
             self.set_busy(False)
         self._ai_failed_ids.add(suggestion_id)
         self._ai_failure_messages[suggestion_id] = message
+        if self._pending_tone_rewrite == suggestion_id:
+            # The writer picked a tone before this section's proofread landed,
+            # so the tone was parked until the proofread came back. It is not
+            # coming back. Only the success path resumes this, so leaving the
+            # pointer set strands it for the rest of the review: the tone is
+            # never requested and the slot is never free for another section.
+            # Applying a tone over text that failed its proofread would be
+            # worse, so the request is dropped, and the failure message above
+            # is what the writer sees instead.
+            self._pending_tone_rewrite = ""
+        # The series bar counts terminal failures as progress, so a failure
+        # moves it - but only if something republishes it. The prefetch below
+        # does that, and only on the path where it actually issues a request
+        # (_request_next_ai_prefetch reaches _update_series_progress after the
+        # request is built). When the LAST outstanding section fails there is
+        # nothing left to request, so the bar stopped one short and stayed
+        # there. Republish here, where every terminal outcome for a section
+        # passes, rather than relying on there being more work to do.
+        self._update_series_progress()
         self._render_suggestions()
         self._set_status(message, assertive=True)
         current = self._current_review_suggestion()
@@ -1868,10 +1998,18 @@ class RewritePalette(QDialog):
             return
         if self._review_suggestions:
             return
-        if self._applied_notice:
-            self._finish_after_apply()
-            return
-        self.finish_choice()
+        # Always through the finish that tells the host how the review ended.
+        #
+        # This used to call bare finish_choice() unless an Undo notice was
+        # showing. The host pauses its focus monitor while a review is open
+        # and resumes it only on applied, unchanged or rejected, so a card
+        # that closed itself here left the app deaf: on 2026-10-01 a review
+        # ended at 11 of 13, collapsed three seconds later, and no document
+        # on the machine got an icon for the rest of the owner's demo. The
+        # earlier fix for the same symptom (2026-08-18) covered the writer
+        # leaving the document, and stops at a hidden card, so it never saw
+        # this one.
+        self._finish_after_apply()
 
     def finish_choice(self) -> None:
         self._target_marking_enabled = False
@@ -2018,7 +2156,6 @@ class RewritePalette(QDialog):
             "Clear": "Clear",
             "Improve": "Improve",
             "Rephrase": "Rephrase",
-            "Shorten": "Shorten",
             "Friendly": "Friendly",
             "Formal": "Formal",
             "Professional": "Professional",
@@ -2301,6 +2438,30 @@ class RewritePalette(QDialog):
             return self._declined_ai_request("the section has no id")
         if suggestion_id in self._ai_completed_ids:
             return self._declined_ai_request("already completed", suggestion_id)
+        if suggestion_id in self._ai_failed_ids:
+            # A REFUSED section is resolved, not waiting, and asking the same
+            # model the same text returns the same answer.
+            #
+            # Measured on essay 17 of the animal-pet corpus, 2026-09-30: one
+            # 126-character section came back as 79 characters every time,
+            # seven times, byte-identical. answer_abandons_the_source refused
+            # each one correctly, filed the section in _ai_failed_ids, and the
+            # stale-mark rule below then cleared the mark and asked again -
+            # because it tests only whether a request is in flight, and for a
+            # failed section nothing is. The loop ran until the harness gave up
+            # at its 150s section timeout: "offered neither a correction nor a
+            # skip". The whole essay took 490s for 13 sections because of it.
+            #
+            # _request_next_ai_prefetch already skips _ai_failed_ids. This path
+            # simply never got the same check.
+            #
+            # The stale-mark rule itself is right and stays. It exists for the
+            # 2026-09-01 freeze, where the HUD sat at 21 of 22 for nine hours
+            # waiting on work nobody had asked for. That is a section with no
+            # answer; this is a section whose answer was heard and turned down.
+            return self._declined_ai_request(
+                "the AI answer for this section was refused", suggestion_id
+            )
         if suggestion_id in self._ai_requested_ids and not self._ai_request_in_flight(
             suggestion_id
         ):
@@ -3835,12 +3996,44 @@ class RewritePalette(QDialog):
     def current_replacement_text(self) -> str:
         """The correction the card is showing right now.
 
+        WHAT IS ON SCREEN, which is a different question from what belongs to
+        any particular section, and the difference cost a document. Use
+        correction_for_section when you mean one section's own text.
+        """
+        return self.after_text.toPlainText().strip()
+
+    def correction_for_section(self, suggestion_id: str) -> str:
+        """The correction belonging to ONE section, whoever is on the card.
+
         Read on the GUI thread before a tone job starts, so a failed tone can
         hand this back instead of the rules repair. A refused Friendly used to
         replace a clean AI proofread with "Another benefit are the WAY a
         hamster..." - the writer lost the tone and the correction together.
+
+        That is why the text is carried, and it was read from the CARD. For the
+        section the writer is looking at the two agree, so it was right for
+        every case anyone tested by hand. Sections are also corrected ahead of
+        the writer in the background, and for one of those the card is showing
+        somebody else: in practice section 1, the document's title.
+
+        Measured 2026-09-11 on the release acceptance tier. 122 sections came
+        back as the document's own title, repeated, in place of the writer's
+        paragraph, across four of the six tones - "Artificial Intelligence in
+        Education. Artificial Intelligence in Education." where 118 words had
+        been. The app's log records it plainly once you know what to look for:
+        "kept the existing correction ... characters=42" identical on
+        consecutive sections, the same string handed to each of them.
+
+        It looked like the model collapsing, and it was not. Over 1,426 logged
+        request and completion pairs the smallest answer was 0.839 of its
+        request; no answer ever collapsed. The model was never the problem, and
+        on the runs where this happened it had not run at all.
+
+        Returns "" for an id that is no longer under review, which the caller
+        already treats as "no correction was carried" and falls through to the
+        deterministic repair.
         """
-        return self.after_text.toPlainText().strip()
+        return self._review_text_for(str(suggestion_id))
 
     def _set_result_text(self, text: str) -> None:
         self._updating_result = True
@@ -4008,7 +4201,25 @@ class RewritePalette(QDialog):
         *,
         anchor: tuple[int, int, int, int] | None,
     ) -> None:
-        screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
+        # THE DOCUMENT'S SCREEN, not the mouse's.
+        #
+        # This asked screenAt(QCursor.pos()), which is where the pointer
+        # happens to be - normally the HUD itself, since the writer just
+        # clicked it. On a two-monitor desk that is routinely a different
+        # display from the document, so the anchor was converted with the wrong
+        # device pixel ratio and the badge was placed on the wrong screen.
+        #
+        # With no anchor there is nothing to locate, and the cursor is then the
+        # right answer because the placement below uses the cursor too.
+        screen = None
+        if anchor is not None:
+            screens = tuple(QApplication.screens())
+            left, top, right, bottom = (int(value) for value in anchor)
+            screen = screen_for_physical_point(
+                screens, (left + right) // 2, (top + bottom) // 2
+            )
+        if screen is None:
+            screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
         if screen is None:
             return
         area = screen.availableGeometry()

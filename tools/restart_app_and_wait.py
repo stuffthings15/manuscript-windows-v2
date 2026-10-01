@@ -12,19 +12,67 @@ from __future__ import annotations
 
 import subprocess
 import time
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from tools.application_log_cursor import capture_cursor, lines_since  # noqa: E402
+
 LOG_PATH = Path.home() / "AppData/Local/ManuscriptWindowsV2/echo-link.log"
 
 
-def log_length() -> int:
+
+# Must match whatever tools/run_dev_app.py launches. It was "run_echo_link"
+# until 2026-09-30; a matcher that does not follow the launcher cannot find
+# the running app, so stop_the_running_app reports nothing stopped, the new
+# instance hits the single-instance mutex, exits silently, and the wait times
+# out. That is indistinguishable from a broken app.
+APP_SCRIPT = "run_manuscript"
+
+
+def app_process_ids(script: str = APP_SCRIPT) -> list[str]:
+    """Process ids running Manuscript, matched on the command line.
+
+    Matched on the command line and never on the image name, for the reason
+    `stop_the_running_app` records below: the launcher moved from pythonw.exe
+    to python.exe and a killer matching the image silently stopped doing
+    anything for six hours.
+    """
+    query = (
+        "Get-CimInstance Win32_Process | "
+        f"Where-Object {{ $_.CommandLine -like '*{script}*' }} | "
+        "ForEach-Object { $_.ProcessId }"
+    )
     try:
-        return len(
-            LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
-        )
-    except OSError:
-        return 0
+        found = subprocess.run(  # noqa: S603
+            ["powershell", "-NoProfile", "-Command", query],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [line.strip() for line in found.splitlines() if line.strip().isdigit()]
+
+
+def app_is_running() -> bool:
+    """Is Manuscript alive right now?
+
+    THE DIRECT QUESTION, asked because every proxy for it has been wrong. The
+    harness waited a fixed 10 seconds for the app to capture a document, then
+    40, then 120 - and then on whether the app's log was still growing, which
+    sounded principled and was not. Measured 2026-09-08 over 14 app starts, the
+    log goes SILENT for a median of 14.6 seconds while the model loads, with a
+    90th percentile of 122.8 and a maximum of 131.7. A 30 second quiet window
+    survives 64 percent of starts, which is what turned 9 of 20 essays into
+    "the app reported no capture at all" in a run where the app was working
+    perfectly well.
+
+    A loading app is silent. A dead one is also silent. Only this tells them
+    apart.
+    """
+    return bool(app_process_ids())
 
 
 def stop_the_running_app() -> int:
@@ -43,13 +91,13 @@ def stop_the_running_app() -> int:
     behaviour those fixes had already changed.
 
     Matched on the command line, not the image name, and only ever on
-    run_echo_link. Killing python.exe by image would take the test suite, the
+    run_manuscript. Killing python.exe by image would take the test suite, the
     grader and this tool's own parent with it.
 
     Returns how many processes were stopped, so a caller can tell "nothing was
     running" from "the old one is still there".
     """
-    script = "run_echo_link"
+    script = APP_SCRIPT
     query = (
         "Get-CimInstance Win32_Process | "
         f"Where-Object {{ $_.CommandLine -like '*{script}*' }} | "
@@ -80,7 +128,9 @@ def stop_the_running_app() -> int:
 
 
 def main() -> int:
-    start = log_length()
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LOG_PATH.touch(exist_ok=True)
+    start = capture_cursor(LOG_PATH)
     stop_the_running_app()
     time.sleep(2.0)
     subprocess.Popen(
@@ -95,11 +145,10 @@ def main() -> int:
     deadline = time.monotonic() + 300
     while time.monotonic() < deadline:
         try:
-            lines = LOG_PATH.read_text(
-                encoding="utf-8", errors="replace"
-            ).splitlines()[start:]
-        except OSError:
-            lines = []
+            lines = lines_since(LOG_PATH, start)
+        except (OSError, RuntimeError) as exc:
+            print(f"startup evidence unavailable: {exc}")
+            return 6
         for line in lines:
             if "Adaptive Polish model prewarmed" in line:
                 loaded = "loaded=True" in line

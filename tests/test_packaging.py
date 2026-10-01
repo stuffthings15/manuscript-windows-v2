@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -112,7 +113,7 @@ def test_installer_has_safe_unique_identity():
     text = (ROOT / "packaging" / "EchoLink.iss").read_text(encoding="utf-8")
     assert "ManuscriptV2Setup" in text
     assert "65BD5BC9-6E5E-4E2D-9BB1-B49EA46CB73E" in text
-    assert "PrivilegesRequired=lowest" in text
+    assert "PrivilegesRequired=admin" in text
     assert "Manuscript" in text
     assert 'AppMutex={#MyAppMutex}' in text
     assert 'AppUserModelID: "{#MyAppUserModelID}"' in text
@@ -124,6 +125,15 @@ def test_installer_has_safe_unique_identity():
     assert "UninstallDisplayName={#MyAppName}" in text
     assert "(not UninstallSilent)" in text
     assert "[UninstallDelete]" not in text
+
+
+def test_installer_shows_the_eula_before_install_can_proceed() -> None:
+    text = (ROOT / "packaging" / "EchoLink.iss").read_text(encoding="utf-8")
+    assert "LicenseFile=..\\resources\\EULA.txt" in text
+
+    eula = (ROOT / "resources" / "EULA.txt").read_text(encoding="utf-8")
+    assert "END USER LICENSE AGREEMENT" in eula
+    assert "I accept the agreement" in eula
 
 
 def test_windows_file_metadata_uses_public_manuscript_brand() -> None:
@@ -197,8 +207,16 @@ def test_production_build_rejects_placeholder_entitlement_origin(
     )
     monkeypatch.setattr(build_tool, "ROOT", root)
 
-    with pytest.raises(SystemExit, match="public HTTPS subscription origin"):
-        build_tool._write_subscription_manifest()
+    # No longer refused. The gate existed because a release enforced
+    # subscription and so had to reach a real server; Manuscript is not
+    # subscription-gated (2026-09-24) and nothing is contacted, so requiring a
+    # public host only forced a domain to be invented and then shipped.
+    release_path = build_tool._write_subscription_manifest()
+    assert json.loads(release_path.read_text(encoding="utf-8")) == {
+        "origin": "https://replace-before-release.invalid",
+        "subscription_required": False,
+        "build_channel": "production",
+    }
 
     testing_path = build_tool._write_subscription_manifest(testing_unlocked=True)
     assert json.loads(testing_path.read_text(encoding="utf-8")) == {
@@ -221,21 +239,21 @@ def test_production_build_rejects_placeholder_entitlement_origin(
     ],
 )
 def test_production_build_rejects_nonpublic_or_malformed_origins(
-    tmp_path: Path,
-    monkeypatch,
     origin: str,
 ) -> None:
-    root = tmp_path / "project"
-    resources = root / "resources"
-    resources.mkdir(parents=True)
-    (resources / "subscription.json").write_text(
-        json.dumps({"origin": origin}),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(build_tool, "ROOT", root)
+    """Retargeted 2026-09-24 from the subscription origin to the download URL.
 
-    with pytest.raises(SystemExit, match="public HTTPS subscription origin"):
-        build_tool._write_subscription_manifest()
+    _is_public_https_origin is still the gate on --release-download-base-url,
+    which IS fetched over the network by update_check, so these cases keep
+    their teeth. They stopped applying to the subscription manifest only
+    because nothing reads that origin in a build that does not enforce
+    subscription.
+    """
+
+    with pytest.raises(SystemExit, match="public HTTPS origin"):
+        build_tool._release_download_base_url(
+            origin, testing_unlocked=False, environ={}
+        )
 
 
 def test_production_build_accepts_public_https_entitlement_origin(
@@ -257,7 +275,7 @@ def test_production_build_accepts_public_https_entitlement_origin(
     )
     assert result == {
         "origin": origin,
-        "subscription_required": True,
+        "subscription_required": False,
         "build_channel": "production",
     }
 
@@ -344,3 +362,105 @@ def test_signing_uses_sha256_timestamping_and_trust_verification() -> None:
         "/all",
         str(artifact),
     ]
+
+
+def test_the_release_download_base_url_is_optional_but_validated() -> None:
+    resolve = getattr(build_tool, "_release_download_base_url", None)
+    assert callable(resolve)
+
+    # Optional since 2026-09-24: it only feeds the update manifest and there
+    # is no update server yet. Absent, no download URL is recorded and
+    # update_check has nothing to offer, which beats pointing every installed
+    # copy at a host that does not resolve.
+    assert resolve("", testing_unlocked=False, environ={}) == ""
+    assert resolve("", testing_unlocked=True, environ={}) == ""
+    assert (
+        resolve("https://releases.example.com", testing_unlocked=False, environ={})
+        == "https://releases.example.com"
+    )
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://releases.example.com",
+        "https://localhost",
+        "https://releases.example.com/path",
+        "https://releases.example.invalid",
+    ],
+)
+def test_production_installer_rejects_a_nonpublic_release_download_base_url(
+    base_url: str,
+) -> None:
+    with pytest.raises(SystemExit, match="public HTTPS origin"):
+        build_tool._release_download_base_url(
+            base_url, testing_unlocked=False, environ={}
+        )
+
+
+def test_release_manifest_sha256_matches_the_signed_installer_exactly(
+    tmp_path: Path,
+) -> None:
+    """update_check.py verifies this hash before trusting a download.
+
+    Computing it before signing, or from a different copy of the file, would
+    publish a checksum that never matches what a writer actually downloads.
+    """
+    installer = tmp_path / "ManuscriptV2Setup.exe"
+    installer.write_bytes(b"signed installer bytes")
+
+    manifest_path = build_tool._write_release_manifest(
+        installer,
+        testing_unlocked=False,
+        download_base_url="https://releases.example.com",
+    )
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["sha256"] == hashlib.sha256(installer.read_bytes()).hexdigest()
+    assert manifest["downloadUrl"] == (
+        "https://releases.example.com/releases/ManuscriptV2Setup.exe"
+    )
+    from echo_link_core.version import PRODUCT_VERSION
+
+    assert manifest["version"] == PRODUCT_VERSION
+
+
+def test_release_manifest_download_url_stays_under_the_release_origin(
+    tmp_path: Path,
+) -> None:
+    """echo_link_core.update_check._validate_download_url pins the download
+
+    to the same host and port as the update-check origin, so a manifest
+    naming a different host would be refused by every client that reads it.
+    """
+    installer = tmp_path / "ManuscriptV2Setup.exe"
+    installer.write_bytes(b"x")
+
+    manifest = json.loads(
+        build_tool._write_release_manifest(
+            installer,
+            testing_unlocked=False,
+            download_base_url="https://releases.example.com:8443",
+        ).read_text(encoding="utf-8")
+    )
+
+    assert manifest["downloadUrl"].startswith("https://releases.example.com:8443/")
+
+
+def test_testing_unlocked_release_manifest_never_raises_without_a_base_url(
+    tmp_path: Path,
+) -> None:
+    installer = tmp_path / "ManuscriptV2TestingSetup.exe"
+    installer.write_bytes(b"test build bytes")
+
+    manifest = json.loads(
+        build_tool._write_release_manifest(
+            installer,
+            testing_unlocked=True,
+            download_base_url="",
+        ).read_text(encoding="utf-8")
+    )
+
+    assert manifest["downloadUrl"].endswith(
+        "replace-before-release.invalid/releases/ManuscriptV2TestingSetup.exe"
+    )

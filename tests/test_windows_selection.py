@@ -1516,3 +1516,24 @@ def test_a_selection_the_writer_made_is_still_scoped_as_a_selection():
 
     assert detected is not None
     assert detected.record.scope == "selection"
+
+
+def test_caret_expansion_normalizes_table_boundaries_before_review():
+    raw = "Title.\rDay\x07their was rain\x07\x07After table.\r"
+    caret = _CaretRange("Title.", "Title.", [_Rect(10, 20, 300, 80)])
+    control = _Control(
+        [caret], document_range=_Range(raw),
+        control_type="DocumentControl", runtime_id=(7, 8, 9),
+    )
+    detected = WindowsSelectionReader(
+        max_characters=5000,
+        automation_loader=lambda: _word_automation(control),
+        window_provider=lambda: WindowSnapshot(11, 222, "Table - Word"),
+        own_process_id=999, include_word_page=True, include_caret_sentence=True,
+    ).read()
+    assert detected is not None
+    assert detected.record.text == raw.replace("\x07", "\n")
+    from echo_link_app.review_spans import _review_spans
+    text = detected.record.text
+    sections = [text[start:end] for start, end, _ in _review_spans(text)]
+    assert sections == ["Title.", "Day", "their was rain", "After table."]

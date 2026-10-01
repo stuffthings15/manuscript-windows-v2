@@ -199,6 +199,12 @@ class CorrectionRequest:
     manual: bool = False
     download_consent: bool = False
     preverified_fallback_available: bool = False
+    # ON: every meaning guard refuses as before. OFF: the writer has said
+    # they want sense over fidelity (2026-09-30), so only corruption
+    # still refuses - empty output, an em dash, a changed code span or
+    # protected token, a runtime that did not run. See
+    # PolishEngine._unlock_meaning_guards.
+    faithful: bool = True
     # The whole document the text was taken from, when the caller has it. A
     # section alone cannot answer "how often does this word occur", and that
     # count is what separates a place name from an ordinary word the writer
@@ -220,6 +226,7 @@ class GenerationRequest:
     language: str
     protected_terms: tuple[str, ...]
     plan: ExecutionPlan
+    faithful: bool = True
 
 
 @dataclass(frozen=True, slots=True)

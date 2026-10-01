@@ -23,21 +23,17 @@ This composes the tools that already exist. It does not reimplement grading,
 judging or Word driving, and if a number here disagrees with the tool that
 produces it, the tool is right and this is wrong.
 
-Every Word batch runs `--as-a-writer`, and that is not a detail. The default
-kills Word and restarts the app between essays, which is isolation rather than
-use: it exists because the Writing HUD carried one document's review into the
-next and reported "4 of 11" for a ten-section essay, and while it is switched
-on that defect cannot happen, so no number measures what a writer gets on their
-second document. A release gate that only ever measures the first document of a
-freshly started app is measuring a situation almost no user is ever in. One
-Word session, one app, documents opened one after another, the way somebody
-actually works.
+Every Word batch runs `--as-a-writer`: one app session, with disposable
+documents opened sequentially. The harness preserves unrelated Word documents.
+Reusing the app matters because review state must remain correct when a writer
+moves to their second document; a fresh app per essay cannot measure that.
 
 Word runs take the screen. Nothing here starts one without --fast or --full
 being asked for explicitly, and the runner prints what it is about to do and
 how long it takes before it does it.
 """
 from __future__ import annotations
+from animal_essay_corpus_inventory import VISIBLE_TONES  # noqa: E402
 
 import argparse
 from datetime import datetime, timezone
@@ -47,6 +43,7 @@ import re
 import subprocess
 import sys
 import time
+from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
@@ -57,6 +54,7 @@ if str(ROOT / "tools") not in sys.path:
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 EVIDENCE = ROOT / "build" / "acceptance"
 BATCH = ROOT / "build" / "batch"
+SUMMARY = ROOT / "build" / "batch-summary.json"
 
 # The thresholds. Changing a number here changes what shipping means, so it is
 # a decision to be recorded in docs/RELEASE_ACCEPTANCE.md and in the AI Brain,
@@ -66,7 +64,9 @@ CORRECTIONS_LOWEST = 90.0
 TONE_PERCENT = 95.0
 # The six in the palette, on the owner's instruction of 2026-08-16. The gate
 # measures what the product offers, not everything the engine can do.
-PALETTE_TONES = ("Clear", "Improve", "Rephrase", "Shorten", "Formal", "Friendly")
+# The menu, from the tuple that defines it. Hard-coding it meant this had
+# gone stale at the pre-2026-09-30 six.
+PALETTE_TONES = tuple(VISIBLE_TONES)
 # The judge, named here rather than left to the tool's default.
 #
 # tone_correctness defaults to gemma4:12b-it-q4_K_M, which is not installed on
@@ -103,6 +103,12 @@ def _run(command: list[str], label: str) -> tuple[bool, str]:
     text. This streams each line through as the child writes it and keeps a
     copy for the callers that parse a number back out of it.
     """
+    global BATCH, SUMMARY
+    if "tools/run_essays_batch.py" in command:
+        step = EVIDENCE / ("batch-" + uuid4().hex[:12])
+        command = [*command, "--output-root", str(step)]
+        BATCH = step / "batch"
+        SUMMARY = step / "batch-summary.json"
     _say(f"\n=== {label}")
     started = time.time()
     lines: list[str] = []
@@ -201,6 +207,65 @@ def _run_was_truncated(row: dict) -> bool:
     return True
 
 
+def _reshaped_runs() -> list[dict[str, object]]:
+    """Essays that came out of Word with a different number of paragraphs.
+
+    A review corrects words. It must never add or remove a paragraph, because a
+    paragraph break is something the writer typed and a deleted one cannot be
+    clicked back.
+
+    `run_essays_batch.score` has counted paragraphs at both ends since the
+    harness was written, and until 2026-09-11 nothing compared the two numbers.
+    Essay 16 of the error-riddled corpus went into Word with 15 paragraphs that
+    day, came out with 14, was recorded as `paragraphs_before: 15,
+    paragraphs_after: 14` in the summary, and was reported `complete`. The tone
+    judge noticed a quarter of an hour later and only by accident, because its
+    own source and result section counts stopped agreeing.
+
+    Separate from `_incomplete_runs` on purpose: that one asks whether the run
+    finished, this one asks whether the document survived it, and the two have
+    different answers and different fixes.
+    """
+    try:
+        rows = json.loads(SUMMARY.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(rows, list):
+        return []
+    return [
+        {
+            "essay": row.get("essay"),
+            "paragraphs_before": row.get("paragraphs_before"),
+            "paragraphs_after": row.get("paragraphs_after"),
+            "outcome": row.get("outcome"),
+        }
+        for row in rows
+        if isinstance(row, dict)
+        # Both present and different. A row that never reached `score` has
+        # neither, and a missing measurement is not a failed one.
+        and row.get("paragraphs_before") is not None
+        and row.get("paragraphs_after") is not None
+        and row["paragraphs_before"] != row["paragraphs_after"]
+    ]
+
+
+def _reshaped_failure(label: str, reshaped: list) -> str:
+    """The gate line for runs that changed a document's shape, or "" for none.
+
+    One function because there are three places that must ask - the smoke, the
+    twenty-essay corpora, and the tone runs - and the first version asked in
+    only one of them. A rule written out three times is a rule applied twice.
+    """
+    if not reshaped:
+        return ""
+    first = reshaped[0] if isinstance(reshaped[0], dict) else {}
+    return (
+        f"{label}: {len(reshaped)} essay run(s) changed the document's paragraph "
+        f"count ({first.get('essay')}: {first.get('paragraphs_before')} -> "
+        f"{first.get('paragraphs_after')})"
+    )
+
+
 def _incomplete_runs() -> list[dict[str, object]]:
     """Essays whose Word run did not finish, with the reason the batch gave.
 
@@ -217,7 +282,7 @@ def _incomplete_runs() -> list[dict[str, object]]:
     `stopped_because` is carried through so the evidence file says WHY, rather
     than leaving the next reader to rediscover it from a HUD dump.
     """
-    summary = ROOT / "build" / "batch-summary.json"
+    summary = SUMMARY
     try:
         rows = json.loads(summary.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -262,6 +327,15 @@ def _graded(corpus: Path, first: int, last: int, after: float) -> dict[str, obje
     from echo_link_core.writing_suggestions import WritingSuggestionEngine
     from grade_corpus import essay_documents, grade
 
+    from acceptance_evidence import validate_batch
+    from animal_essay_corpus_probe import _essay_files
+
+    expected = {path.name for path in _essay_files(corpus)[first - 1:last]}
+    if len(expected) != last - first + 1:
+        return {"error": "requested corpus slice is missing documents"}
+    evidence = validate_batch(SUMMARY, expected, BATCH, after)
+    if evidence["status"] != "passed":
+        return {"error": "; ".join(evidence["failures"]), "evidence": evidence}
     dictionary = EnglishDictionary()
     engine = WritingSuggestionEngine()
     # The essays this run actually put through Word, by name, taken from the
@@ -340,6 +414,12 @@ def _graded(corpus: Path, first: int, last: int, after: float) -> dict[str, obje
         # Named so a reader is never told a mean without being told what it
         # left out.
         "excluded_incomplete": incomplete,
+        # Kept separate from the exclusions above, and deliberately so. A
+        # reshaped run FINISHED - it pressed every section and its score is
+        # honest - so excluding it would throw away a real measurement. What it
+        # did was change the document's shape, and no score can express that.
+        # It is graded, reported, and fails the gate.
+        "reshaped": _reshaped_runs(),
         "mean": round(sum(totals) / len(totals), 1),
         "lowest": lowest["total"],
         "lowest_essay": lowest["name"],
@@ -378,7 +458,7 @@ def _stale_app_reason() -> str:
     running = str(state.get("build") or "").strip()
     checkout = _checkout_build()
     if not running or not checkout:
-        return ""
+        return "build identity missing; restart and verify the app before measuring"
     if running != checkout:
         return (
             f"the running app is build {running} and this checkout is "
@@ -412,22 +492,8 @@ def fast_tier(results: dict[str, object], started: float) -> list[str]:
         failures.append("ruff reported findings")
 
     passed, output = _run([str(PYTHON), "-m", "pytest", "-q"], "test suite")
-    # pytest's own summary decides this step, not the process exit code.
-    #
-    # The suite passes 2353 tests and then dies on the way out: exit 139 on one
-    # run and 127 on the next, nondeterministic, and confirmed on 2026-08-19 to
-    # happen at HEAD as well, so it predates the work that found it. It does
-    # not affect the shipped product, which runs one QApplication and exits
-    # normally. Gating on the exit code meant this gate could never go green
-    # for a reason that has nothing to do with the writing.
-    #
-    # The crash is NOT hidden. It is printed as its own finding on every run
-    # and recorded as an open defect in AI Brain/Echo-Link/memory.md. It was
-    # invisible for a long time only because every earlier run was piped
-    # through `tail`, so the exit code anybody read was tail's.
-    #
-    # A missing summary still fails. If pytest cannot collect or dies before it
-    # reports, there is no count to trust and this must not pass on silence.
+    # Both the summary and process exit must succeed. A shutdown crash is
+    # incomplete release evidence even when individual assertions passed.
     summary = re.search(r"(\d+) passed", output)
     broken = re.search(r"(\d+) (?:failed|error)", output)
     results["tests_passed"] = int(summary.group(1)) if summary else 0
@@ -439,10 +505,12 @@ def fast_tier(results: dict[str, object], started: float) -> list[str]:
     elif not passed:
         _say(
             "  NOTE: every test passed but the process exited abnormally. "
-            "This is the known shutdown crash, recorded as an open defect. It "
-            "does not gate."
+            "The shutdown failure requires investigation and "
+            "blocks release acceptance."
         )
         results["abnormal_exit"] = True
+        results["suite"] = False
+        failures.append("test process exited abnormally; release evidence incomplete")
 
     passed, _ = _run([str(PYTHON), "tools/diagnostics_check.py"], "diagnostics")
     results["diagnostics"] = passed
@@ -489,10 +557,19 @@ def fast_tier(results: dict[str, object], started: float) -> list[str]:
     results["corrections_smoke"] = smoke
     if "error" in smoke:
         failures.append(str(smoke["error"]))
-    elif smoke["mean"] < CORRECTIONS_MEAN:
-        failures.append(
-            f"corrections smoke mean {smoke['mean']} is below {CORRECTIONS_MEAN}"
-        )
+    else:
+        # Asked BEFORE the mean, and separately from it. A reshaped smoke run
+        # scores perfectly well - the damage is structural, so no average can
+        # express it - and the fast tier is what gates the full tier, so a
+        # green smoke here is what lets eight hours of measurement start on a
+        # build that is already destroying documents.
+        reshaped = _reshaped_failure("corrections smoke", smoke.get("reshaped") or [])
+        if reshaped:
+            failures.append(reshaped)
+        if smoke["mean"] < CORRECTIONS_MEAN:
+            failures.append(
+                f"corrections smoke mean {smoke['mean']} is below {CORRECTIONS_MEAN}"
+            )
     return failures
 
 
@@ -525,6 +602,12 @@ def full_tier(results: dict[str, object], started: float) -> list[str]:
                 f"not graded ({excluded[0].get('essay')}: "
                 f"{excluded[0].get('stopped_because') or excluded[0].get('outcome')})"
             )
+        # Ungated runs are reported and not gated on their SCORE. This is not a
+        # score. A document that came back a different shape is a failure at any
+        # mean, including a perfect one.
+        reshaped = _reshaped_failure(label, report.get("reshaped") or [])
+        if reshaped:
+            failures.append(reshaped)
         if not gated:
             # Reported, never gated. Said out loud on every run so a reader
             # does not mistake a low number here for a release blocker.
@@ -542,89 +625,77 @@ def full_tier(results: dict[str, object], started: float) -> list[str]:
                 f"is below {CORRECTIONS_LOWEST}"
             )
 
+    from acceptance_evidence import validate_batch, aggregate_tones
+    from animal_essay_corpus_probe import _essay_files
+
     tones: dict[str, object] = {}
+    tone_reports = {}
+    sources = _essay_files(COHERENT)[:20]
     for tone in PALETTE_TONES:
+        tone_started = time.time()
         passed, _ = _run(
             [str(PYTHON), "tools/run_essays_batch.py",
-             "--from", "1", "--to", "3", "--corpus", str(COHERENT),
+             "--from", "1", "--to", "20", "--corpus", str(COHERENT),
              "--tone", tone, "--as-a-writer"],
             f"tone through Word: {tone}",
         )
-        if not passed:
-            failures.append(f"the {tone} Word batch did not finish")
-            continue
-        # A tone that was never applied is not a tone that scored badly.
-        #
-        # `applied=0` is the absence of a measurement. On 2026-08-20 three
-        # tones were judged after runs that applied nothing and each came back
-        # at 0.0 percent, which read as a total product failure and was not.
-        # The same rule the 2026-08-21 sweep script uses: check the row first.
-        # Only the essay that is actually JUDGED has to have completed.
-        #
-        # The judge reads one document - the first essay of the corpus - so a
-        # stall in essay 2 or 3 says nothing about the number being taken. The
-        # first version skipped the tone if ANY of the three runs was
-        # incomplete, and with roughly half of all essay runs stalling that
-        # skipped every tone and produced no tone numbers at all from a
-        # six-hour tier. Same all-or-nothing mistake as the corpus rule.
-        judged_essay = sorted(COHERENT.glob("*.docx"))[0].stem
-        unapplied = [
-            row
-            for row in _incomplete_runs()
-            if str(row.get("essay") or "") == judged_essay
-        ]
-        if unapplied:
+        evidence = validate_batch(SUMMARY, {p.name for p in sources}, BATCH, tone_started)
+        if not passed or evidence["status"] != "passed" or len(sources) != 20:
             tones[tone] = None
-            failures.append(
-                f"tone {tone} was not measured: "
-                f"{len(unapplied)} essay run(s) did not complete "
-                f"({unapplied[0].get('stopped_because') or unapplied[0].get('error') or 'no reason recorded'})"
-            )
+            tone_reports[tone] = {"status": "incomplete", "batch": evidence}
+            failures.append(f"tone {tone}: all twenty documents must finish before judging")
             continue
-        source = sorted(COHERENT.glob("*.docx"))[0]
-        target = EVIDENCE / f"tone-{tone.lower()}.json"
-        passed, output = _run(
-            [str(PYTHON), "tools/tone_correctness.py",
-             "--source", str(source),
-             "--result", str(BATCH / source.name),
-             "--tone", tone, "--model", JUDGE_MODEL, "--json", str(target)],
-            f"tone judge: {tone}",
-        )
-        match = re.search(r"(\d+(?:\.\d+)?)%", output)
-        # A judge that could not run is not a score of zero.
-        #
-        # On 2026-08-20 this reported all six tones at 0.0 percent and the gate
-        # read as a total tone failure. Two things were wrong and neither was
-        # the product: the judge's default model is not installed on this
-        # machine, so it died with HTTP 404, and this line turned that into
-        # 0.0. Six zeroes for tones that had in fact been applied 25 times per
-        # document. A missing number has to fail loudly as a broken
-        # measurement, because a plausible zero is worse than an error.
-        if not passed or match is None:
-            tones[tone] = None
-            failures.append(
-                f"tone {tone} could not be judged: "
-                f"{output.strip().splitlines()[-1][:120] if output.strip() else 'no output'}"
+        # The tone runs are where this defect has ever actually been seen, and
+        # they were the one place with no check. On 2026-09-11 essay 16 lost a
+        # paragraph under five of the six tones and the gate said
+        # "tone Clear: missing or invalid judge evidence" - blaming the judge,
+        # because tone_correctness exits non-zero when its own section counts
+        # stop lining up. That is how the incident was found by accident and
+        # mis-attributed for a quarter of an hour. Ask the question directly,
+        # and keep judging: the tone score is still worth having.
+        tone_reshaped = _reshaped_failure(f"tone {tone}", _reshaped_runs())
+        if tone_reshaped:
+            failures.append(tone_reshaped)
+        reports = []
+        for source in sources:
+            target = EVIDENCE / f"tone-{tone.lower()}-{source.stem}.json"
+            passed, _ = _run(
+                [str(PYTHON), "tools/tone_correctness.py",
+                 "--source", str(source), "--result", str(BATCH / source.name),
+                 "--tone", tone, "--model", JUDGE_MODEL, "--json", str(target)],
+                f"tone judge: {tone}, {source.stem}",
             )
-            continue
-        percent = float(match.group(1))
-        tones[tone] = percent
-        if percent < TONE_PERCENT:
-            failures.append(f"tone {tone} at {percent}% is below {TONE_PERCENT}%")
+            try:
+                report = json.loads(target.read_text(encoding="utf-8")) if passed else {}
+            except (OSError, ValueError):
+                report = {}
+            reports.append(report)
+        aggregate = aggregate_tones(reports, len(sources), tone)
+        tone_reports[tone] = aggregate
+        tones[tone] = aggregate.get("percent")
+        if aggregate["status"] != "passed":
+            failures.append(f"tone {tone}: missing or invalid judge evidence")
+        elif aggregate["percent"] < TONE_PERCENT:
+            failures.append(f"tone {tone} at {aggregate['percent']}% is below {TONE_PERCENT}%")
+    results["tone_reports"] = tone_reports
     results["tones"] = tones
     return failures
 
 
 def main() -> int:
+    global EVIDENCE
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--fast", action="store_true")
     group.add_argument("--full", action="store_true")
     arguments = parser.parse_args()
 
-    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    EVIDENCE = EVIDENCE / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + uuid4().hex[:12])
+    EVIDENCE.mkdir(parents=True, exist_ok=False)
     results: dict[str, object] = {
         "tier": "full" if arguments.full else "fast",
+        "checkout_build": _checkout_build(),
+        "evidence_directory": str(EVIDENCE),
         # Passed in rather than stamped inside a helper so the evidence file
         # says when the run happened and not when it was written up.
         "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -632,8 +703,10 @@ def main() -> int:
 
     started = time.time()
     failures = fast_tier(results, started)
-    if arguments.full:
+    if arguments.full and not failures:
         failures += full_tier(results, started)
+    elif arguments.full:
+        results["full_tier_status"] = "skipped: prerequisite fast tier failed"
 
     results["failures"] = failures
     results["passed"] = not failures

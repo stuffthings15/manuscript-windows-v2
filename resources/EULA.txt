@@ -1,0 +1,49 @@
+MANUSCRIPT END USER LICENSE AGREEMENT
+
+A personal license, not a transfer of ownership.
+
+Effective July 22, 2026. This agreement governs Manuscript software on
+supported platforms. The current version of this agreement is always
+available at the Manuscript website's EULA page.
+
+LICENSE GRANT
+
+While your subscription is active, you receive a limited, non-exclusive,
+non-transferable, revocable license to install and use Manuscript on the
+number of installations allowed by your plan for personal or internal
+business writing.
+
+RESTRICTIONS
+
+You may not distribute the installer or license key, rent or sublicense the
+software, remove ownership notices, bypass entitlement controls, or modify
+or reverse engineer the software except where applicable law expressly
+permits.
+
+YOUR CONTENT
+
+You retain ownership of your speech, drafts, documents, exports, corrections,
+and other content. You are responsible for having the right to process and
+use that content.
+
+LOCAL AI AND THIRD-PARTY COMPONENTS
+
+Manuscript includes or interoperates with third-party software and local AI
+components that may have separate license notices. Those notices continue to
+apply to their components.
+
+UPDATES AND TERMINATION
+
+Updates may replace or change portions of the software. This license ends
+when your subscription entitlement ends or when this agreement is materially
+breached. After termination, stop using the app; locally created documents
+and lawful exports remain yours.
+
+SECURITY
+
+Do not tamper with code signing, license verification, local encryption, or
+safety controls. Report suspected vulnerabilities privately through the
+support form on the Manuscript website.
+
+By clicking "I accept the agreement" you confirm that you have read this
+agreement and agree to be bound by it.

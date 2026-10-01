@@ -4,6 +4,7 @@ using System.IO.Pipes;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -22,6 +23,38 @@ internal static partial class Program
 
     public static async Task<int> Main(string[] args)
     {
+        // Print-only, for tests of the built executable: it opens no pipe,
+        // starts no model, and reads nothing but these two arguments. A test
+        // that reads this source file would pass while an old executable sat
+        // in resources/, so the binary has to be able to answer for itself.
+        if (args.Length == 2 && args[0] == "--print-system-prompt"
+            && (args[1] == "faithful" || args[1] == "free"))
+        {
+            Console.Out.Write(LlamaServerRuntime.SystemPrompt(args[1] == "faithful"));
+            return 0;
+        }
+        // Test-only, for the built executable: start a harmless stand-in
+        // child through the same launch helper llama-server uses, report its
+        // PID, and wait to be killed. The test kills this host with
+        // taskkill /F and no /T, and checks the child went with it.
+        if (args.Length == 1 && args[0] == "--self-test-child-job")
+        {
+            var start = new ProcessStartInfo("cmd.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            foreach (string value in new[] { "/c", "ping", "-n", "120", "127.0.0.1" })
+            {
+                start.ArgumentList.Add(value);
+            }
+            start.RedirectStandardOutput = true;
+            using Process child = LlamaServerRuntime.StartBoundToHost(start);
+            Console.Out.WriteLine($"child-pid {child.Id}");
+            Console.Out.Flush();
+            await Task.Delay(TimeSpan.FromSeconds(120));
+            return 0;
+        }
         try
         {
             HostConfiguration configuration = HostConfiguration.Parse(args);
@@ -198,6 +231,9 @@ internal static partial class Program
         string language = OptionalString(request, "language", 120);
         int outputTokens = BoundedInt(request, "max_output_tokens", 512, 1, 4096);
         double timeout = BoundedDouble(request, "timeout_seconds", 30, 1, 30);
+        // The writer's "Keep my meaning exactly" switch. Absent means ON, so
+        // an older client keeps the behaviour it was built against.
+        bool faithful = OptionalBool(request, "faithful", true);
         var protectedTerms = new List<string>();
         if (
             request.TryGetProperty("protected_terms", out JsonElement rawTerms)
@@ -222,6 +258,7 @@ internal static partial class Program
             instruction,
             language,
             protectedTerms,
+            faithful,
             outputTokens,
             TimeSpan.FromSeconds(timeout));
     }
@@ -252,6 +289,9 @@ internal static partial class Program
                 "and negative statement exact.",
                 "",
                 [],
+                // The acceptance probe proves the faithful contract: the
+                // date, build number, URL and negation must survive.
+                true,
                 128,
                 TimeSpan.FromSeconds(30));
             string folded = Whitespace().Replace(result.Text.ToLowerInvariant(), " ").Trim();
@@ -469,6 +509,20 @@ internal static partial class Program
             throw new ArgumentException($"Polish host field '{name}' is invalid.");
         }
         return result;
+    }
+
+    private static bool OptionalBool(JsonElement value, string name, bool fallback)
+    {
+        if (!value.TryGetProperty(name, out JsonElement raw))
+        {
+            return fallback;
+        }
+        return raw.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => throw new ArgumentException($"Polish host field '{name}' is invalid."),
+        };
     }
 
     private static string OptionalString(JsonElement value, string name, int maxLength)
@@ -749,6 +803,38 @@ internal sealed class LlamaServerRuntime : IAsyncDisposable
         _configuration = configuration;
     }
 
+    // The faithful prompt is the one this host always sent. The free one is
+    // for a writer who has turned "Keep my meaning exactly" off (asked for
+    // on 2026-09-30): the client's instruction already says so, but this
+    // prompt said "preserve every actor, negation, obligation and factual
+    // relationship exactly" and "apply the smallest complete correction" on
+    // every request, and a system prompt outranks an instruction. What stays
+    // hard either way is what the app's validator still enforces when the
+    // switch is off: the protected values, names, numbers, dates, URLs, paths
+    // and code, and an answer that is only the text.
+    internal static string SystemPrompt(bool faithful)
+    {
+        if (faithful)
+        {
+            return
+                "You are Manuscript's private local writing editor. Return only the finished " +
+                "text. Never add a label, explanation, quote wrapper, fact, name, promise, or " +
+                "commentary. Preserve every protected value, number, date, URL, path, code " +
+                "span, actor, negation, obligation, ordering word, paragraph, and factual " +
+                "relationship exactly. Apply the smallest complete correction. Do not think " +
+                "aloud. Thinking is disabled.";
+        }
+        return
+            "You are Manuscript's private local writing editor. Return only the finished " +
+            "text. Never add a label, explanation, quote wrapper, or commentary. The writer " +
+            "has turned off meaning preservation and wants the text to read sensibly above " +
+            "all. Where the source is confused, contradictory, padded, or self-undermining, " +
+            "rewrite it so it makes sense: restructure, merge or split sentences, drop " +
+            "filler, and repair muddled claims. Keep every protected value, name, number, " +
+            "date, URL, path, and code span exact, keep the same paragraphs, and keep the " +
+            "text about the same subject. Do not think aloud. Thinking is disabled.";
+    }
+
     public async Task<GenerationResponse> GenerateAsync(
         string text,
         string command,
@@ -756,6 +842,7 @@ internal sealed class LlamaServerRuntime : IAsyncDisposable
         string instruction,
         string language,
         IReadOnlyList<string> protectedTerms,
+        bool faithful,
         int maxOutputTokens,
         TimeSpan timeout)
     {
@@ -770,13 +857,7 @@ internal sealed class LlamaServerRuntime : IAsyncDisposable
             string protectedBlock = protectedTerms.Count == 0
                 ? "None"
                 : string.Join("\n", protectedTerms.Select(value => "- " + value));
-            string system =
-                "You are Manuscript's private local writing editor. Return only the finished " +
-                "text. Never add a label, explanation, quote wrapper, fact, name, promise, or " +
-                "commentary. Preserve every protected value, number, date, URL, path, code " +
-                "span, actor, negation, obligation, ordering word, paragraph, and factual " +
-                "relationship exactly. Apply the smallest complete correction. Do not think " +
-                "aloud. Thinking is disabled.";
+            string system = SystemPrompt(faithful);
             // "/no_think" is a QWEN control token, and only Qwen strips it.
             // Every other family reads it as ordinary text, so it can be
             // echoed straight into the writer's document. On 2026-09-01, with
@@ -1018,12 +1099,46 @@ internal sealed class LlamaServerRuntime : IAsyncDisposable
         _process = new Process { StartInfo = start, EnableRaisingEvents = true };
         _process.OutputDataReceived += CaptureSafeLog;
         _process.ErrorDataReceived += CaptureSafeLog;
-        if (!_process.Start())
+        StartBoundToHost(_process);
+        _process.BeginOutputReadLine();
+        _process.BeginErrorReadLine();
+    }
+
+    internal static Process StartBoundToHost(ProcessStartInfo start)
+    {
+        var process = new Process { StartInfo = start, EnableRaisingEvents = true };
+        StartBoundToHost(process);
+        return process;
+    }
+
+    // Every child this host starts goes through here, so none can outlive it.
+    internal static void StartBoundToHost(Process process)
+    {
+        if (!process.Start())
         {
             throw new InvalidOperationException("llama.cpp process did not start.");
         }
-        _process.BeginOutputReadLine();
-        _process.BeginErrorReadLine();
+        try
+        {
+            ChildProcessJob.Assign(process);
+        }
+        catch (InvalidOperationException)
+        {
+            // A child that cannot be bound is exactly the orphan this exists
+            // to prevent, holding gigabytes of VRAM after a crash. Refuse it:
+            // the app then reports the host as unavailable and falls back,
+            // which is visible, instead of leaking silently.
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+                // Already gone.
+            }
+            process.Dispose();
+            throw;
+        }
     }
 
     private void CaptureSafeLog(object sender, DataReceivedEventArgs eventArgs)
@@ -1135,6 +1250,113 @@ internal sealed class LlamaServerRuntime : IAsyncDisposable
         _http.Dispose();
         _gate.Dispose();
     }
+}
+
+// Ends llama-server whenever this host ends, however it ends.
+//
+// Found 2026-10-01: force-stopping the host left llama-server.exe running
+// with the model still in VRAM. Three orphans piled up, one at about 14 GB,
+// and the next app starts came up rules-only because the fallback model
+// could not fit on the GPU. The parent monitor only covers the APP exiting;
+// a crashed or killed host never ran StopAsync.
+//
+// A job object created with KILL_ON_JOB_CLOSE ends every process in it when
+// its last handle closes. The handle is created once and deliberately never
+// closed: Windows closes it when this process exits, normally or not, and
+// that is the moment the child must go.
+internal static class ChildProcessJob
+{
+    private const int JobObjectExtendedLimitInformation = 9;
+    private const uint JobObjectLimitKillOnJobClose = 0x2000;
+    private static readonly Lazy<IntPtr> Job = new(Create);
+
+    public static void Assign(Process process)
+    {
+        if (!AssignProcessToJobObject(Job.Value, process.Handle))
+        {
+            throw new InvalidOperationException(
+                "The child process could not be bound to the host's lifetime " +
+                $"(Windows error {Marshal.GetLastWin32Error()}).");
+        }
+    }
+
+    private static IntPtr Create()
+    {
+        IntPtr job = CreateJobObject(IntPtr.Zero, null);
+        if (job == IntPtr.Zero)
+        {
+            throw new InvalidOperationException(
+                $"The host job object could not be created (Windows error {Marshal.GetLastWin32Error()}).");
+        }
+        var limits = new JobObjectExtendedLimitInformationData
+        {
+            BasicLimitInformation = new JobObjectBasicLimitInformation
+            {
+                LimitFlags = JobObjectLimitKillOnJobClose,
+            },
+        };
+        if (!SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            ref limits,
+            (uint)Marshal.SizeOf<JobObjectExtendedLimitInformationData>()))
+        {
+            throw new InvalidOperationException(
+                $"The host job object could not be configured (Windows error {Marshal.GetLastWin32Error()}).");
+        }
+        return job;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JobObjectBasicLimitInformation
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoCounters
+    {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JobObjectExtendedLimitInformationData
+    {
+        public JobObjectBasicLimitInformation BasicLimitInformation;
+        public IoCounters IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr CreateJobObject(IntPtr attributes, string? name);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetInformationJobObject(
+        IntPtr job,
+        int informationClass,
+        ref JobObjectExtendedLimitInformationData information,
+        uint length);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
 }
 
 internal sealed record GenerationResponse(

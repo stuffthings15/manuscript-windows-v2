@@ -210,8 +210,12 @@ def test_build_and_installer_package_and_register_browser_native_host():
     assert '"browser-host"' in build
     assert '"browser-extension"' in build
     assert "NativeMessagingHosts\\com.manuscript.v2.polish" in installer
-    assert 'Root: HKCU; Subkey: "Software\\Google\\Chrome' in installer
-    assert 'Root: HKCU; Subkey: "Software\\Microsoft\\Edge' in installer
+    # HKLM, not HKCU: the installer is machine-wide
+    # (PrivilegesRequired=admin), so a host registered in one user's hive
+    # would leave every other user on the machine with an extension that
+    # silently does nothing.
+    assert 'Root: HKLM; Subkey: "Software\\Google\\Chrome' in installer
+    assert 'Root: HKLM; Subkey: "Software\\Microsoft\\Edge' in installer
     assert "ManuscriptV2BrowserHost.exe" in installer
     assert "allowed_origins" in installer
     assert "HKEY_CURRENT_USER" in installer_tool

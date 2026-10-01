@@ -314,6 +314,14 @@ class DocumentEditorPanel(QWidget):
         heading.addWidget(privacy)
         root.addLayout(heading)
 
+        self.assistant_requirement_note = QLabel(
+            "Optional: this assistant needs Ollama installed and running "
+            "separately. It never affects Proofread or other corrections."
+        )
+        self.assistant_requirement_note.setObjectName("mutedLabel")
+        self.assistant_requirement_note.setWordWrap(True)
+        root.addWidget(self.assistant_requirement_note)
+
         action_grid = QGridLayout()
         action_grid.setHorizontalSpacing(7)
         action_grid.setVerticalSpacing(7)
@@ -525,10 +533,10 @@ class DocumentEditorPanel(QWidget):
                 | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Save,
             )
-            if answer is QMessageBox.StandardButton.Save:
+            if answer == QMessageBox.StandardButton.Save:
                 if not self.save_document():
                     return
-            elif answer is QMessageBox.StandardButton.Discard:
+            elif answer == QMessageBox.StandardButton.Discard:
                 self._load_document(self.current_document_id)
             else:
                 return
@@ -659,7 +667,7 @@ class DocumentEditorPanel(QWidget):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
-            if answer is not QMessageBox.StandardButton.Yes:
+            if answer != QMessageBox.StandardButton.Yes:
                 return
             restored = self.workspace.restore_revision(
                 self.current_document_id,
@@ -830,7 +838,14 @@ class DocumentEditorPanel(QWidget):
         ):
             return
         self._set_assistant_busy(False)
-        message = user_ai_status(message)
+        # Not user_ai_status(): that function hides runtime names for the
+        # bundled correction engine, which is meant to be invisible. Every
+        # message run() raises is already hand-authored for a writer to read,
+        # and one of them (selected_text.OLLAMA_NOT_RUNNING_MESSAGE) exists
+        # specifically to name Ollama and say how to install it - routing it
+        # through user_ai_status() would have remapped it to the generic
+        # "could not finish this section. Retry.", which is wrong here: no
+        # retry fixes a runtime that was never installed.
         update_status_label(self.assistant_status, message, assertive=not ok)
         if not ok:
             return
@@ -970,9 +985,9 @@ class DocumentEditorPanel(QWidget):
             | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Save,
         )
-        if answer is QMessageBox.StandardButton.Save:
+        if answer == QMessageBox.StandardButton.Save:
             return self.save_document()
-        return answer is QMessageBox.StandardButton.Discard
+        return answer == QMessageBox.StandardButton.Discard
 
     def _set_document_controls(self, enabled: bool) -> None:
         self.export_button.setEnabled(enabled)

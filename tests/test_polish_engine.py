@@ -181,12 +181,6 @@ _MECHANICAL_TONE_PROHIBITION_CASES = (
         id="rephrase-copied-source",
     ),
     pytest.param(
-        "Shorten",
-        "The team basically completed the report in a very careful way.",
-        "The team basically completed the report in a very careful way.",
-        id="shorten-kept-filler",
-    ),
-    pytest.param(
         "Friendly",
         "The report is ready.",
         "You guys are gonna love this super easy report.",
@@ -2236,7 +2230,7 @@ def test_rephrase_generation_protects_negated_action_phrase():
             source,
             task=PolishTask.REWRITE,
             mode=PolishMode.BALANCED,
-            command="Rephrase",
+            command="Formal",
             manual=True,
         )
     )
@@ -2258,7 +2252,7 @@ def test_rephrase_generation_protects_complete_negated_claim():
             source,
             task=PolishTask.REWRITE,
             mode=PolishMode.BALANCED,
-            command="Rephrase",
+            command="Formal",
             manual=True,
         )
     )
@@ -2506,7 +2500,7 @@ def test_tone_generation_protects_pronoun_modal_action_phrase():
             source,
             task=PolishTask.TONE,
             mode=PolishMode.BALANCED,
-            command="Shorten",
+            command="Formal",
             manual=True,
         )
     )
@@ -2528,7 +2522,7 @@ def test_style_generation_protects_whether_alternative_fact_clause():
             source,
             task=PolishTask.REWRITE,
             mode=PolishMode.BALANCED,
-            command="Shorten",
+            command="Formal",
             manual=True,
         )
     )
@@ -2578,7 +2572,7 @@ def test_rephrase_generation_protects_ordering_calendar_date_phrase():
             source,
             task=PolishTask.REWRITE,
             mode=PolishMode.BALANCED,
-            command="Rephrase",
+            command="Formal",
             manual=True,
         )
     )

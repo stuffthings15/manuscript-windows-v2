@@ -71,7 +71,7 @@ def _safe_line_rectangles(
             continue
         if right <= left or bottom <= top:
             continue
-        screen = _screen_for_physical_point(screens, (left + right) // 2, (top + bottom) // 2)
+        screen = screen_for_physical_point(screens, (left + right) // 2, (top + bottom) // 2)
         if screen is None:
             continue
         geometry = screen.geometry()
@@ -92,7 +92,20 @@ def _safe_line_rectangles(
     return tuple(safe)
 
 
-def _screen_for_physical_point(screens, x: int, y: int):
+def screen_for_physical_point(screens, x: int, y: int):
+    """The screen whose PHYSICAL area contains this UI Automation point.
+
+    Shared with rewrite_palette, which used to pick the screen under the mouse
+    instead. That is the HUD's screen, not the document's, and on a two-monitor
+    desk they are routinely different - so the badge was converted with the
+    wrong device pixel ratio and placed on the wrong display.
+
+    Qt reports screen geometry in logical points and this compares against
+    physical pixels, so the origin is taken as the logical one. That is exact
+    on a single-scale desktop and approximate when two displays scale
+    differently; it is still far closer than ignoring the origin altogether,
+    which is what the badge did.
+    """
     for screen in screens:
         geometry = screen.geometry()
         ratio = max(1.0, float(screen.devicePixelRatio()))

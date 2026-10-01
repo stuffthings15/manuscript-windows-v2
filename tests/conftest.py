@@ -56,3 +56,36 @@ for _pin in (
     "MANUSCRIPT_TONE_SPAN",
 ):
     os.environ.pop(_pin, None)
+
+
+def pytest_unconfigure(config):
+    """Destroy GUI fixtures while Python callbacks and Qt are still alive.
+
+    The GUI suite left 2,000 top-level widgets for interpreter finalization.
+    Assertions passed, then Qt aborted or hung while destroying them after
+    Python teardown had started. Explicit main-thread destruction reproduced
+    a clean exit without suppressing exceptions or changing the test result.
+    """
+    widgets_module = sys.modules.get("PySide6.QtWidgets")
+    if widgets_module is None:
+        return
+    app = widgets_module.QApplication.instance()
+    if app is None:
+        return
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from shiboken6 import isValid
+
+    window_module = sys.modules.get("echo_link_app.window")
+    window_type = getattr(window_module, "EchoLinkWindow", ())
+    widgets = app.topLevelWidgets()
+    # Qt does not order this list by ownership. Stop every controller before
+    # deleting any palette or bar that a controller's shutdown still uses.
+    for widget in widgets:
+        if isValid(widget) and isinstance(widget, window_type):
+            widget.shutdown()
+    for widget in widgets:
+        if not isValid(widget):
+            continue
+        widget.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.shutdown()

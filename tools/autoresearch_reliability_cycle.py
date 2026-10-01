@@ -45,6 +45,53 @@ import autoresearch_cycle  # noqa: E402
 import autoresearch_status  # noqa: E402
 
 CORPUS = ROOT / "test-corpus" / "document-shapes"
+
+# One corpus per slice, so an EXPERIMENT and a BASELINE can cost different
+# amounts. program.md fixes an experiment at five minutes, which at roughly 100
+# seconds a document is three documents, and the spec's own reason for choosing
+# essays 8 and 10 applies here: a document that already completes cannot improve
+# and spends the budget proving it. "hard" holds the list documents that fail.
+# "shapes" keeps all twenty for the baseline, where resolution is the point and
+# the run is rare.
+CORPORA = {
+    "shapes": CORPUS,
+    "hard": ROOT / "test-corpus" / "document-shapes-hard",
+    # "hard" is SATURATED. Its three list documents scored 0.0 before the
+    # capture-refresh fix, 66.7 after the caret fix, and 100.0 on two agreeing
+    # runs afterwards - confirmed on the full corpus, where 03, 11 and 12 now
+    # report "the review finished after press 7; section 7/7". A slice at 100
+    # can teach nothing, because the keep rule is a strict improvement and every
+    # experiment ties. That is the dead end nine essay slices are already in.
+    #
+    # "open" is where the headroom moved to. The 2026-09-07 twenty-document
+    # baseline scored 75.0 with five documents still failing, and these are
+    # three of them, chosen to span all three remaining causes rather than to
+    # repeat one:
+    #
+    #   10_nested_bullets  1 press, sections 1-5 all left unchanged - the worst
+    #   06_table           a table, where the CR+BEL correction fixed the
+    #                      arithmetic without fixing the outcome
+    #   08_field_result    a document proved through COM to have NO coordinate
+    #                      mismatch, so its cause is a third thing entirely
+    #
+    # 09_internal_hyperlink and 20_mixed_everything are held back deliberately:
+    # 09 fails the same way as 08 and 20 the same way as 06, so including them
+    # would spend budget confirming a cause rather than finding one.
+    "open": ROOT / "test-corpus" / "document-shapes-open",
+}
+
+
+def corpus_for(name: str) -> Path:
+    return CORPORA.get(name, CORPUS)
+
+
+# The same 300 seconds `program.md` gives autoresearch_run, and a DEFAULT rather
+# than an opt-in. An opt-in gate is how this path went without one: the flag
+# existed, nothing here passed it, and nothing failed to say so.
+_DEFAULT_REQUIRE_IDLE = 300.0
+# run_essays_batch returns this when it stopped before a document because
+# somebody was using the machine.
+_STOPPED_FOR_IDLE = 2
 SUMMARY = ROOT / "build" / "batch-summary.json"
 
 # The pack a measurement must be served by, end to end. Anything smaller is a
@@ -52,8 +99,8 @@ SUMMARY = ROOT / "build" / "batch-summary.json"
 REQUIRED_PACK = "gemma4-12b-qat-v1"
 
 
-def _documents() -> list[Path]:
-    return sorted(CORPUS.glob("*.docx"))
+def _documents(corpus: Path | None = None) -> list[Path]:
+    return sorted((corpus or CORPUS).glob("*.docx"))
 
 
 def completion_rate() -> tuple[float | None, str]:
@@ -71,6 +118,59 @@ def completion_rate() -> tuple[float | None, str]:
         return None, f"the batch wrote no readable summary ({type(exc).__name__})"
     if not isinstance(rows, list) or not rows:
         return None, "the batch summary held no runs"
+    # A HARNESS ERROR IS A CRASH, NOT A ZERO. program.md lists the crash shapes
+    # - dead, partial, `captured from 'Claude'`, COMError - and says they "all
+    # mean no score rather than a low one".
+    #
+    # On 2026-09-06 all three documents came back outcome='error' with "the
+    # review on screen was captured from None", after 17 to 21 seconds instead
+    # of the usual hundred. Not one of them was measured, and this scored the
+    # run 0.0 and recorded it as a baseline. That is the crash-versus-zero
+    # confusion the specification exists to prevent, and it is the third time
+    # this loop has turned a failed measurement into a number.
+    broken = [
+        str(row.get("error") or row.get("outcome"))
+        for row in rows
+        if isinstance(row, dict) and row.get("outcome") == "error"
+    ]
+    if broken:
+        # WHOLE reasons, and every DISTINCT one - not the first, cut at 110.
+        #
+        # That cap fell exactly inside the sentence it was quoting. The batch
+        # says "the review on screen was captured from 'X', not from Y", and
+        # 110 characters reaches the end of X and stops, so the ledger recorded
+        # `... - Compatibility Mode - Word', no` on 2026-09-08. What survived
+        # was the document the app HAD captured; what was cut was the document
+        # it was supposed to capture. A mismatch diagnostic that names one side
+        # of the mismatch is not a diagnostic, and this is the same fault as
+        # the harness reading one of two capture paths: the evidence was
+        # present and the reader threw half of it away.
+        #
+        # Only broken[0] was reported, too. Three documents failing for three
+        # different reasons showed one, and the other two looked like the same
+        # fault.
+        #
+        # Bounded by the NUMBER of reasons rather than by characters, so
+        # whatever is shown is shown whole. Only LINE BREAKS are normalised, and
+        # spacing within a line is left exactly as it came: a COM failure can
+        # carry a traceback and a crash reason spanning lines cannot be read
+        # back out of a log, but a Word window title really does contain
+        # "  -  Compatibility Mode - Word" with doubled spaces, and collapsing
+        # those corrupts the document name this message exists to report.
+        seen = list(
+            dict.fromkeys(
+                " ".join(part.strip() for part in reason.splitlines() if part.strip())
+                for reason in broken
+            )
+        )
+        shown = seen[:3]
+        detail = "; ".join(shown)
+        if len(seen) > len(shown):
+            detail += f"; and {len(seen) - len(shown)} further reasons"
+        return None, (
+            f"{len(broken)} of {len(rows)} documents could not be measured: "
+            f"{detail}"
+        )
     finished = sum(
         1
         for row in rows
@@ -79,7 +179,12 @@ def completion_rate() -> tuple[float | None, str]:
     return 100.0 * finished / len(rows), ""
 
 
-def measure(log: Path) -> tuple[float | None, str]:
+def measure(
+    log: Path,
+    *,
+    require_idle: float = _DEFAULT_REQUIRE_IDLE,
+    corpus: Path | None = None,
+) -> tuple[float | None, str]:
     """(completion rate, reason it is missing). Never both.
 
     Restarts Word and the app first and refuses a stale build, for the reason
@@ -89,9 +194,35 @@ def measure(log: Path) -> tuple[float | None, str]:
     """
     import autoresearch_run
 
-    documents = _documents()
+    corpus = corpus or CORPUS
+    documents = _documents(corpus)
     if not documents:
-        return None, f"no documents under {CORPUS}"
+        return None, f"no documents under {corpus}"
+
+    # THE IDLE GATE, which this path did not have until 2026-09-03.
+    #
+    # `program.md` requires it and only `autoresearch_run.py` implemented it, so
+    # every reliability number ever taken was measured with somebody possibly at
+    # the keyboard. That night it finally showed: 14_dashes died with
+    # `the review on screen was captured from 'Claude', not from 14_dashes`
+    # because this session was interactive and Curtis was typing into it while
+    # the run was on screen. The agent does not generate input events; the
+    # fault was starting a measurement during a live conversation at all.
+    #
+    # It also puts a name to the reliability metric's supposed noise floor. Four
+    # runs of one corpus scored 80, 80, 60, 80 with a different document failing
+    # each time, and that was recorded as randomness. A run interrupted by
+    # whoever happens to be typing produces exactly that pattern.
+    #
+    # Returning a REASON rather than a score, because an interrupted run is a
+    # claim about the room and never about the product.
+    if require_idle > 0:
+        idle = autoresearch_run.idle_seconds()
+        if idle < require_idle:
+            return None, (
+                f"someone is at the keyboard ({idle:.0f}s idle, "
+                f"{require_idle:.0f}s required)"
+            )
 
     before_restart = autoresearch_run._log_length()
     autoresearch_run._restart_word()
@@ -135,13 +266,46 @@ def measure(log: Path) -> tuple[float | None, str]:
 
     SUMMARY.unlink(missing_ok=True)
     with log.open("w", encoding="utf-8") as stream:
-        subprocess.run(
+        batch = subprocess.run(
             [
                 sys.executable, str(ROOT / "tools/run_essays_batch.py"),
                 "--from", "1", "--to", str(len(documents)),
-                "--corpus", str(CORPUS), "--as-a-writer",
+                "--corpus", str(corpus), "--as-a-writer",
+                # Passed through so the batch makes the same check with the
+                # same threshold. It applies to the FIRST document only: the
+                # harness types through SendInput and GetLastInputInfo counts
+                # that, so a per-document check refuses everything after
+                # document one. See program.md, Idle gate.
+                "--require-idle", str(require_idle),
             ],
             cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT, timeout=7200,
+        )
+
+    # A BATCH THAT STOPPED EARLY IS NOT A SCORE, checked two ways because this
+    # already produced a false baseline once.
+    #
+    # On 2026-09-03 the idle gate cut the hard slice after 1 of 3 documents, and
+    # `completion_rate` averaged that single partial document into 0.0, which
+    # was then recorded as the slice's baseline. Every experiment afterwards
+    # would have been compared against a number describing an interruption.
+    #
+    # The return code is the direct signal. The row count is the independent
+    # one, and it catches every other way a batch can end short - a crash, a
+    # timeout, an app that would not start - none of which say so in an exit
+    # code that reaches here.
+    if batch.returncode == _STOPPED_FOR_IDLE:
+        return None, (
+            "someone is at the keyboard; the batch stopped part way and "
+            "measured nothing about the product"
+        )
+    try:
+        measured = len(json.loads(SUMMARY.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        measured = 0
+    if measured < len(documents):
+        return None, (
+            f"the batch ran {measured} of {len(documents)} documents, so there "
+            f"is no score for this slice"
         )
 
     # A run two packs served is not a measurement of either. Same rule as tone,
@@ -158,6 +322,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--slice", default="shapes")
     parser.add_argument("--describe", required=True, help="what this experiment tries")
+    parser.add_argument(
+        "--require-idle",
+        type=float,
+        default=_DEFAULT_REQUIRE_IDLE,
+        help="only measure when nobody has touched the machine for this "
+        "many seconds. 0 disables the gate, which makes the run evidence "
+        "about the room rather than the product.",
+    )
     arguments = parser.parse_args(argv)
 
     tag = autoresearch_cycle.slice_tag(arguments.slice, kind="reliability")
@@ -200,12 +372,32 @@ def main(argv: list[str] | None = None) -> int:
         }
     )
     try:
-        rate, reason = measure(ROOT / f"reliability-run-{arguments.slice}.log")
+        rate, reason = measure(
+            ROOT / f"reliability-run-{arguments.slice}.log",
+            require_idle=arguments.require_idle,
+            corpus=corpus_for(arguments.slice),
+        )
     finally:
         autoresearch_status.clear_status()
 
+    # A SKIP IS NOT A CRASH, and here it must also not be a DISCARD. The
+    # experiment's commit is already made at this point, so recording a row and
+    # resetting would throw away an idea nobody measured and log it as a failure
+    # - the loop would work through the whole queue while somebody typed, and
+    # every entry would read as refuted.
+    #
+    # program.md: "do NOT write it to results.tsv, because nothing was measured
+    # and a skipped tick is not a crash."
+    if rate is None and "someone is at the keyboard" in reason:
+        autoresearch_cycle._git("reset", "--hard", before)
+        print(f"SKIPPED {reason}")  # noqa: T201
+        return 2
+
     status = autoresearch_cycle.decide(baseline, rate)
-    autoresearch_cycle.record(commit, rate, 0.0, status, description)
+    autoresearch_cycle.record(
+        commit, rate, 0.0, status,
+        autoresearch_cycle.with_crash_reason(description, reason if rate is None else None),
+    )
     if status != "keep":
         autoresearch_cycle._git("reset", "--hard", before)
 

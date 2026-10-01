@@ -3,10 +3,12 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import logging
+import re
 import sys
 import threading
 import time
 from dataclasses import dataclass, replace
+from difflib import SequenceMatcher
 from ctypes import wintypes
 from typing import Callable
 
@@ -42,6 +44,11 @@ _OFFICE_REPLACEMENT_SETTLE_SECONDS = 0.5
 _CLIPBOARD_RESTORE_DELAY_SECONDS = 0.2
 _CLIPBOARD_RESTORE_RETRY_SECONDS = 0.05
 _CLIPBOARD_RESTORE_TIMEOUT_SECONDS = 0.8
+# How many characters a list label Word does not report may occupy in the
+# capture. A bullet or number plus its separator is one or two; four leaves room
+# for a wider template without letting a large gap - which would mean the
+# paragraphs no longer tile the text - be mistaken for a label.
+_MAX_UNREPORTED_LABEL_CHARACTERS = 4
 _TARGET_INSERT_ATTEMPTS = 3
 _TARGET_INSERT_RETRY_SECONDS = 0.05
 _SELECTION_RESTORE_ATTEMPTS = 3
@@ -59,7 +66,16 @@ _WORD_COM_NOT_APPLICABLE = object()
 # read as 5204 characters through COM and 5203 through UI Automation, so the
 # two never matched, every offset after it was out by one, and Replace Text
 # refused a document the writer had not touched.
-_WORD_UIA_OMITTED_CHARACTERS = frozenset({chr(0x01)})
+# U+0007 is Word's cell mark and row mark inside a table. Measured on the
+# 2026-09-03 shapes baseline, where the arithmetic is exact rather than
+# inferred: 06_table has 12 cell ends and 4 row ends, and COM read 264
+# characters against the capture's 248, a difference of exactly 16.
+# 20_mixed_everything has 4 cell ends and 2 row ends, and read 250 against 244,
+# a difference of exactly 6. Nothing was substituted for them on the
+# accessibility side, so they are dropped here rather than mapped to a
+# separator: any substitute would put the length back out by one per cell.
+# Both documents failed every correction before this.
+_WORD_UIA_OMITTED_CHARACTERS = frozenset({chr(0x01), chr(0x07)})
 # A non-breaking space used to be deleted here too, on the assumption that
 # accessibility never reports one. It does, and Word is not consistent about
 # it: see windows_selection.normalize_captured_text. Deleting it moved every
@@ -75,7 +91,17 @@ _WORD_NONBREAKING_SPACE = chr(0xA0)
 # "0 of 0". The span builder above already skips both characters, so the
 # offsets are right either way; this set decides only what is unsafe to
 # overwrite.
-_WORD_OBJECT_ANCHORS = frozenset({chr(0x01)})
+# U+0007 is here for a different reason than U+0001, and a stronger one.
+# Skipping it above makes the offsets agree, which is what lets a table be
+# corrected at all. But a range that SPANS a cell mark or a row mark covers the
+# boundary itself, and assigning text across it does not rewrite two cells - it
+# merges them, destroying the table. That is unrecoverable through undo in the
+# writer's mental model, so a range crossing a boundary is refused outright.
+#
+# This costs nothing in practice: every cell is its own paragraph, so a review
+# section lies inside one cell. It only bites on an edit that genuinely cannot
+# be expressed as a range, which is exactly what this set is for.
+_WORD_OBJECT_ANCHORS = frozenset({chr(0x01), chr(0x07)})
 
 
 class _LastInputInfo(ctypes.Structure):
@@ -226,14 +252,57 @@ def _no_selection_message(window: WindowSnapshot) -> str:
     changed, so the honest answer is not "highlight some text" - the writer
     already did - it is that the document is still read only.
     """
-    title = str(window.title or "")
-    if "protected view" in title.casefold():
+    if _word_is_in_protected_view(window):
         return (
             "This document is open in Protected View, so it cannot be "
             "selected or changed yet. Click Enable Editing in Word, then "
             "try again."
         )
     return "No selected text was found. Highlight text and try again."
+
+
+def _word_is_in_protected_view(window: WindowSnapshot) -> bool:
+    """Ask Word, and only fall back to reading its title.
+
+    The title test was the whole of this check, and it matched the literal
+    English string "protected view". A German Word says "Geschuetzte Ansicht",
+    a French one "Mode protege", a Spanish one "Vista protegida" - so on every
+    non-English Word the branch never fired and the writer was told to
+    "Highlight text and try again" on a document where nothing can be selected
+    at all. That is advice they have already followed, sending them round the
+    same loop, and it is the single most likely thing a non-English user hits.
+
+    Application.ActiveProtectedViewWindow is the same question asked of Word
+    instead of of its window caption, and it is not translated. It answers for
+    the document the writer is looking at, which is the one being captured.
+
+    THE TITLE TEST STAYS as a fallback, because COM is not always reachable:
+    Word may be starting, the automation object may be unavailable, or the
+    dispatch may fail on a machine where nothing else has gone wrong. English
+    behaves exactly as before, and a machine where COM answers gets the right
+    message in any language.
+    """
+    # The title first, because it costs nothing and is what English Word says.
+    # Checked BEFORE the window-kind gate on purpose: _is_word_document matches
+    # " - word" with single spaces and a real Word caption reads
+    # "Name  -  Protected View  -  Word" with doubled ones, so gating this on it
+    # would have broken the English path that already worked.
+    if "protected view" in str(window.title or "").casefold():
+        return True
+    if not _is_word_document(window):
+        return False
+    try:
+        active = _active_word_application().ActiveProtectedViewWindow
+    except Exception:  # noqa: BLE001 - COM raises undocumented types here, and
+        # Word being unreachable is not evidence either way.
+        return False
+    if active is None:
+        return False
+    try:
+        return bool(active)
+    except Exception:  # noqa: BLE001 - a COM truthiness probe can itself raise
+        # It exists, which is the answer; only its __bool__ failed.
+        return True
 
 
 def _is_word_document(window: WindowSnapshot) -> bool:
@@ -257,6 +326,7 @@ def _canonical_word_text(text: str, *, remove_final_mark: bool = False) -> str:
         # The substitution the capture already made; see
         # windows_selection.normalize_captured_text.
         .replace(_WORD_NONBREAKING_SPACE, " ")
+        .replace("\x07", "\n")
     )
     if remove_final_mark and value.endswith("\n"):
         value = value[:-1]
@@ -372,22 +442,102 @@ def _word_automatic_list_labels(
             # correction and a misplaced one costs the document.
             found = captured.find(label, capture_offset)
             if found < 0 or found - capture_offset > len(label) + 2:
-                logger.warning(
-                    "Word automatic list labels not reconstructed: label %d "
-                    "is not in the captured text near offset %d",
+                # WORD'S GLYPH IS NOT ALWAYS THE RENDERED ONE, so a label
+                # missing here does not mean the capture has none.
+                #
+                # Measured on 10_nested_bullets, 2026-09-08, by reading the
+                # document both ways: ListString reports the level 1 bullets
+                # as U+2022 and the level 2 sub-bullet as the ASCII letter
+                # 'o' (U+006F), while accessibility renders that same
+                # sub-bullet as U+25E6 WHITE BULLET. Labels 1 and 3 matched
+                # exactly, label 2 could not be found, and this returned {}
+                # and threw away all three. With no labels the capture's 201
+                # characters were compared against Word's 194, every offset
+                # past position 69 was out by six, and the text check refused
+                # every correction on the document: three runs of the `open`
+                # slice, one press each, identical every time.
+                #
+                # Falling through to the same gap reading the no-label branch
+                # uses, for the reason this function already states twice -
+                # whatever produced the captured text is the only authority
+                # on what it contains. Word's answer is a hint, and when the
+                # hint is wrong the capture still knows.
+                #
+                # It stays a REFUSAL when the gap does not qualify: bounded,
+                # no newline, and nothing reconstructed unless the paragraph
+                # body can be located. A refused edit costs one correction,
+                # a misplaced one costs the document.
+                logger.info(
+                    "Word automatic list label %d is not the captured glyph "
+                    "near offset %d; reading it from the capture instead",
                     len(labels) + 1,
                     capture_offset,
                 )
-                return {}
-            separator = captured[found + len(label) : found + len(label) + 1]
-            if separator not in (" ", "\t"):
-                separator = ""
-            labels[offset] = f"{label}{separator}"
-            capture_offset = found + len(label) + len(separator)
+            else:
+                separator = captured[found + len(label) : found + len(label) + 1]
+                if separator not in (" ", "\t"):
+                    separator = ""
+                labels[offset] = f"{label}{separator}"
+                capture_offset = found + len(label) + len(separator)
+        if offset not in labels:
+            # Word reports NO label, and the capture still holds characters here.
+            #
+            # Measured on 10_nested_bullets, 2026-09-03: COM 198 against the
+            # capture's 199, first difference at 113 where COM began the
+            # sub-item's "A" and the capture held a space. Two labels had been
+            # reconstructed for the two top-level bullets and none for the
+            # nested one, because `ListString` is empty for a level the
+            # document's numbering defines no template for - and accessibility
+            # still emitted one character for it.
+            #
+            # Nothing was corrupted: the text check downstream refused the edit.
+            # But it refused a correction it could have kept, and a document
+            # from any producer can carry a list level Word has no template for.
+            #
+            # The gap is READ from the capture, exactly as the separator above
+            # is, because the capture is the only authority on what the capture
+            # contains. This branch is deliberately additive: when the paragraph
+            # cannot be located it changes nothing and leaves the old behaviour,
+            # so a capture that covers a selection rather than the whole
+            # document cannot start refusing what it accepts today.
+            canonical_head = (
+                text.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
+            )
+            if canonical_head:
+                at = captured.find(canonical_head, capture_offset)
+                if at >= 0:
+                    gap = captured[capture_offset:at]
+                    # A newline in the gap is a paragraph break, not a label.
+                    # Swallowing one would hide a whole empty paragraph inside a
+                    # zero-width span and put every later offset out by its
+                    # length, which is this defect again with a different cause.
+                    if (
+                        0 < len(gap) <= _MAX_UNREPORTED_LABEL_CHARACTERS
+                        and "\n" not in gap
+                    ):
+                        labels[offset] = gap
+                        capture_offset = at
         canonical = text.replace("\r\n", "\n").replace("\r", "\n")
         offset += len(text)
         capture_offset += len(canonical)
     return labels
+
+
+_LIST_LABEL_OPENING = re.compile(
+    r"^\s*(?:\d+|[A-Za-z]|[ivxIVX]+)[.)]\s|^\s*[•○o\-\*·]\s"
+)
+
+
+def _opens_with_a_list_label(text: str) -> bool:
+    """Does this rewrite begin with something shaped like a list label?
+
+    Used only to decide whether a rewrite that did NOT echo Word's label is
+    safe to write over the sentence. It errs toward saying yes, because the two
+    outcomes are not symmetric: a false yes declines one correction, and a false
+    no writes a second label into the document where the writer has to find it
+    by eye.
+    """
+    return bool(_LIST_LABEL_OPENING.match(str(text or "")))
 
 
 def _word_visible_text_and_spans(
@@ -412,7 +562,7 @@ def _word_visible_text_and_spans(
             continue
         if character == "\r":
             raw_end = index + 1
-            if raw_end < len(raw) and raw[raw_end] == "\n":
+            if raw_end < len(raw) and raw[raw_end] in ("\n", "\x07"):
                 raw_end += 1
             visible.append("\n")
             spans.append((index, raw_end))
@@ -424,6 +574,66 @@ def _word_visible_text_and_spans(
     value = "".join(visible)
     trimmed_length = len(value.rstrip("\n"))
     return value[:trimmed_length], tuple(spans[:trimmed_length])
+
+
+def _word_native_offset(raw: str, offset: int) -> int:
+    """Word expands each one-position cell terminator to CR+BEL in Text."""
+    return _utf16_unit_count(raw[:offset].replace("\r\x07", "\r"))
+
+
+def _word_field_safe_edits(document, content, raw, start, end, replacement):
+    """Resolve edits around field results without overwriting live field codes.
+
+    Word omits field codes from Content.Text but counts them in Range positions.
+    Each field result stays protected; only changed text outside it is writable.
+    Return prevalidated edits in reverse order, or None on any disagreement.
+    """
+    origin = int(getattr(content, "Start", 0) or 0)
+    fields = list(getattr(document, "Fields", ()))
+    if not fields:
+        target = document.Range(
+            origin + _word_native_offset(raw, start),
+            origin + _word_native_offset(raw, end),
+        )
+        return [(target, replacement)] if str(target.Text or "") == raw[start:end] else None
+    events = []
+    protected = []
+    previous_end = origin
+    for field in sorted(fields, key=lambda item: int(item.Code.Start)):
+        code_start = int(field.Code.Start) - 1
+        result_start, result_end = int(field.Result.Start), int(field.Result.End)
+        if code_start < previous_end or not code_start < result_start <= result_end:
+            return None
+        prefix = str(document.Range(origin, code_start).Text or "")
+        result = str(field.Result.Text or "")
+        if not raw.startswith(prefix) or raw[len(prefix):len(prefix) + len(result)] != result:
+            return None
+        left, right = len(prefix), len(prefix) + len(result)
+        events.extend(((left, result_start - code_start), (right, 1)))
+        protected.append((left, right))
+        previous_end = result_end + 1
+
+    def native(offset, opening):
+        return origin + _word_native_offset(raw, offset) + sum(
+            size for position, size in events
+            if position < offset or (opening and position == offset)
+        )
+
+    edits = []
+    for tag, a, b, c, d in SequenceMatcher(None, raw[start:end], replacement, autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        left, right = start + a, start + b
+        if any(
+            (left < hi and right > lo) or (left == right and lo < left < hi)
+            for lo, hi in protected
+        ):
+            return None
+        target = document.Range(native(left, True), native(right, left == right))
+        if str(target.Text or "") != raw[left:right]:
+            return None
+        edits.append((target, replacement[c:d]))
+    return list(reversed(edits))
 
 
 def _set_foreground_window(user32, handle: int) -> bool:
@@ -642,7 +852,14 @@ def _replace_word_document_range(
             or end > len(captured_text)
             or captured_text[start:end] != expected_text
         ):
-            logger.warning("Word COM range replacement refused a stale review range")
+            logger.warning(
+                "Word COM range replacement refused a stale review range "
+                "start=%r end=%r document_chars=%d original_chars=%d "
+                "slice_chars=%d matching_offset=%d",
+                start, end, len(captured_text), len(expected_text),
+                len(captured_text[start:end]) if isinstance(start, int) and isinstance(end, int) else -1,
+                captured_text.find(expected_text),
+            )
             return False
         absolute_start = range_start + start
         absolute_end = range_start + end
@@ -669,11 +886,49 @@ def _replace_word_document_range(
             and _is_label(absolute_start + leading)
         ):
             leading += 1
-        if leading and expected_text[:leading] == new_text[:leading]:
-            start += leading
-            absolute_start += leading
-            expected_text = expected_text[leading:]
-            new_text = new_text[leading:]
+        if leading:
+            # THE LABEL IS WORD'S, NOT THE WRITER'S.
+            #
+            # Accessibility reports it, so the capture contains it, so every
+            # list item's section BEGINS with characters the writer never typed
+            # and Word re-supplies on its own. The original rule trimmed the
+            # label only when the rewrite echoed it character for character,
+            # which made every correction inside a list contingent on the model
+            # copying "a. " exactly.
+            #
+            # Measured 2026-09-03 on 03_multi_level_outline, driving the real
+            # replacement against a fake Word:
+            #
+            #   'a. State the question in plain terms.'  -> applied
+            #   'State the question in plain terms.'     -> REFUSED
+            #   'A. State the question in plain terms.'  -> REFUSED
+            #
+            # A rewrite that drops the label has not proposed deleting
+            # anything. It returned the sentence, which is all it was ever
+            # entitled to change.
+            label_text = expected_text[:leading]
+            rewrite_head = new_text[:leading]
+            if rewrite_head == label_text:
+                trim_from_rewrite = leading
+            elif rewrite_head.casefold() == label_text.casefold():
+                # The same label shouted. Strip it rather than writing it into
+                # the document, which would leave "a. A. State the question".
+                trim_from_rewrite = leading
+            elif _opens_with_a_list_label(new_text):
+                # A DIFFERENT label. The document would read "a. 1. State the
+                # question" and the writer would have to find it by eye, so
+                # this is left to the refusal below. One declined correction is
+                # cheap; a duplicated label is not.
+                trim_from_rewrite = -1
+            else:
+                # No label at all, which is the common case and the one that
+                # was being thrown away.
+                trim_from_rewrite = 0
+            if trim_from_rewrite >= 0:
+                start += leading
+                absolute_start += leading
+                expected_text = expected_text[leading:]
+                new_text = new_text[trim_from_rewrite:]
 
         trailing = 0
         while (
@@ -699,9 +954,37 @@ def _replace_word_document_range(
             # A label inside the edit, not at its edges. Word owns those
             # characters; they are not in the document text and cannot be
             # replaced through a range.
+            #
+            # The detail below exists because this line cost a measurement.
+            # On 2026-09-03 it refused section 4 of 03_multi_level_outline and
+            # said only that a label was covered - not which positions, not
+            # whether the edit had left the label alone, not whether the trim
+            # above had even been attempted. The reconstruction was then proved
+            # correct for that document offline (labels at 66, 106, 144, 181,
+            # rebuilt text equal to the capture character for character), which
+            # means the cause is here and the old message could not distinguish
+            # a section that spans a label from a rewrite that edited one.
+            #
+            # Positions and lengths only. Never the writer's text.
+            inside = [
+                position
+                for position in range(absolute_start, absolute_end)
+                if _is_label(position)
+            ]
             logger.warning(
                 "Word COM range replacement refused a range covering an "
-                "automatic list label"
+                "automatic list label (range=%d..%d label_positions=%s "
+                "at_start=%s at_end=%s edit_chars=%d new_chars=%d "
+                "edges_unchanged=%s)",
+                absolute_start,
+                absolute_end,
+                inside[:8],
+                bool(inside) and inside[0] == absolute_start,
+                bool(inside) and inside[-1] == absolute_end - 1,
+                len(expected_text),
+                len(new_text),
+                expected_text[:1] == new_text[:1]
+                and expected_text[-1:] == new_text[-1:],
             )
             return False
         raw_start = spans[absolute_start][0]
@@ -717,45 +1000,80 @@ def _replace_word_document_range(
             return False
         document.Activate()
         word.Activate()
-        content_start = int(getattr(content, "Start", 0) or 0)
         replacement = _canonical_word_text(new_text).replace("\n", "\r")
-        document.Range(
-            content_start + raw_start,
-            content_start + raw_end,
-        ).Text = replacement
-        if not record_covers_entire_document(record):
-            updated_text = (
-                captured_text[:start]
-                + _canonical_word_text(new_text)
-                + captured_text[end:]
-            )
-            # Recomputed, not reused: applying an edit can renumber a list,
-            # and a digest taken with the old labels would refuse the next
-            # correction for the very reason this function exists.
-            #
-            # Aligned against `updated_text`, the capture as it is AFTER this
-            # edit, never against `captured_text`. Using the pre-edit capture
-            # walked the new document while matching the old text, so the
-            # labels were rejected and the digest written here did not describe
-            # the document. Measured 2026-09-01: sections 1 and 2 applied, then
-            # the third was refused with the live text 102 characters longer
-            # than a record whose two edits had added six.
-            updated_content = document.Content
-            updated_document_text, _updated_spans = _word_visible_text_and_spans(
-                updated_content.Text,
-                _word_automatic_list_labels(
-                    document, updated_content, updated_text
-                ),
-            )
-            return replace(
-                record,
-                text=updated_text,
-                document_digest=hashlib.sha256(
-                    updated_document_text.encode("utf-8")
-                ).hexdigest(),
-                selection_end=range_start + len(updated_text),
-            )
-        return True
+        raw_document = str(content.Text or "")
+        edits = _word_field_safe_edits(
+            document, content, raw_document, raw_start, raw_end, replacement,
+        )
+        if edits is None:
+            logger.warning("Word COM native range or protected field disagreed before replacement")
+            return False
+        for target_range, changed_text in edits:
+            target_range.Text = changed_text
+        # THE RECORD IS REFRESHED FOR EVERY SCOPE, INCLUDING A WHOLE DOCUMENT.
+        #
+        # This used to read `if not record_covers_entire_document(record)`, and
+        # returned a bare True otherwise - so a document-scope capture, which is
+        # what the HUD actually takes, kept its ORIGINAL pre-edit text for the
+        # whole review. Every applied correction pushed the live document
+        # further from that stale capture.
+        #
+        # It survives a few edits because the label lookup re-synchronises at
+        # each label and tolerates a drift of len(label) + 2. Then it does not.
+        # Measured on 03_multi_level_outline, 2026-09-04:
+        #
+        #   Word automatic list labels not reconstructed: label 2 is not in the
+        #   captured text near offset 111
+        #   ... refused changed document text (range_chars=288 captured=300)
+        #
+        # 288 against 300 is exactly the twelve characters of four labels: the
+        # reconstruction had given up entirely and returned nothing. Three
+        # sections applied, then paragraphs 4, 5, 6 and 7 came back unchanged
+        # and the run stalled at 5 of 7. Every reliability experiment measured
+        # 0.0 against a 0.0 baseline because of this, so eleven experiments
+        # tested timing constants against a document that could not finish for
+        # a reason no constant touches.
+        #
+        # The comment below records this being found and fixed for SELECTIONS on
+        # 2026-09-01. The document branch was left behind, which is the more
+        # common one.
+        updated_text = (
+            captured_text[:start]
+            + _canonical_word_text(new_text)
+            + captured_text[end:]
+        )
+        # Recomputed, not reused: applying an edit can renumber a list, and a
+        # digest taken with the old labels would refuse the next correction for
+        # the very reason this function exists.
+        #
+        # Aligned against `updated_text`, the capture as it is AFTER this edit,
+        # never against `captured_text`. Using the pre-edit capture walked the
+        # new document while matching the old text, so the labels were rejected
+        # and the digest written here did not describe the document. Measured
+        # 2026-09-01: sections 1 and 2 applied, then the third was refused with
+        # the live text 102 characters longer than a record whose two edits had
+        # added six.
+        updated_content = document.Content
+        updated_document_text, _updated_spans = _word_visible_text_and_spans(
+            updated_content.Text,
+            _word_automatic_list_labels(document, updated_content, updated_text),
+        )
+        # A whole-document capture may carry no offsets at all, and the record
+        # refuses to hold one without the other - "Selection offsets must both
+        # be present or both be absent". Moving the end on its own is exactly
+        # the half-set state that invariant exists to forbid, so the offsets are
+        # only touched when there were offsets to begin with.
+        moved: dict[str, object] = {}
+        if record.selection_start is not None and record.selection_end is not None:
+            moved["selection_end"] = range_start + len(updated_text)
+        return replace(
+            record,
+            text=updated_text,
+            document_digest=hashlib.sha256(
+                updated_document_text.encode("utf-8")
+            ).hexdigest(),
+            **moved,
+        )
     except Exception:
         logger.warning("Word COM range replacement failed", exc_info=True)
         return False
@@ -998,7 +1316,8 @@ class WindowsTextInserter:
             )
         if selected == marker or not str(selected).strip():
             raise RuntimeError(_no_selection_message(window))
-        return SelectionRecord(str(selected), window, "selection")
+        text = _canonical_word_text(str(selected)) if _is_word_document(window) else str(selected)
+        return SelectionRecord(text, window, "selection")
 
     def replace_selection(self, record: SelectionRecord, new_text: str) -> InsertionRecord | None:
         if not new_text.strip():
@@ -1131,6 +1450,22 @@ class WindowsTextInserter:
             new_text=new_text,
         )
         if isinstance(result, SelectionRecord):
+            # A whole-document replacement used to return True and fall through
+            # to the bookkeeping below, which is what `undo_last` reads. It now
+            # returns a refreshed record like every other scope, so without this
+            # the app's undo would quietly stop working for Word documents -
+            # a user-visible loss smuggled in behind a correctness fix.
+            #
+            # Only for the scope that had it before. Selections have never been
+            # tracked here and this is not the change to start.
+            if record_covers_entire_document(record):
+                with self._lock:
+                    self._last_record = InsertionRecord(
+                        new_text,
+                        record.window,
+                        last_input_tick(),
+                        time.monotonic(),
+                    )
             return result
         if result is not True:
             return None

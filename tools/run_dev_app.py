@@ -45,7 +45,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     command = [
         str(interpreter if interpreter.exists() else Path(sys.executable)),
-        str(ROOT / "run_echo_link.py"),
+        # run_manuscript.py, not run_echo_link.py. The latter arrived with the
+        # baseline commit d66e0b6 and was never updated: it imports
+        # echo_link_app.main without putting src/ on sys.path, so it dies with
+        # ModuleNotFoundError before anything starts. Because this launches it
+        # through pythonw.exe, which has no console, that traceback went
+        # nowhere and the only symptom was restart_app_and_wait reporting
+        # "timed out waiting for the app to report a loaded model".
+        #
+        # Measured 2026-09-30: that is why run_essays_batch.py could not start
+        # the app, which is why no tone has ever been measured in Word.
+        # run_manuscript.py is the maintained entry point - CLAUDE.md documents
+        # it - and it sets up sys.path, the canonical-root check and the
+        # development subscription bypass.
+        str(ROOT / "run_manuscript.py"),
         *[value for value in args.app_arguments if value != "--"],
     ]
     print(" ".join(command), flush=True)
