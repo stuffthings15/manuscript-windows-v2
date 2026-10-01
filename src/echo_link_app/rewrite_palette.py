@@ -2412,6 +2412,30 @@ class RewritePalette(QDialog):
             return self._declined_ai_request("the section has no id")
         if suggestion_id in self._ai_completed_ids:
             return self._declined_ai_request("already completed", suggestion_id)
+        if suggestion_id in self._ai_failed_ids:
+            # A REFUSED section is resolved, not waiting, and asking the same
+            # model the same text returns the same answer.
+            #
+            # Measured on essay 17 of the animal-pet corpus, 2026-09-30: one
+            # 126-character section came back as 79 characters every time,
+            # seven times, byte-identical. answer_abandons_the_source refused
+            # each one correctly, filed the section in _ai_failed_ids, and the
+            # stale-mark rule below then cleared the mark and asked again -
+            # because it tests only whether a request is in flight, and for a
+            # failed section nothing is. The loop ran until the harness gave up
+            # at its 150s section timeout: "offered neither a correction nor a
+            # skip". The whole essay took 490s for 13 sections because of it.
+            #
+            # _request_next_ai_prefetch already skips _ai_failed_ids. This path
+            # simply never got the same check.
+            #
+            # The stale-mark rule itself is right and stays. It exists for the
+            # 2026-09-01 freeze, where the HUD sat at 21 of 22 for nine hours
+            # waiting on work nobody had asked for. That is a section with no
+            # answer; this is a section whose answer was heard and turned down.
+            return self._declined_ai_request(
+                "the AI answer for this section was refused", suggestion_id
+            )
         if suggestion_id in self._ai_requested_ids and not self._ai_request_in_flight(
             suggestion_id
         ):
