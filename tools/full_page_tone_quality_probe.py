@@ -21,13 +21,19 @@ from echo_link_core.selected_text import LocalWritingAssistant
 from echo_link_app.review_spans import _review_spans
 
 
+# The visible menu, 2026-09-30: Diplomatic and Professional in, Shorten out,
+# on the owner's instruction. Shorten keeps its CRITERIA entry and its
+# compression check below so "--tones Shorten" still measures it; it is simply
+# not one of the tones a writer is offered. See the comment on
+# RewritePalette.tone_combo for why it went.
 TONES = (
     "Clear",
     "Improve",
     "Rephrase",
-    "Shorten",
     "Formal",
     "Friendly",
+    "Diplomatic",
+    "Professional",
 )
 TONE_COMMANDS = {tone: ("Rewrite" if tone == "Clear" else tone) for tone in TONES}
 HARD_TERMS = (

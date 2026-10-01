@@ -2102,9 +2102,10 @@ def test_palette_timeout_then_tone_rewrite_shows_text_unlocks_accept_and_resizes
         "Clear",
         "Improve",
         "Rephrase",
-        "Shorten",
         "Formal",
         "Friendly",
+        "Diplomatic",
+        "Professional",
     ),
 )
 def test_palette_maps_every_requested_tone_to_its_local_writing_command(app, option):

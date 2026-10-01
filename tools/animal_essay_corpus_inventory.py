@@ -30,9 +30,10 @@ VISIBLE_TONES = (
     "Clear",
     "Improve",
     "Rephrase",
-    "Shorten",
     "Formal",
     "Friendly",
+    "Diplomatic",
+    "Professional",
 )
 ALL_VISIBLE_MODES = ("Proofread", *VISIBLE_TONES)
 PHYSICAL_HUD_MODES = ("Proofread",)

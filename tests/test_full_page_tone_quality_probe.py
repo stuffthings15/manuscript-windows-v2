@@ -39,7 +39,9 @@ def test_probe_covers_every_visible_hud_tone():
     assert TONES == visible
     # Six on the owner's instruction, 2026-08-16. The menu has grown back
     # before; this pins the number rather than only the membership.
-    assert len(visible) == 6
+    # Seven since 2026-09-30: Diplomatic and Professional in, Shorten out,
+    # on the owner's instruction. Six from 2026-08-16.
+    assert len(visible) == 7
     # Matches Android's six exactly: its "Proofread" is this menu's "Clear".
     assert "Simplified" not in visible
     assert "Academic" not in visible
@@ -78,7 +80,11 @@ def test_engine_supports_every_master_specification_style():
         for index in range(palette.tone_combo.count())
     }
 
-    assert visible <= required | {"Clear", "Improve", "Rephrase", "Shorten"}
+    # "Clear" is the menu label for the Rewrite command and has no contract
+    # of its own; Improve and Rephrase are contracts the required set does
+    # not list. Shorten left the menu on 2026-09-30 and no longer needs
+    # excusing here.
+    assert visible <= required | {"Clear", "Improve", "Rephrase"}
     assert required <= set(TONE_CONTRACTS)
     assert required <= set(COMMANDS)
     palette.close()

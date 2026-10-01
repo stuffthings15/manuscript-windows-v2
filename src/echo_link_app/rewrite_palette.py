@@ -860,22 +860,41 @@ class RewritePalette(QDialog):
         tone_label.setObjectName("hudEyebrow")
         tone_row.addWidget(tone_label)
         self.tone_combo = TonePicker()
-        # Six on the owner's instruction, 2026-08-16, down from seven on
-        # 2026-08-13 and twenty-two before that. These are the same six Android
-        # cut to under the same instruction the day before, in commit 1aed13d
-        # of that tree: its "Proofread" is this menu's "Clear", which maps to
-        # the Rewrite command and becomes Proofread on an automatic review.
-        # Matching it deliberately, so one product does not offer two different
-        # menus. "Academic" and "Simplified" are what left; both are still
-        # reachable as commands and still carry their tone contracts.
+        # Seven on the owner's instruction, 2026-09-30: Diplomatic and
+        # Professional added, Shorten dropped. Before that six since
+        # 2026-08-16, seven on 2026-08-13, twenty-two before that.
+        #
+        # Shorten leaves the MENU only. It keeps its command, its strict tone
+        # contract and its compression check in
+        # tools/full_page_tone_quality_probe.py, exactly as "Academic" and
+        # "Simplified" did when they left on 2026-08-16. Nothing about it is
+        # deleted; it is simply not offered.
+        #
+        # Why it went: it is the one tone whose job is to remove content, and
+        # it has failed every measurement this project has taken of it - 42.9%
+        # and flat across every experiment, no usable baseline, and on
+        # 2026-09-30 the only failing tone of six, refused by a meaning guard
+        # with "Local AI changed a meaning constraint". A tone that asks the
+        # model to drop words and a guard that refuses answers which drop words
+        # are hard to satisfy at once.
+        #
+        # Diplomatic and Professional were already commands with strict
+        # contracts, so this promotes two that were only reachable
+        # programmatically.
+        #
+        # NOTE: this breaks the deliberate parity with Android, which cut to
+        # the same six under the same instruction in commit 1aed13d of that
+        # tree. One product now offers two different menus until Android
+        # follows.
         self.tone_combo.addItems(
             (
                 "Clear",
                 "Improve",
                 "Rephrase",
-                "Shorten",
                 "Formal",
                 "Friendly",
+                "Diplomatic",
+                "Professional",
             )
         )
         self.tone_combo.setAccessibleName("Rewrite tone")
