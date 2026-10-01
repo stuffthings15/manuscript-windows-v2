@@ -77,3 +77,37 @@ def test_a_protected_name_written_lowercase_by_the_writer_is_not_recapitalised(
         defer_meaning_validation=True,
     )
     assert result.text == source
+
+
+# The second, and in the app the real, path. The bundled polish host has no
+# tokens: it lists protected values in its prompt ("PROTECTED VALUES: -
+# Learning") and the model honours them by writing that spelling wherever the
+# word appears. Traced in Word on 2026-09-30: the tone request's internal
+# proofread received "Learning" as a protected name, because the already
+# proofread text opened a sentence with "Learning from a mistake", and wrote
+# back "before Learning much" and "forces the owner to Learn more". The
+# restorer that undoes invented capitals runs for tones only, and the
+# proofread's output became the tone's source, so nothing undid it.
+
+
+def test_a_sentence_start_word_the_text_also_writes_lowercase_is_not_protected():
+    from echo_link_core.polish_entities import _runtime_opaque_entities
+
+    text = (
+        "They usually speak before learning much about it. "
+        "Learning from a mistake is better than protecting pride."
+    )
+    assert "Learning" not in _runtime_opaque_entities(text)
+
+
+def test_a_real_name_at_a_sentence_start_is_still_protected():
+    from echo_link_core.polish_entities import _runtime_opaque_entities
+
+    # Capitalised mid-sentence somewhere, so a name, even where it also opens
+    # a sentence.
+    text = "Bakersfield has its own weather. The family moved to Bakersfield."
+    assert "Bakersfield" in _runtime_opaque_entities(text)
+    # Only ever at a sentence start, but never written lowercase either: the
+    # text gives no evidence it is an ordinary word, so it stays protected.
+    text = "Bakersfield has its own weather."
+    assert "Bakersfield" in _runtime_opaque_entities(text)

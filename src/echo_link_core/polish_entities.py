@@ -542,8 +542,38 @@ def _runtime_opaque_entities(text: str, document: str = "") -> tuple[str, ...]:
     return tuple(
         value
         for value in _maximal_named_entities(text, document)
-        if " " not in value or value in versioned
+        if (" " not in value or value in versioned)
+        and not _sentence_case_of_a_word_the_text_writes_lowercase(value, text)
     )
+
+
+def _sentence_case_of_a_word_the_text_writes_lowercase(value: str, text: str) -> bool:
+    """Is this "name" only an ordinary word that happens to open a sentence?
+
+    Found 2026-09-30, traced in Word. A proofread text opened a sentence with
+    "Learning from a mistake" and also said "before learning much". The
+    extractor kept "Learning" as a name - its own lowercase rule looks only
+    FORWARD from the capital, and the lowercase use came earlier - so it was
+    protected. The bundled polish host lists protected values in its prompt,
+    and the model honoured "Learning" by writing it that way everywhere:
+    "before Learning much", and even "forces the owner to Learn more".
+
+    Three conditions, all required, so a real name is not unprotected by a
+    writer's lowercase typo of it alone: the word is ordinary English, every
+    capitalised use of it in this text opens a sentence, and this text also
+    writes it in lowercase. "Bakersfield" fails the second whenever it appears
+    mid-sentence. Narrowed to the protection list on purpose:
+    _named_entities, which feeds the meaning guards, is unchanged.
+    """
+    if " " in value or not value[:1].isupper() or not value[1:].islower():
+        return False
+    if not re.search(rf"(?<!\w){re.escape(value.casefold())}(?!\w)", text):
+        return False
+    for match in re.finditer(rf"(?<!\w){re.escape(value)}(?!\w)", text):
+        prefix = text[: match.start()].rstrip()
+        if prefix and prefix[-1:] not in ".!?\n":
+            return False
+    return _is_ordinary_english_word(value)
 
 
 @lru_cache(maxsize=1)
