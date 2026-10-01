@@ -22,6 +22,16 @@ internal static partial class Program
 
     public static async Task<int> Main(string[] args)
     {
+        // Print-only, for tests of the built executable: it opens no pipe,
+        // starts no model, and reads nothing but these two arguments. A test
+        // that reads this source file would pass while an old executable sat
+        // in resources/, so the binary has to be able to answer for itself.
+        if (args.Length == 2 && args[0] == "--print-system-prompt"
+            && (args[1] == "faithful" || args[1] == "free"))
+        {
+            Console.Out.Write(LlamaServerRuntime.SystemPrompt(args[1] == "faithful"));
+            return 0;
+        }
         try
         {
             HostConfiguration configuration = HostConfiguration.Parse(args);
@@ -198,6 +208,9 @@ internal static partial class Program
         string language = OptionalString(request, "language", 120);
         int outputTokens = BoundedInt(request, "max_output_tokens", 512, 1, 4096);
         double timeout = BoundedDouble(request, "timeout_seconds", 30, 1, 30);
+        // The writer's "Keep my meaning exactly" switch. Absent means ON, so
+        // an older client keeps the behaviour it was built against.
+        bool faithful = OptionalBool(request, "faithful", true);
         var protectedTerms = new List<string>();
         if (
             request.TryGetProperty("protected_terms", out JsonElement rawTerms)
@@ -222,6 +235,7 @@ internal static partial class Program
             instruction,
             language,
             protectedTerms,
+            faithful,
             outputTokens,
             TimeSpan.FromSeconds(timeout));
     }
@@ -252,6 +266,9 @@ internal static partial class Program
                 "and negative statement exact.",
                 "",
                 [],
+                // The acceptance probe proves the faithful contract: the
+                // date, build number, URL and negation must survive.
+                true,
                 128,
                 TimeSpan.FromSeconds(30));
             string folded = Whitespace().Replace(result.Text.ToLowerInvariant(), " ").Trim();
@@ -469,6 +486,20 @@ internal static partial class Program
             throw new ArgumentException($"Polish host field '{name}' is invalid.");
         }
         return result;
+    }
+
+    private static bool OptionalBool(JsonElement value, string name, bool fallback)
+    {
+        if (!value.TryGetProperty(name, out JsonElement raw))
+        {
+            return fallback;
+        }
+        return raw.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => throw new ArgumentException($"Polish host field '{name}' is invalid."),
+        };
     }
 
     private static string OptionalString(JsonElement value, string name, int maxLength)
@@ -749,6 +780,38 @@ internal sealed class LlamaServerRuntime : IAsyncDisposable
         _configuration = configuration;
     }
 
+    // The faithful prompt is the one this host always sent. The free one is
+    // for a writer who has turned "Keep my meaning exactly" off (asked for
+    // on 2026-09-30): the client's instruction already says so, but this
+    // prompt said "preserve every actor, negation, obligation and factual
+    // relationship exactly" and "apply the smallest complete correction" on
+    // every request, and a system prompt outranks an instruction. What stays
+    // hard either way is what the app's validator still enforces when the
+    // switch is off: the protected values, names, numbers, dates, URLs, paths
+    // and code, and an answer that is only the text.
+    internal static string SystemPrompt(bool faithful)
+    {
+        if (faithful)
+        {
+            return
+                "You are Manuscript's private local writing editor. Return only the finished " +
+                "text. Never add a label, explanation, quote wrapper, fact, name, promise, or " +
+                "commentary. Preserve every protected value, number, date, URL, path, code " +
+                "span, actor, negation, obligation, ordering word, paragraph, and factual " +
+                "relationship exactly. Apply the smallest complete correction. Do not think " +
+                "aloud. Thinking is disabled.";
+        }
+        return
+            "You are Manuscript's private local writing editor. Return only the finished " +
+            "text. Never add a label, explanation, quote wrapper, or commentary. The writer " +
+            "has turned off meaning preservation and wants the text to read sensibly above " +
+            "all. Where the source is confused, contradictory, padded, or self-undermining, " +
+            "rewrite it so it makes sense: restructure, merge or split sentences, drop " +
+            "filler, and repair muddled claims. Keep every protected value, name, number, " +
+            "date, URL, path, and code span exact, keep the same paragraphs, and keep the " +
+            "text about the same subject. Do not think aloud. Thinking is disabled.";
+    }
+
     public async Task<GenerationResponse> GenerateAsync(
         string text,
         string command,
@@ -756,6 +819,7 @@ internal sealed class LlamaServerRuntime : IAsyncDisposable
         string instruction,
         string language,
         IReadOnlyList<string> protectedTerms,
+        bool faithful,
         int maxOutputTokens,
         TimeSpan timeout)
     {
@@ -770,13 +834,7 @@ internal sealed class LlamaServerRuntime : IAsyncDisposable
             string protectedBlock = protectedTerms.Count == 0
                 ? "None"
                 : string.Join("\n", protectedTerms.Select(value => "- " + value));
-            string system =
-                "You are Manuscript's private local writing editor. Return only the finished " +
-                "text. Never add a label, explanation, quote wrapper, fact, name, promise, or " +
-                "commentary. Preserve every protected value, number, date, URL, path, code " +
-                "span, actor, negation, obligation, ordering word, paragraph, and factual " +
-                "relationship exactly. Apply the smallest complete correction. Do not think " +
-                "aloud. Thinking is disabled.";
+            string system = SystemPrompt(faithful);
             // "/no_think" is a QWEN control token, and only Qwen strips it.
             // Every other family reads it as ordinary text, so it can be
             // echoed straight into the writer's document. On 2026-09-01, with

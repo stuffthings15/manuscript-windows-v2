@@ -523,6 +523,10 @@ class NamedPipeLlamaRuntime:
                 "instruction": request.instruction,
                 "language": request.language,
                 "protected_terms": list(request.protected_terms),
+                # The writer's "Keep my meaning exactly" switch. The host
+                # chooses its system prompt from it; an older host ignores
+                # the field and stays faithful, which is the safe default.
+                "faithful": bool(request.faithful),
             }
         )
         if payload.get("ok") is not True or not isinstance(payload.get("text"), str):

@@ -44,6 +44,8 @@ resources/polish-host/
 # 2026-09-01 rather than deleted. It is the same 67 MB binary under a dated
 # name, so it must never be committed either.
 resources/polish-host.disabled-*/
+# And for the copy kept when a rebuilt host replaces the installed one.
+resources/polish-host.previous-*/
 
 # dist-onefile/ holds the single-file ManuscriptV2.exe built from
 # EchoLinkOneFile.spec. dist/ is already ignored; this is the same kind of
