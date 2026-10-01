@@ -23,7 +23,12 @@ LOG_PATH = Path.home() / "AppData/Local/ManuscriptWindowsV2/echo-link.log"
 
 
 
-APP_SCRIPT = "run_echo_link"
+# Must match whatever tools/run_dev_app.py launches. It was "run_echo_link"
+# until 2026-09-30; a matcher that does not follow the launcher cannot find
+# the running app, so stop_the_running_app reports nothing stopped, the new
+# instance hits the single-instance mutex, exits silently, and the wait times
+# out. That is indistinguishable from a broken app.
+APP_SCRIPT = "run_manuscript"
 
 
 def app_process_ids(script: str = APP_SCRIPT) -> list[str]:
@@ -86,13 +91,13 @@ def stop_the_running_app() -> int:
     behaviour those fixes had already changed.
 
     Matched on the command line, not the image name, and only ever on
-    run_echo_link. Killing python.exe by image would take the test suite, the
+    run_manuscript. Killing python.exe by image would take the test suite, the
     grader and this tool's own parent with it.
 
     Returns how many processes were stopped, so a caller can tell "nothing was
     running" from "the old one is still there".
     """
-    script = "run_echo_link"
+    script = APP_SCRIPT
     query = (
         "Get-CimInstance Win32_Process | "
         f"Where-Object {{ $_.CommandLine -like '*{script}*' }} | "
