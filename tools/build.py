@@ -38,6 +38,16 @@ def parser() -> argparse.ArgumentParser:
         ),
     )
     result.add_argument(
+        "--polish-host",
+        default="",
+        help=(
+            "Bundle this already-built Manuscript.PolishHost.exe instead of "
+            "compiling a fresh one. Every compile is a new unsigned hash that "
+            "Smart App Control judges afresh; use the host Windows already "
+            "runs, or a signed one."
+        ),
+    )
+    result.add_argument(
         "--testing-unlocked",
         action="store_true",
         help="Build an obvious local test package with subscription enforcement disabled",
@@ -160,11 +170,7 @@ def main(argv: list[str] | None = None) -> int:
 
     _write_build_info(testing_unlocked=args.testing_unlocked)
     _write_subscription_manifest(testing_unlocked=args.testing_unlocked)
-    subprocess.run(
-        [sys.executable, str(ROOT / "tools" / "build_polish_host.py")],
-        cwd=ROOT,
-        check=True,
-    )
+    _stage_polish_host(args.polish_host)
     if signing and signtool:
         _sign_files(
             _signable_files(ROOT / "build" / "generated" / "polish-host"),
@@ -473,6 +479,36 @@ def _write_subscription_manifest(*, testing_unlocked: bool = False) -> Path:
         + "\n",
         encoding="utf-8",
     )
+    return target
+
+
+def _stage_polish_host(prebuilt: str) -> Path:
+    """Put the polish host where EchoLink.spec bundles it from.
+
+    Compiles it by default. With a prebuilt path, copies that exact file
+    instead. Added 2026-10-01: .NET builds are not byte-identical, so each
+    compile is a new unsigned hash, and Smart App Control on this machine
+    allowed one compile and blocked the identical source compiled an hour
+    later inside the installer build. An installed app whose host is blocked
+    silently falls back from the bundled runtime.
+    """
+    target = ROOT / "build" / "generated" / "polish-host" / "Manuscript.PolishHost.exe"
+    if not prebuilt:
+        subprocess.run(
+            [sys.executable, str(ROOT / "tools" / "build_polish_host.py")],
+            cwd=ROOT,
+            check=True,
+        )
+        return target
+    source = Path(prebuilt)
+    if not source.is_file() or source.stat().st_size < 1024 * 1024:
+        raise SystemExit(
+            f"--polish-host must name a self-contained Manuscript.PolishHost.exe: {source}"
+        )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if source.resolve() != target.resolve():
+        shutil.copy2(source, target)
+    print(f"bundling prebuilt polish host {source}")
     return target
 
 
