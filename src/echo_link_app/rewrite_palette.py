@@ -1998,10 +1998,18 @@ class RewritePalette(QDialog):
             return
         if self._review_suggestions:
             return
-        if self._applied_notice:
-            self._finish_after_apply()
-            return
-        self.finish_choice()
+        # Always through the finish that tells the host how the review ended.
+        #
+        # This used to call bare finish_choice() unless an Undo notice was
+        # showing. The host pauses its focus monitor while a review is open
+        # and resumes it only on applied, unchanged or rejected, so a card
+        # that closed itself here left the app deaf: on 2026-10-01 a review
+        # ended at 11 of 13, collapsed three seconds later, and no document
+        # on the machine got an icon for the rest of the owner's demo. The
+        # earlier fix for the same symptom (2026-08-18) covered the writer
+        # leaving the document, and stops at a hidden card, so it never saw
+        # this one.
+        self._finish_after_apply()
 
     def finish_choice(self) -> None:
         self._target_marking_enabled = False

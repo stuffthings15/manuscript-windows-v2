@@ -2280,8 +2280,23 @@ class EchoLinkWindow(QMainWindow):
                         # A missing bundled host is not a failed model. The
                         # adaptive runtime still has its verified compatibility
                         # backend, which must receive the normal acceptance probe.
+                        # The reason was kept on the runtime and never
+                        # logged, so on 2026-10-01 the installed build fell
+                        # back from its bundled host at every start with no
+                        # way to tell why. It is an exception message from
+                        # the runtime or the host, which redacts paths and
+                        # never carries writing.
                         logger.info(
-                            "Bundled local AI preparation failed; probing fallback"
+                            "Bundled local AI preparation failed; probing "
+                            "fallback reason=%s",
+                            str(
+                                getattr(
+                                    self.polish_engine.runtime,
+                                    "last_downgrade_reason",
+                                    "",
+                                )
+                                or "unrecorded"
+                            )[:300],
                         )
                     warmed = self.polish_engine._accept_plan(
                         plan,

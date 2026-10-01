@@ -4952,3 +4952,62 @@ def test_a_faithful_answer_still_reaches_the_card(app):
     assert palette.after_text.toPlainText() == faithful
     palette.finish_choice()
 
+
+
+def test_the_card_never_closes_itself_without_telling_the_host(app):
+    # Found 2026-10-01 in the owner's demo recording. The host pauses the
+    # focus monitor while a review is open and resumes it only when the card
+    # reports how it finished. The "nothing to correct" collapse closed the
+    # card through bare finish_choice() unless an Undo notice happened to be
+    # showing, so the host never heard, the monitor stayed paused, and no
+    # document on the machine got an icon for the rest of the session: "the
+    # icon does not appear consistently, sometimes not at all".
+    palette, document = _undoable_palette()
+    app.processEvents()
+    outcomes = []
+    palette.applied.connect(lambda: outcomes.append("applied"))
+    palette.unchanged.connect(lambda: outcomes.append("unchanged"))
+    palette.rejected.connect(lambda: outcomes.append("rejected"))
+
+    palette.apply_suggestion_button.click()
+    app.processEvents()
+    assert document["text"]
+    # The Undo window has passed, which is the state the demo was in: the
+    # card is collapsing as a clean document, not as an Applied notice.
+    palette._applied_notice = False
+    palette._undo_state = None
+    palette._no_issues_timer.stop()
+    palette._no_issues_timer.setInterval(1)
+    palette._no_issues_timer.start()
+    QTest.qWait(120)
+    app.processEvents()
+
+    assert not palette.isVisible()
+    # The change reached the document, so the host must hear "applied".
+    assert outcomes == ["applied"]
+
+
+def test_a_clean_document_collapse_reports_unchanged(app):
+    # The same clean document the "Nothing to correct here" test uses: the AI
+    # returns every section exactly as it was.
+    palette = RewritePalette(ai_proofread=True)
+    outcomes = []
+    palette.applied.connect(lambda: outcomes.append("applied"))
+    palette.unchanged.connect(lambda: outcomes.append("unchanged"))
+    palette.show_capture(
+        "Paragraph one is already correct. Paragraph two needs no changes."
+    )
+    app.processEvents()
+    for suggestion in palette._suggestions:
+        palette._ai_completed_ids.add(str(getattr(suggestion, "suggestion_id", "")))
+    palette._render_suggestions()
+    app.processEvents()
+    assert palette._no_issues_timer.isActive()
+    palette._no_issues_timer.stop()
+    palette._no_issues_timer.setInterval(1)
+    palette._no_issues_timer.start()
+    QTest.qWait(120)
+    app.processEvents()
+
+    assert not palette.isVisible()
+    assert outcomes == ["unchanged"]
