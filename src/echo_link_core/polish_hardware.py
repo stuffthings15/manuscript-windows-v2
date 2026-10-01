@@ -427,6 +427,18 @@ class HardwarePolicyManager:
         # drifts more, not less.
         if manual and mode is not PolishMode.INSTANT:
             retry_limit = max(retry_limit, 1)
+        # A TONE request gets the same floor whether or not it is manual.
+        # The deterministic fallback is a PROOFREAD and cannot satisfy a tone
+        # by construction, so the model's attempts are the only chance the
+        # tone ever gets. Today every tone caller in the app is manual (the
+        # staged path in PolishWritingAssistantAdapter.run), so this changes
+        # nothing there; it covers the next caller that is not. It was first
+        # written on 2026-09-30 in the belief that the HUD tone path was
+        # non-manual and this was why "it corrected but did not rewrite in
+        # the tone". That was wrong: the retry already ran, and the real
+        # cause was the generation instruction (see _generation_instruction).
+        if task is PolishTask.TONE and mode is not PolishMode.INSTANT:
+            retry_limit = max(retry_limit, 1)
         require_full_gpu = backend in {
             RuntimeBackend.CUDA,
             RuntimeBackend.VULKAN,

@@ -35,7 +35,11 @@ from .polish_model_packs import (
     ModelPackNotFoundError,
     ModelPackSecurityError,
 )
-from .polish_quality import CorrectionQualityGate, tone_contract_instruction
+from .polish_quality import (
+    TONE_CONTRACTS,
+    CorrectionQualityGate,
+    tone_contract_instruction,
+)
 from .polish_runtime import AdaptiveInferenceRuntime
 from .polish_runtime_packs import RuntimePackManager
 from .polish_residual import accept_residual_repair, residual_unknown_words
@@ -1758,6 +1762,9 @@ class PolishEngine:
                     "\nThis is the only safety retry. The prior output failed: "
                     + "; ".join(prior_problems or ("quality checks",))
                 )
+                coaching = _tone_style_coaching(quality.residual_errors)
+                if coaching:
+                    retry_note += " " + coaching
                 command_key = request.command.strip().casefold()
                 if command_key == "persuasive":
                     retry_note += (
@@ -4789,17 +4796,89 @@ def _generation_instruction(
 ) -> str:
     scope = classifier.context_scope.value
     categories = ", ".join(classifier.error_categories) or "general correctness"
-    base = (
-        f"Polish scope: {scope}. Detected categories: {categories}. "
-        "Return a polished rewrite that fixes grammar, spelling, punctuation, vocabulary, "
-        "clarity, and sentence structure. Protected values, numbers, dates, "
+    safety = (
+        "Protected values, numbers, dates, "
         "URLs, code, actors, negations, requirements, and named entities must remain exact. "
         "Copy every word that contains a digit exactly as written, including times such as "
         "3pm and device or version names such as S23 or v2. Never replace a product, app, "
         "or service name with a different or more generic word; correct only its "
         "capitalization. "
         "Do not add a named entity or fact. Never use an em dash; use a comma, colon, "
-        "semicolon, or parentheses instead. Complete a final verification pass before answering. "
+        "semicolon, or parentheses instead. "
+    )
+    tone_instruction = tone_contract_instruction(request.command)
+    if tone_instruction and request.task is PolishTask.TONE:
+        # The tone comes FIRST, and the Proofread checklist is left out.
+        #
+        # Found 2026-09-30: every Friendly answer the HUD produced was a cold
+        # proofread - "cannot", "do not", not one contraction - and the
+        # warmth check refused all of them, twice per request. The model was
+        # not ignoring the tone. It was obeying this instruction, which
+        # opened with "Return a polished rewrite that fixes grammar..." and a
+        # nine-item grammar checklist, and mentioned the tone once, at the
+        # end. The staged text is ALREADY proofread when a tone request
+        # reaches here (PolishWritingAssistantAdapter.run proofreads first),
+        # so the checklist asked for a second proofread and the model
+        # delivered exactly that, expanding every contraction it met.
+        #
+        # The modal line sits up front for the opposite failure. The first
+        # tone-first draft of this instruction made Formal rewrite "this can
+        # be especially true" as "this is especially true" on both attempts,
+        # and the modal guard refused it: "prohibition changed (missing can,
+        # could, will)". The guard is right. The tone contract's own modality
+        # sentence was already in the prompt and lost to the opener, so the
+        # opener now carries it.
+        contract = TONE_CONTRACTS.get(request.command)
+        contraction_cue = ""
+        if contract is not None and contract.contractions.casefold().startswith(
+            "preferred"
+        ):
+            # Named, because "contractions: preferred" lost to "fixes
+            # grammar" every time. The warmth check counts added
+            # contractions, so this is also what the check is looking for.
+            # "Do not expand" alone was not enough: the proofread stage had
+            # already written "does not" and "will not", and the model kept
+            # them. Measured in Word 2026-09-30, essay 1: one tone batch in
+            # four verified warm. The check counts contractions ADDED, so the
+            # model has to contract what it is given, not merely keep what it
+            # finds. The modal and negation guards normalise contractions
+            # (_PROHIBITION, _normalize_contractions), so this is safe.
+            contraction_cue = (
+                "Contract every full form that reads naturally contracted: "
+                "write doesn't, don't, isn't, won't, can't, it's, they're, "
+                "you'll, and that's in place of does not, do not, is not, will "
+                "not, cannot, it is, they are, you will, and that is. Open an "
+                "occasional sentence with a gentle transition such as 'That "
+                "said,' 'Even so,' or 'Either way,' where it fits the source. "
+            )
+        return (
+            f"Primary task: rewrite the text in the {request.command} tone. The "
+            "tone must be visible in every sentence. The text has already been "
+            "proofread, so a grammatically corrected copy of the source in the "
+            "same register is a failed answer. Change the register only: word "
+            "choice, phrasing, rhythm, and contractions. Keep every sentence's "
+            "claim, actor, negation, and modal verb (can, could, will, would, "
+            "may, might, must) exactly where the source has it; a tone never "
+            "turns 'this can be true' into 'this is true'. "
+            + tone_instruction
+            + " "
+            + contraction_cue
+            + safety
+            + "Fix any remaining grammar, spelling, or punctuation error in passing. "
+            "Complete a final verification pass before answering. "
+            "Thinking must remain disabled."
+            + (
+                " User direction: " + request.instruction.strip()
+                if request.instruction.strip()
+                else ""
+            )
+        )
+    base = (
+        f"Polish scope: {scope}. Detected categories: {categories}. "
+        "Return a polished rewrite that fixes grammar, spelling, punctuation, vocabulary, "
+        "clarity, and sentence structure. "
+        + safety
+        + "Complete a final verification pass before answering. "
         "Check every sentence for subject-verb agreement, pronoun agreement, sentence fragments, "
         "comma splices, fused sentences, missing list commas, faulty comparisons, vague vocabulary, "
         "incorrect verb forms, and wrong singular or plural nouns after numbers or quantifiers. "
@@ -4807,7 +4886,6 @@ def _generation_instruction(
         "into the sentence it belongs to. Do not preserve an error merely because its meaning is "
         "understandable. Thinking must remain disabled."
     )
-    tone_instruction = tone_contract_instruction(request.command)
     if tone_instruction:
         base += " " + tone_instruction
     if request.command.strip().casefold() == "proofread":
@@ -4820,6 +4898,35 @@ def _generation_instruction(
     if request.instruction.strip():
         base += " User direction: " + request.instruction.strip()
     return base
+
+
+def _tone_style_coaching(residual_errors) -> str:
+    """Tell the retry WHAT a style miss looked like, not just that it happened.
+
+    "remaining error: friendly rewrite is not visibly warm" is the check's
+    name for itself. Fed back as the only hint, it produced the same cold
+    answer a second time on every Friendly request measured 2026-09-30.
+    """
+    for name in residual_errors:
+        if name == "friendly rewrite is not visibly warm":
+            return (
+                "Your prior answer read as a plain proofread with no warmth: it "
+                "added no contractions, no gentle transitions, and no approachable "
+                "wording. Rewrite every sentence in a warm, conversational voice. "
+                "Contract the full forms: doesn't for does not, won't for will "
+                "not, can't for cannot, it's for it is, they're for they are. "
+                "Open one or two sentences with 'That said,' 'Even so,' or "
+                "'Either way,' where the source supports it, and prefer plain "
+                "everyday words. Keep every fact, name, number, negation, and "
+                "modal exactly as written."
+            )
+        if name == "rephrase did not change sentence construction":
+            return (
+                "Your prior answer kept the source sentence construction. Rebuild "
+                "each sentence with a different construction and different wording "
+                "while keeping every fact, name, number, negation, and modal."
+            )
+    return ""
 
 
 def _safe_fallback_text(

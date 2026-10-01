@@ -103,9 +103,19 @@ TONE_CONTRACTS: dict[str, ToneContract] = {
         # 3.20 - so forbidding its favourite move without naming another
         # leaves the model with nothing and the judge saying "readable but
         # lacks warmth" for the fifteenth time.
-        "Get the warmth from word choice, rhythm, and directly addressing the reader, "
-        "never from hedging: prefer plain everyday words over formal ones, vary sentence "
-        "length, and speak to the reader as you where the source allows it.",
+        # "Speak to the reader as you" used to be named here as the place to
+        # send it. Measured 2026-09-30 on essay 1 in Word: the model did
+        # exactly that, wrote a genuinely warm "when you're having a rough
+        # day, your dog won't solve the problem", and the actor guard refused
+        # it - "actor changed (missing owner; added you)" - then the retry
+        # overcorrected to a cold proofread. The guard is right: the owner is
+        # not the reader. So warmth is sent to the surface the guards leave
+        # free - contractions, gentle transitions, plain words - and the
+        # actor stays who the writer said it was.
+        "Get the warmth from word choice and rhythm, never from hedging and never "
+        "by changing who does what: prefer plain everyday words over formal ones, "
+        "use natural contractions, vary sentence length, and keep every actor the "
+        "source names; do not replace the owner, team, or system with you.",
         vocabulary="approachable",
         formality="conversational",
         warmth="warm",
