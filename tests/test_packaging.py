@@ -164,6 +164,25 @@ def test_required_runtime_is_bundled_without_first_run_download() -> None:
     assert "Bundled speech model is missing" in build
 
 
+def test_pyinstaller_environment_removes_foreign_icu_directories(
+    tmp_path: Path,
+) -> None:
+    foreign = tmp_path / "foreign"
+    safe = tmp_path / "safe"
+    system32 = tmp_path / "Windows" / "System32"
+    foreign.mkdir()
+    safe.mkdir()
+    system32.mkdir(parents=True)
+    (foreign / "icuuc.dll").write_bytes(b"foreign")
+
+    env = build_tool._pyinstaller_environment(
+        {"PATH": os.pathsep.join((str(foreign), str(safe), str(system32)))},
+        system_root=tmp_path / "Windows",
+    )
+
+    assert env["PATH"].split(os.pathsep) == [str(safe), str(system32)]
+
+
 def test_build_refuses_a_noncanonical_project_root(
     tmp_path: Path,
     monkeypatch,

@@ -190,8 +190,9 @@ def main(argv: list[str] | None = None) -> int:
             "Windows SmartScreen warns on every machine and the publisher "
             "reads as unknown. Sign it before distributing."
         )
-    subprocess.run(browser_pyinstaller, cwd=ROOT, check=True)
-    subprocess.run(pyinstaller, cwd=ROOT, check=True)
+    pyinstaller_env = _pyinstaller_environment(os.environ)
+    subprocess.run(browser_pyinstaller, cwd=ROOT, check=True, env=pyinstaller_env)
+    subprocess.run(pyinstaller, cwd=ROOT, check=True, env=pyinstaller_env)
     executable = ROOT / "dist" / "ManuscriptV2" / "ManuscriptV2.exe"
     if not executable.is_file():
         raise SystemExit(f"Build did not create {executable}")
@@ -235,6 +236,32 @@ def main(argv: list[str] | None = None) -> int:
         print(installer)
     print(executable)
     return 0
+
+
+def _pyinstaller_environment(
+    environ: Mapping[str, str],
+    *,
+    system_root: Path | None = None,
+) -> dict[str, str]:
+    """Keep unrelated ICU runtimes on PATH out of the packaged Qt app."""
+    result = dict(environ)
+    windows = (system_root or Path(environ.get("SystemRoot", r"C:\Windows"))).resolve()
+    system32 = (windows / "System32").resolve()
+    clean_path: list[str] = []
+    for entry in environ.get("PATH", "").split(os.pathsep):
+        if not entry:
+            continue
+        directory = Path(entry)
+        try:
+            resolved = directory.resolve()
+        except OSError:
+            resolved = directory
+        if resolved != system32 and (directory / "icuuc.dll").is_file():
+            print(f"excluding foreign ICU directory from packaging PATH: {directory}")
+            continue
+        clean_path.append(entry)
+    result["PATH"] = os.pathsep.join(clean_path)
+    return result
 
 
 def _assert_canonical_project_root(root: Path) -> None:
